@@ -126,6 +126,28 @@ CALL(fd_fdstat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_prestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_prestat_dir_name, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
 
+CALL(fd_filestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
+CALL(path_filestat_get, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
+CALL(fd_readdir, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
+CALL(path_open, 9, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), A(5), A(6), (uint32_t)A(7), (uint32_t)A(8), )
+CALL(fd_datasync, 1, (uint32_t)A(0), )
+CALL(fd_sync, 1, (uint32_t)A(0), )
+CALL(fd_filestat_set_size, 2, (uint32_t)A(0), A(1), )
+CALL(fd_allocate, 3, (uint32_t)A(0), A(1), A(2), )
+CALL(fd_filestat_set_times, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3), )
+CALL(path_filestat_set_times, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), A(4), A(5), (uint32_t)A(6), )
+CALL(fd_fdstat_set_flags, 2, (uint32_t)A(0), (uint32_t)A(1), )
+CALL(fd_fdstat_set_rights, 3, (uint32_t)A(0), A(1), A(2), )
+CALL(path_create_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
+CALL(path_remove_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
+CALL(path_unlink_file, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
+CALL(fd_pread, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
+CALL(fd_pwrite, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
+CALL(path_rename, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
+CALL(path_link, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), (uint32_t)A(6), )
+CALL(path_symlink, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
+CALL(path_readlink, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
+
 static uint32_t c_proc_exit(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
     fusedwasi_p1_proc_exit(w, (uint32_t)a[0], t);
     return 0;
@@ -141,6 +163,10 @@ static const struct {
     ENTRY(random_get, 2) ENTRY(sched_yield, 0) ENTRY(proc_raise, 1) ENTRY(proc_exit, 1) ENTRY(fd_write, 4) ENTRY(fd_read, 4) ENTRY(fd_seek, 4)
     ENTRY(fd_tell, 2) ENTRY(fd_close, 1) ENTRY(fd_renumber, 2) ENTRY(fd_advise, 4) ENTRY(fd_fdstat_get, 2) ENTRY(fd_prestat_get, 2)
     ENTRY(fd_prestat_dir_name, 3)
+    ENTRY(fd_filestat_get, 2) ENTRY(path_filestat_get, 5) ENTRY(fd_readdir, 5) ENTRY(path_open, 9) ENTRY(fd_datasync, 1) ENTRY(fd_sync, 1)
+    ENTRY(fd_filestat_set_size, 2) ENTRY(fd_allocate, 3) ENTRY(fd_filestat_set_times, 4) ENTRY(path_filestat_set_times, 7) ENTRY(fd_fdstat_set_flags, 2)
+    ENTRY(fd_fdstat_set_rights, 3) ENTRY(path_create_directory, 3) ENTRY(path_remove_directory, 3) ENTRY(path_unlink_file, 3) ENTRY(fd_pread, 5)
+    ENTRY(fd_pwrite, 5) ENTRY(path_rename, 6) ENTRY(path_link, 7) ENTRY(path_symlink, 5) ENTRY(path_readlink, 6)
 };
 
 int main(int argc, char **argv) {
@@ -226,10 +252,31 @@ int main(int argc, char **argv) {
             } else if (!strcmp(t[1], "u32")) {
                 uint32_t v = (uint32_t)strtoull(t[3], NULL, 0);
                 memcpy(memory + strtoull(t[2], NULL, 0), &v, 4);  /* (little-endian hosts) */
+            } else if (!strcmp(t[1], "u64")) {
+                uint64_t v = strtoull(t[3], NULL, 0);
+                memcpy(memory + strtoull(t[2], NULL, 0), &v, 8);
+            } else if (!strcmp(t[1], "zero")) {
+                memset(memory + strtoull(t[2], NULL, 0), 0, (size_t)strtoull(t[3], NULL, 0));
             } else if (!strcmp(t[1], "dump")) {
                 printf("%s ", t[4]);
                 hex(memory + strtoull(t[2], NULL, 0), (size_t)strtoull(t[3], NULL, 0));
                 printf("\n");
+            }
+        } else if (!strcmp(t[0], "dirents")) {  /* dirents <buffer> <used address> <label>: the entries of a readdir buffer, without the inode numbers */
+            uint32_t used;
+            memcpy(&used, memory + strtoull(t[2], NULL, 0), 4);
+            size_t at = (size_t)strtoull(t[1], NULL, 0), end = at + used;
+            while (at + 24 <= end) {
+                uint64_t next;
+                uint32_t namelen;
+                memcpy(&next, memory + at, 8);
+                memcpy(&namelen, memory + at + 16, 4);
+                uint8_t type = memory[at + 20];
+                size_t room = end - (at + 24), have = namelen < room ? namelen : room;
+                printf("%s next %llu type %u name ", t[3], (unsigned long long)next, (unsigned)type);
+                hex(memory + at + 24, have);
+                printf("%s\n", have < namelen ? " (cut)" : "");
+                at += 24 + have;
             }
         } else if (!strcmp(t[0], "call")) {
             size_t i = 0;

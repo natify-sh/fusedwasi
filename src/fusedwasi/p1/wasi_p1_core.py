@@ -15,7 +15,11 @@ import struct
 import sys
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .wasi_p1_files import Files, Listing
 
 # errno of WASI (not the C library's): the whole list of the specification
 E_SUCCESS, E_2BIG, E_ACCES, E_ADDRINUSE, E_ADDRNOTAVAIL, E_AFNOSUPPORT, E_AGAIN, E_ALREADY, E_BADF, E_BADMSG = range(10)
@@ -71,6 +75,15 @@ R_ALL = (1 << 30) - 1
 R_MUTATING = sum(1 << n for n in (0, 4, 6, 8, 9, 10, 11, 12, 16, 17, 19, 20, 22, 23, 24, 25, 26))
 RIGHTS_STDIN = 0x820000A
 RIGHTS_STDOUT = 0x8200058
+
+# the oflags, fdflags and lookupflags of path_open
+O_CREAT, O_DIRECTORY, O_EXCL, O_TRUNC = 1, 2, 4, 8
+LOOKUP_FOLLOW = 1
+FD_APPEND, FD_DSYNC, FD_NONBLOCK, FD_RSYNC, FD_SYNC = 1, 2, 4, 8, 16
+# the flags of the times: which of the two are set, to a value or to now
+T_ATIM, T_ATIM_NOW, T_MTIM, T_MTIM_NOW = 1, 2, 4, 8
+# the rights only a directory has: a program that asks for one of them along with the right to write (wasi-libc asks for all the rights there are) may mean a directory
+R_OF_DIRECTORY = sum(1 << n for n in (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 26))
 
 END_NONE, END_EXIT, END_SIGNAL, END_TRAP = range(4)
 
@@ -199,10 +212,24 @@ class PreopenError(OSError):
     index: int = -1
 
 
+@dataclass
+class Stat:
+    """What the specification calls filestat, the same for every way of getting it."""
+
+    dev: int = 0
+    ino: int = 0
+    nlink: int = 0
+    size: int = 0
+    atim: int = 0
+    mtim: int = 0
+    ctim: int = 0
+    filetype: int = 0
+
+
 class Entry:
     """An open descriptor: a standard stream, a file (an operating system descriptor) or a directory."""
 
-    __slots__ = ("fd", "filetype", "flags", "inheriting", "kind", "owns_fd", "preopen", "rights")
+    __slots__ = ("fd", "filetype", "flags", "inheriting", "kind", "listing", "owns_fd", "preopen", "rights")
 
     def __init__(self, kind: int = K_NONE) -> None:
         self.kind = kind
@@ -213,6 +240,8 @@ class Entry:
         self.rights = 0
         self.inheriting = 0
         self.preopen: bytes | None = None  # the name the program sees, for a preopen
+        self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
+        self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
 
 
 def filetype_of(mode: int) -> int:
@@ -248,8 +277,19 @@ class State:
         random: Callable[[int], bytes] | None = None,
         sleep: Callable[[int], None] | None = None,
         end: Callable[[int, int], None] | None = None,
+        files: Files | None = None,
     ) -> None:
         self.memory = memory
+        if files is None:  # the backend of the system's files; a host without files gives `Files()`
+            if sys.platform == "win32":
+                from .wasi_p1_files import Files as _Files
+
+                files = _Files()
+            else:
+                from .wasi_p1_files_posix import PosixFiles
+
+                files = PosixFiles()
+        self.files = files
         # the hooks: what the host decides (the standard streams, the clocks, the random bytes, the sleep, the end of the program); where one is absent
         # the system's own is used. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
         self.stdin_read = stdin_read  # (capacity) -> up to that many bytes
@@ -275,7 +315,7 @@ class State:
             host, name = item[0], item[1]
             writable = item[2] if len(item) > 2 else True  # type: ignore[misc]
             try:
-                fd = os.open(host, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+                fd = self.files.preopen(host)
             except OSError as caught:
                 self.close_all()
                 failure = PreopenError(caught.errno, caught.strerror, host)
@@ -343,8 +383,40 @@ class State:
 
     # ---- descriptors --------------------------------------------------------------------------------------------------------
 
+    def iov(self, iovs: int, index: int) -> tuple[int, int]:
+        """(base, length) of the buffer `index` of an iovec that `iovs_valid` has looked at."""
+        return self.get_u32(iovs + 8 * index) or 0, self.get_u32(iovs + 8 * index + 4) or 0
+
+    def new_fd(self) -> int:
+        """The lowest free number from 3 on (the table grows by one when there is none)."""
+        for number in range(3, len(self.entries)):
+            if self.entries[number].kind == K_NONE:
+                return number
+        self.entries.append(Entry())
+        return len(self.entries) - 1
+
     def entry_of(self, fd: int) -> Entry | None:
         return self.entries[fd] if 0 <= fd < len(self.entries) and self.entries[fd].kind != K_NONE else None
+
+    def entry_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
+        """The entry of a descriptor that has the right, or an errno of WASI."""
+        entry = self.entry_of(fd)
+        if entry is None:
+            return E_BADF, None
+        if entry.kind != K_STD and not entry.rights & right:
+            return E_NOTCAPABLE, entry
+        return E_SUCCESS, entry
+
+    def dir_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
+        """The directory of a call on a path: it has to be one and to have the right."""
+        number, entry = self.entry_with(fd, right)
+        if number or entry is None:
+            return number, entry
+        return (E_SUCCESS if entry.kind == K_DIR else E_NOTDIR), entry
+
+    def path_at(self, ptr: int, length: int) -> bytes | None:
+        """The bytes of a path in the memory, or None if they are not all there."""
+        return self.read_bytes(ptr, length) if self.in_memory(ptr, length) else None
 
     def release(self, entry: Entry) -> int:
         """Closes what the descriptor holds; 0, or the errno of the C library of the close of a file."""
