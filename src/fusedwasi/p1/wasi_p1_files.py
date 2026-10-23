@@ -1,7 +1,7 @@
 """The file backend of a host of WASI 0.1: what the calls on files and paths ask of the system (the twin of the `fusedwasi_p1_be_*` functions of `wasi_p1_core.h`).
 
 `Files` answers every request with ENOSYS; `wasi_p1_files_posix.PosixFiles` is the backend of POSIX (a directory is an open descriptor, a path is walked from it one name at a
-time). A host that has no files, or Windows until its backend is written, uses this one. Every method returns the errno of WASI (0 is success) first. A path that is `None` was not in the memory of the module: the answer is FAULT, after the check of the directory.
+time). A host that has no files uses this one. Every method returns the errno of WASI (0 is success) first. A path that is `None` was not in the memory of the module: the answer is FAULT, after the check of the directory.
 """
 
 from __future__ import annotations

@@ -209,6 +209,13 @@ if sys.platform != "win32":
         def preopen(self, host: str) -> int:
             return os.open(host, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
 
+        def close(self, entry: Entry) -> int:
+            try:
+                os.close(entry.fd)
+            except OSError as caught:
+                return caught.errno or _errno.EIO
+            return 0
+
         def stat_fd(self, entry: Entry) -> tuple[int, Stat | None]:
             try:
                 return E_SUCCESS, stat_of(os.fstat(entry.fd))
