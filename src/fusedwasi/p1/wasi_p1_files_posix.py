@@ -26,6 +26,7 @@ if sys.platform != "win32":
         E_NOENT,
         E_NOTCAPABLE,
         E_NOTDIR,
+        E_NOTSUP,
         E_SPIPE,
         E_SUCCESS,
         FT_DIR,
@@ -348,9 +349,15 @@ if sys.platform != "win32":
                 return number
             try:
                 current = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
-                os.utime(
-                    leaf, ns=self._times(current, atim, mtim, flags), dir_fd=parent, follow_symlinks=False
-                )  # a link at the end was expanded by the walk
+                times = self._times(current, atim, mtim, flags)
+                try:
+                    os.utime(
+                        leaf, ns=times, dir_fd=parent, follow_symlinks=False
+                    )  # a link at the end was expanded by the walk
+                except NotImplementedError:  # a platform without it (Emscripten): fine for what is not a link; a link itself cannot be touched there
+                    if _stat.S_ISLNK(current.st_mode):
+                        return E_NOTSUP
+                    os.utime(leaf, ns=times, dir_fd=parent)
                 return E_SUCCESS
             except OSError as caught:
                 return errno_of(caught.errno)
@@ -537,8 +544,8 @@ if sys.platform != "win32":
                 return errno_of(caught.errno)
 
         def allocate(self, entry: Entry, offset: int, length: int) -> int:
-            if (
-                sys.platform != "darwin"
+            if sys.platform != "darwin" and hasattr(
+                os, "posix_fallocate"
             ):  # space is really reserved (and can run out: NOSPC), and a descriptor that is not a file says so (SPIPE)
                 try:
                     os.posix_fallocate(entry.fd, offset, length)
