@@ -12,6 +12,7 @@ import errno as _errno
 import os
 import stat as _stat
 import struct
+import sys
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -478,30 +479,32 @@ class State:
             status, value = self.hooked(self.clock, ident)
             return status, int(value or 0)
         try:
-            if hasattr(time, "clock_gettime_ns"):
-                clocks = (
-                    time.CLOCK_REALTIME,
-                    time.CLOCK_MONOTONIC,
-                    time.CLOCK_PROCESS_CPUTIME_ID,
-                    time.CLOCK_THREAD_CPUTIME_ID,
-                )
-                return E_SUCCESS, time.clock_gettime_ns(clocks[ident])
-            return E_SUCCESS, (time.time_ns, time.perf_counter_ns, time.process_time_ns, time.thread_time_ns)[ident]()
+            if sys.platform == "win32":
+                return E_SUCCESS, (time.time_ns, time.perf_counter_ns, time.process_time_ns, time.thread_time_ns)[
+                    ident
+                ]()
+            clocks = (
+                time.CLOCK_REALTIME,
+                time.CLOCK_MONOTONIC,
+                time.CLOCK_PROCESS_CPUTIME_ID,
+                time.CLOCK_THREAD_CPUTIME_ID,
+            )
+            return E_SUCCESS, time.clock_gettime_ns(clocks[ident])
         except OSError:
             return E_NOTSUP, 0
 
     def clock_resolution(self, ident: int) -> int | None:
         """The resolution of a clock in nanoseconds (at least 1), or None if the system has no such clock."""
         try:
-            if hasattr(time, "clock_getres"):
-                clocks = (
-                    time.CLOCK_REALTIME,
-                    time.CLOCK_MONOTONIC,
-                    time.CLOCK_PROCESS_CPUTIME_ID,
-                    time.CLOCK_THREAD_CPUTIME_ID,
-                )
-                return max(1, round(time.clock_getres(clocks[ident]) * 1e9))
-            names = ("time", "monotonic", "process_time", "thread_time")
-            return max(1, round(time.get_clock_info(names[ident]).resolution * 1e9))
+            if sys.platform == "win32":
+                names = ("time", "monotonic", "process_time", "thread_time")
+                return max(1, round(time.get_clock_info(names[ident]).resolution * 1e9))
+            clocks = (
+                time.CLOCK_REALTIME,
+                time.CLOCK_MONOTONIC,
+                time.CLOCK_PROCESS_CPUTIME_ID,
+                time.CLOCK_THREAD_CPUTIME_ID,
+            )
+            return max(1, round(time.clock_getres(clocks[ident]) * 1e9))
         except (OSError, ValueError):
             return None
