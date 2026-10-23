@@ -2,7 +2,10 @@
 
 Header-only C host for the WASI Component Model, for core modules fused from components (wasm2c and other C hosts), with a Python twin.
 
-**Alpha: nothing is released yet.** The WASI 0.2 host of `wasmext` (`c/p2/*.h` and `p2/*.py`) is here: all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
+**Alpha: nothing is released yet.** Two hosts, each as C headers (and the one of 0.2 with a Python twin):
+
+* **WASI 0.2** (`fusedwasi/p2/`, `fusedwasi.p2`): all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
+* **WASI 0.1** (`fusedwasi/p1/`): `wasi_snapshot_preview1` and `wasi_unstable`, in C, the core that `wasmext` builds into every module that imports them. It reads the memory of the module through a pointer to its base and one to its size (`fusedwasi_p1_bind`), so it knows nothing of `wasm2c`; the file backend of the host (`wasi_p1_core.h` declares it) is the native one on Windows and POSIX, and `wasmext` gives one for Python.
 
 ## The idea
 
