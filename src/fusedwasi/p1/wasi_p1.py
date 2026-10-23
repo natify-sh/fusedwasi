@@ -36,6 +36,7 @@ from .wasi_p1_core import (
     E_SUCCESS,
     END_EXIT,
     END_SIGNAL,
+    FD_APPEND,
     FT_CHAR,
     K_DIR,
     K_FILE,
@@ -211,6 +212,10 @@ def fd_write(s: State, fd: int, iovs: int, count: int, nwritten: int) -> int:
             return E_FAULT
         if length == 0:
             continue
+        if sys.platform == "win32" and entry.flags & FD_APPEND:
+            s.files.seek(
+                entry, 0, 2
+            )  # the C library of Windows cannot be opened for appending and take it off again: the end is sought here
         number, n = s.files.write(entry, s.read_bytes(base, length))  # straight from the memory of the module
         if number:
             if total:

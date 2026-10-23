@@ -1,4 +1,4 @@
-"""The first stage of WASI 0.1 (`fusedwasi.p1`, `fusedwasi/p1/wasi_p1_core.h`): the same script of calls in Python and in C, the outputs are equal."""
+"""WASI 0.1 in Python (`fusedwasi.p1`) against the C core (`fusedwasi/p1/wasi_p1_core.h`): the same script of calls in Python and in C, the outputs are equal."""
 
 import shutil
 import subprocess
@@ -13,16 +13,12 @@ P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 SCRIPTS = sorted(path.stem for path in (DATA / "p1").glob("*.txt"))
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="POSIX for now: the files of Windows are not in the twin yet"
-)
-
 
 @pytest.fixture(scope="module")
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
-    binary = tmp_path_factory.mktemp("p1") / "driver"
+    binary = tmp_path_factory.mktemp("p1") / ("driver.exe" if sys.platform == "win32" else "driver")
     subprocess.run(
         [
             CC,
@@ -53,8 +49,8 @@ def make_tree(root: Path) -> None:
     (root / "ro" / "ro.txt").write_bytes(b"readonly")
     (root / "link").symlink_to("a.txt")
     (root / "loop").symlink_to("loop")
-    (root / "dirlink").symlink_to("sub")
-    (root / "esc").symlink_to(f"../{root.name}-outside")
+    (root / "dirlink").symlink_to("sub", target_is_directory=True)
+    (root / "esc").symlink_to(f"../{root.name}-outside", target_is_directory=True)
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
@@ -125,6 +121,7 @@ def _poll_stdin(data: bytes | None) -> str:
     return out.strip()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="no select.poll")
 def test_native_poll_on_a_pipe() -> None:
     assert _poll_stdin(b"hello") == "0 [(1, 0, 1, 5, 0)]"  # userdata 1, no error, fd_read, 5 bytes waiting
     assert _poll_stdin(None) == "0 [(2, 0, 0, 0, 0)]"  # nothing to read: the clock

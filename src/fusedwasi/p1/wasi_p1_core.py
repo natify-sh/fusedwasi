@@ -282,9 +282,9 @@ class State:
         self.memory = memory
         if files is None:  # the backend of the system's files; a host without files gives `Files()`
             if sys.platform == "win32":
-                from .wasi_p1_files import Files as _Files
+                from .wasi_p1_files_win32 import Win32Files
 
-                files = _Files()
+                files = Win32Files()
             else:
                 from .wasi_p1_files_posix import PosixFiles
 
@@ -422,10 +422,7 @@ class State:
         """Closes what the descriptor holds; 0, or the errno of the C library of the close of a file."""
         number = 0
         if entry.owns_fd:
-            try:
-                os.close(entry.fd)
-            except OSError as caught:
-                number = caught.errno or _errno.EIO
+            number = self.files.close(entry)
         entry.__init__()  # type: ignore[misc]
         return number
 
