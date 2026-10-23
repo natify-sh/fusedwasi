@@ -374,26 +374,16 @@ def fd_prestat_dir_name(s: State, fd: int, path: int, size: int) -> int:
 
 
 def _put_filestat(s: State, ptr: int, st: Stat, legacy: bool) -> int:
-    """The filestat of the first snapshot has a 32-bit link count and 56 bytes."""
+    """The filestat of the first snapshot has a 32-bit link count and 56 bytes. It is written at once: for an engine that keeps its memory out of this
+    process every write is a round trip."""
     total = 56 if legacy else 64
     if not s.in_memory(ptr, total):
         return E_FAULT
-    s.put_bytes(ptr, bytes(total))
-    s.put_u64(ptr, st.dev)
-    s.put_u64(ptr + 8, st.ino)
-    s.put_u8(ptr + 16, st.filetype)
     if legacy:
-        s.put_u32(ptr + 20, st.nlink)
-        s.put_u64(ptr + 24, st.size)
-        s.put_u64(ptr + 32, st.atim)
-        s.put_u64(ptr + 40, st.mtim)
-        s.put_u64(ptr + 48, st.ctim)
+        record = struct.pack("<QQB3xIQQQQ", st.dev, st.ino, st.filetype, st.nlink, st.size, st.atim, st.mtim, st.ctim)
     else:
-        s.put_u64(ptr + 24, st.nlink)
-        s.put_u64(ptr + 32, st.size)
-        s.put_u64(ptr + 40, st.atim)
-        s.put_u64(ptr + 48, st.mtim)
-        s.put_u64(ptr + 56, st.ctim)
+        record = struct.pack("<QQB7xQQQQQ", st.dev, st.ino, st.filetype, st.nlink, st.size, st.atim, st.mtim, st.ctim)
+    s.put_bytes(ptr, record)
     return E_SUCCESS
 
 
