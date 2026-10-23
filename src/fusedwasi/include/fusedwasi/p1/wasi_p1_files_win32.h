@@ -1,7 +1,7 @@
 /* The file backend of the core of WASI for Windows, in Win32 and nothing else (no Python, no POSIX layer): the twelve `fusedwasi_p1_be_*`
    functions that wasi_p1_core.h declares, written for the documented wide-character API (CreateFileW, GetFileInformationByHandle,
    FindFirstFileExW, GetFinalPathNameByHandleW, MoveFileExW, CreateSymbolicLinkW and the like). It is included by wasi_p1_core.h on
-   Windows unless FUSEDWASI_P1_HOST_FS asks for the backend of wasi_python.h. Item 9 and stage 3a of the plan in DESIGN.md.
+   Windows. Item 9 and stage 3a of the plan in DESIGN.md.
 
    Windows has no `openat` and cannot open a directory with `open`, so a directory is what it is in the Python backend: a path (`root`,
    the real path of the directory it is under, and `rel`, its place below it, with '/' between names), and a file is an
