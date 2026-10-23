@@ -83,3 +83,5 @@ Every function is `static inline` and nothing is global or thread-local, so a mo
 ## Not here
 
 Components made of components (the fuse does that), WASI 0.3 and async, an engine, a parser of WIT.
+
+WASI 0.3 is not supported. If it is ever added through `meld fuse`, the support will be **partial**: meld 0.65 does not keep the async part of the canonical ABI (the `[async-lower]` imports are renamed or replaced by meld-private ones, two fused async components leave a dangling import, `--component` refuses async). Full p3 waits until meld keeps the standard async ABI.
