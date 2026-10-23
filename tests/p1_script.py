@@ -31,7 +31,23 @@ def tokens(line: str) -> list[bytes]:
     return found
 
 
-def run(script: Path, tmp: str) -> list[str]:
+class Remote:
+    """A memory that is not a buffer, as an engine keeps it out of this process: `read`, `write` and `len` only."""
+
+    def __init__(self, data: bytearray) -> None:
+        self.data = data
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def read(self, offset: int, length: int) -> bytes:
+        return bytes(self.data[offset : offset + length])
+
+    def write(self, offset: int, data: bytes) -> None:
+        self.data[offset : offset + len(data)] = data
+
+
+def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
     out: list[str] = []
     args: list[bytes] = []
     env: list[bytes] = []
@@ -88,7 +104,7 @@ def run(script: Path, tmp: str) -> list[str]:
         elif word == "start":
             memory = bytearray(int(t[1]))
             state = State(
-                memory,
+                Remote(memory) if remote else memory,
                 args=args or None,
                 env=env,
                 preopens=preopens,

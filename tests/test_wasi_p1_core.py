@@ -65,6 +65,15 @@ def test_c_and_python_agree(driver: Path, name: str, tmp_path: Path) -> None:
     assert run(script, str(tmp_path / "py")) == c
 
 
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_a_memory_that_is_not_a_buffer_gives_the_same(name: str, tmp_path: Path) -> None:
+    """An engine that keeps its memory out of this process gives `read`/`write`/`len`; the calls then behave as with a buffer."""
+    make_tree(tmp_path / "a")
+    make_tree(tmp_path / "b")
+    script = DATA / "p1" / f"{name}.txt"
+    assert run(script, str(tmp_path / "a"), remote=True) == run(script, str(tmp_path / "b"))
+
+
 def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     """A few values read by hand, so that two wrong twins do not agree."""
     lines = run(DATA / "p1" / "core.txt", str(tmp_path))
