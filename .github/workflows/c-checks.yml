@@ -1,0 +1,49 @@
+name: C checks
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["docs/**", "*.md", "LICENSE"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sanitizers:
+    name: tests with the C drivers under ASan and UBSan (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.11"
+      - run: uv sync
+      # The tests build their C drivers with `cc`: a `cc` that adds the sanitizers is put first on PATH. Python itself is not instrumented.
+      - name: A cc with the sanitizers
+        run: |
+          mkdir -p "$RUNNER_TEMP/san"
+          printf '#!/bin/sh\nexec gcc -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g "$@"\n' > "$RUNNER_TEMP/san/cc"
+          chmod +x "$RUNNER_TEMP/san/cc"
+          echo "$RUNNER_TEMP/san" >> "$GITHUB_PATH"
+      - run: uv run pytest -q
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1
+
+  msvc:
+    name: the headers compile with MSVC (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every header on its own, C11, warnings are errors
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set INC=src\fusedwasi\include\fusedwasi
+          for %%v in (p1\wasi_p1_core.h p1\wasi_p1.h p1\wasi_p1_unstable.h) do (
+            echo #include "%%~nxv"> check.c
+            echo int main^(void^) { return 0; }>> check.c
+            cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 check.c || exit /b 1
+          )
