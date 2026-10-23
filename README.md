@@ -2,7 +2,7 @@
 
 Header-only C host for the WASI Component Model, for core modules fused from components (wasm2c and other C hosts), with a Python twin.
 
-**Placeholder: nothing is released yet.** What follows is the idea and the shape of the API, taken from the code that is to move here (the WASI 0.2 host of `wasmext`: `c/p2/*.h` and `p2/*.py`).
+**Alpha: nothing is released yet.** The WASI 0.2 host of `wasmext` (`c/p2/*.h` and `p2/*.py`) is here: all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
 
 ## The idea
 
@@ -21,7 +21,7 @@ flowchart TB
         direction LR
         H["C host (.h)<br/>wasmext, other C hosts"] --> FW
         Y["Python host (.py)<br/>wasmhost"] --> FW
-        FW["fusedwasi<br/>state: handles, memories, hooks<br/>one function per import:<br/>cli · clocks · random · io · filesystem · sockets"]
+        FW["fusedwasi<br/>state: handles, memories, hooks<br/>one function per import:<br/>cli · clocks · random · io · filesystem · sockets · http"]
     end
 
     build -- "AOT: wasm2c · runtime: any engine" --> run
@@ -48,7 +48,8 @@ wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
 ```
 
 ```python
-from fusedwasi import Host, wasi_p2_cli as cli  # the module names follow the C headers
+from fusedwasi import Host
+from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers
 
 host = Host([memory], args=["prog"], realloc=my_cabi_realloc)  # a memory is any writable buffer
 cli.wasi_cli_environment_get_arguments(host, 0, ptr)
@@ -59,11 +60,16 @@ cli.wasi_cli_environment_get_arguments(host, 0, ptr)
 | memory | a base and a size for each component | checked, little-endian loads and stores; a pointer outside is a trap |
 | handles | nothing | the table of `own` and `borrow` (generation + index), `[resource-drop]` |
 | lists and strings it returns | `realloc` (the `cabi_realloc` of the component) | placing them in the guest's memory |
-| files | the preopened directories (`path`, `name`, `writable`) | paths confined below the preopen (POSIX) |
-| sockets | `socket_addr_check`, `allow_ip_name_lookup`; refused by default | TCP, UDP, name lookup (POSIX) |
+| files | the preopened directories (`path`, `name`, `writable`) | paths confined below the preopen (POSIX and Windows) |
+| sockets | `socket_addr_check`, `allow_ip_name_lookup`; refused by default | TCP, UDP, name lookup (POSIX and Winsock) |
+| http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only), the types of `wasi:http` |
 | time, random, exit, wait | a hook, or the system's own | the rest |
 
 Every function is `static inline` and nothing is global or thread-local, so a module links only what it imports and several instances can live in a process.
+
+## The headers come with the Python package
+
+`pip install fusedwasi` (or a dependency on it) gives the headers too: `python -m fusedwasi` prints the directory to put on the include path, `fusedwasi.get_include()` gives it in Python, and the C is then `#include <fusedwasi/p2/wasi_p2_cli.h>`. With CMake: `find_package(fusedwasi)` and the target `fusedwasi::headers`. The headers in the wheel and in the CMake install are the same files (`src/fusedwasi/include/`).
 
 ## Who uses it
 
