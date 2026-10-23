@@ -1138,13 +1138,29 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_ms(const fusedwasi_p2_http_request *req, i
     return ms > (uint64_t)INT_MAX ? INT_MAX : (int)ms;
 }
 
+/* the text of an errno in a buffer of the caller: strerror() may return one buffer shared by every thread, so it is not used */
+FUSEDWASI_P2_FN const char *fusedwasi_p2_http_strerror(int e, char *buf, size_t n) {
+#if defined(_WIN32)
+    if (strerror_s(buf, n, e) != 0) snprintf(buf, n, "error %d", e);
+#elif defined(__GLIBC__) && defined(__USE_GNU)  /* the GNU strerror_r gives a string, which need not be in the buffer */
+    const char *text = strerror_r(e, buf, n);
+    if (text != buf) snprintf(buf, n, "%s", text);
+#else  /* POSIX: 0 on success */
+    if (strerror_r(e, buf, n) != 0) snprintf(buf, n, "error %d", e);
+#endif
+    return buf;
+}
+
 FUSEDWASI_P2_FN int fusedwasi_p2_http_connect_error(fusedwasi_p2_http_error *err, int e) {
     switch (e) {
     case ECONNREFUSED: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_REFUSED);
     case ETIMEDOUT: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TIMEOUT);
     case EHOSTUNREACH: case ENETUNREACH: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_DESTINATION_UNAVAILABLE);
     case ECONNRESET: case ECONNABORTED: case EPIPE: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED);
-    default: return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, strerror(e));
+    default: {
+        char text[128];
+        return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, fusedwasi_p2_http_strerror(e, text, sizeof text));
+    }
     }
 }
 
