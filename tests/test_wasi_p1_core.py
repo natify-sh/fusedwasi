@@ -92,3 +92,39 @@ def test_what_the_second_stage_gives(tmp_path: Path) -> None:
     assert "nlink 0200000000000000" in lines  # a hard link
     assert "readlink_data 68617264" in lines  # "hard"
     assert "fdstat_append 0400040000000000ffffff1f00000000ffffff1f00000000" in lines
+
+
+_NATIVE_POLL = """
+import struct, sys
+from fusedwasi.p1 import wasi_p1
+from fusedwasi.p1.wasi_p1_core import State
+
+memory = bytearray(4096)
+s = State(memory)
+struct.pack_into("<QBxxxxxxxI", memory, 0, 1, 1, 0)  # fd_read of fd 0
+struct.pack_into("<QBxxxxxxxIxxxxQQHxxxxxx", memory, 48, 2, 0, 1, 20_000_000, 0, 0)  # a clock of 20 ms
+rc = wasi_p1.poll_oneoff(s, 0, 1000, 2, 900)
+n = struct.unpack_from("<I", memory, 900)[0]
+events = [struct.unpack_from("<QHBxxxxxQH", memory, 1000 + 32 * i) for i in range(n)]
+print(rc, events)
+"""
+
+
+def _poll_stdin(data: bytes | None) -> str:
+    """poll_oneoff on the real standard input, a pipe: ready (with the bytes waiting) or, with nothing in it, the clock of 20 ms ends the wait."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _NATIVE_POLL], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    if data is not None:
+        proc.stdin.write(data.decode())
+        proc.stdin.flush()
+    out = proc.stdout.read()  # the pipe stays open until the child has answered
+    proc.stdin.close()
+    proc.wait()
+    return out.strip()
+
+
+def test_native_poll_on_a_pipe() -> None:
+    assert _poll_stdin(b"hello") == "0 [(1, 0, 1, 5, 0)]"  # userdata 1, no error, fd_read, 5 bytes waiting
+    assert _poll_stdin(None) == "0 [(2, 0, 0, 0, 0)]"  # nothing to read: the clock

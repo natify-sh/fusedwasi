@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 import struct
 from pathlib import Path
+from typing import Any
 
-from fusedwasi.p1 import wasi_p1
+from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
 from fusedwasi.p1.wasi_p1_core import Exit, Signal, State, WasiError
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
@@ -40,6 +41,7 @@ def run(script: Path, tmp: str) -> list[str]:
     status = {"stdout": 0, "clock": 0, "random": 0}
     memory = bytearray()
     state: State | None = None
+    table: Any = wasi_p1
 
     def hook_stdin(cap: int) -> bytes:
         nonlocal stdin_data
@@ -61,6 +63,9 @@ def run(script: Path, tmp: str) -> list[str]:
             raise WasiError(int(status["random"]))
         return bytes((i * 3 + 1) & 0xFF for i in range(n))
 
+    def hook_sleep(ns: int) -> None:
+        out.append(f"sleep {ns}")
+
     def hook_end(how: int, value: int) -> None:
         out.append(f"end {how} {value}")
 
@@ -76,6 +81,8 @@ def run(script: Path, tmp: str) -> list[str]:
         elif word == "preopen":
             host_path = tmp + t[1][4:].decode() if t[1].startswith(b"$TMP") else t[1].decode()
             preopens.append((host_path, t[2].decode(), not (len(t) > 3 and t[3] == b"ro")))
+        elif word == "mode":
+            table = wasi_p1_unstable if t[1] == b"unstable" else wasi_p1
         elif word == "hooks":
             hooks_on = t[1] == b"on"
         elif word == "start":
@@ -89,6 +96,7 @@ def run(script: Path, tmp: str) -> list[str]:
                 stdout_write=hook_stdout if hooks_on else None,
                 clock=hook_clock if hooks_on else None,
                 random=hook_random if hooks_on else None,
+                sleep=hook_sleep if hooks_on else None,
                 end=hook_end if hooks_on else None,
             )
         elif word == "stdin":
@@ -129,7 +137,7 @@ def run(script: Path, tmp: str) -> list[str]:
             name = t[1].decode()
             numbers = [int(x, 0) for x in t[2:]]
             try:
-                result = getattr(wasi_p1, name)(state, *numbers)
+                result = getattr(table, name)(state, *numbers)
                 out.append(f"{name} trapped" if name == "proc_exit" else f"{name} {result}")
             except (Exit, Signal):
                 out.append(f"{name} trapped")

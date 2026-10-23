@@ -5,6 +5,7 @@
 
 #include "wasi_p1_core.h"
 #include "wasi_p1.h"
+#include "wasi_p1_unstable.h"
 
 #define MAX_TOKENS 16
 static uint8_t memory[1 << 16];
@@ -52,6 +53,14 @@ static int hook_random(void *user, uint8_t *buf, size_t n) {
     for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)((i * 3 + 1) & 0xff);
     return 0;
 }
+
+static int hook_sleep(void *user, uint64_t ns) {
+    (void)user;
+    printf("sleep %llu\n", (unsigned long long)ns);
+    return 0;
+}
+
+static int unstable;  /* the first snapshot: the calls that differ are those of wasi_p1_unstable.h */
 
 static void hook_end(void *user, int how, uint32_t value) {
     (void)user;
@@ -117,7 +126,9 @@ CALL(sched_yield, 0, )
 CALL(proc_raise, 1, (uint32_t)A(0), )
 CALL(fd_write, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), )
 CALL(fd_read, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), )
-CALL(fd_seek, 4, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3), )
+static uint32_t c_fd_seek(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
+    return unstable ? fusedwasi_p1_unstable_fd_seek(w, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3), t) : fusedwasi_p1_fd_seek(w, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3), t);
+}
 CALL(fd_tell, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_close, 1, (uint32_t)A(0), )
 CALL(fd_renumber, 2, (uint32_t)A(0), (uint32_t)A(1), )
@@ -126,8 +137,12 @@ CALL(fd_fdstat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_prestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_prestat_dir_name, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
 
-CALL(fd_filestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(path_filestat_get, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
+static uint32_t c_fd_filestat_get(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
+    return unstable ? fusedwasi_p1_unstable_fd_filestat_get(w, (uint32_t)A(0), (uint32_t)A(1), t) : fusedwasi_p1_fd_filestat_get(w, (uint32_t)A(0), (uint32_t)A(1), t);
+}
+static uint32_t c_path_filestat_get(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
+    return unstable ? fusedwasi_p1_unstable_path_filestat_get(w, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), t) : fusedwasi_p1_path_filestat_get(w, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), t);
+}
 CALL(fd_readdir, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
 CALL(path_open, 9, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), A(5), A(6), (uint32_t)A(7), (uint32_t)A(8), )
 CALL(fd_datasync, 1, (uint32_t)A(0), )
@@ -148,6 +163,15 @@ CALL(path_link, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3
 CALL(path_symlink, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
 CALL(path_readlink, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
 
+static uint32_t c_poll_oneoff(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
+    return unstable ? fusedwasi_p1_unstable_poll_oneoff(w, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), t)
+                    : fusedwasi_p1_poll_oneoff(w, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), t);
+}
+CALL(sock_accept, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
+CALL(sock_recv, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
+CALL(sock_send, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
+CALL(sock_shutdown, 2, (uint32_t)A(0), (uint32_t)A(1), )
+
 static uint32_t c_proc_exit(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
     fusedwasi_p1_proc_exit(w, (uint32_t)a[0], t);
     return 0;
@@ -167,6 +191,7 @@ static const struct {
     ENTRY(fd_filestat_set_size, 2) ENTRY(fd_allocate, 3) ENTRY(fd_filestat_set_times, 4) ENTRY(path_filestat_set_times, 7) ENTRY(fd_fdstat_set_flags, 2)
     ENTRY(fd_fdstat_set_rights, 3) ENTRY(path_create_directory, 3) ENTRY(path_remove_directory, 3) ENTRY(path_unlink_file, 3) ENTRY(fd_pread, 5)
     ENTRY(fd_pwrite, 5) ENTRY(path_rename, 6) ENTRY(path_link, 7) ENTRY(path_symlink, 5) ENTRY(path_readlink, 6)
+    ENTRY(poll_oneoff, 4) ENTRY(sock_accept, 3) ENTRY(sock_recv, 6) ENTRY(sock_send, 5) ENTRY(sock_shutdown, 2)
 };
 
 int main(int argc, char **argv) {
@@ -207,6 +232,8 @@ int main(int argc, char **argv) {
             preopens[npreopens].host = preopen_host[npreopens];
             preopens[npreopens].readonly = n > 3 && !strcmp(t[3], "ro");
             npreopens++;
+        } else if (!strcmp(t[0], "mode")) {
+            unstable = !strcmp(t[1], "unstable");
         } else if (!strcmp(t[0], "hooks")) {
             hooks_on = !strcmp(t[1], "on");
         } else if (!strcmp(t[0], "start")) {
@@ -226,6 +253,7 @@ int main(int argc, char **argv) {
                 cfg.hooks.stdout_write = hook_stdout;
                 cfg.hooks.clock = hook_clock;
                 cfg.hooks.random = hook_random;
+                cfg.hooks.sleep = hook_sleep;
                 cfg.hooks.end = hook_end;
             }
             int err = 0;
