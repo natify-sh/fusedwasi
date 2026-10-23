@@ -48,9 +48,9 @@ wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
 ```
 
 ```python
-from fusedwasi import Host, wasi_p2_cli as cli     # the module names follow the C headers
+from fusedwasi import Host, wasi_p2_cli as cli  # the module names follow the C headers
 
-host = Host([memory], args=["prog"], realloc=my_cabi_realloc)   # a memory is any writable buffer
+host = Host([memory], args=["prog"], realloc=my_cabi_realloc)  # a memory is any writable buffer
 cli.wasi_cli_environment_get_arguments(host, 0, ptr)
 ```
 

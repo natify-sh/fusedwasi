@@ -11,5 +11,24 @@ dependencies = []
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
 
-[tool.uv.build-backend.data]
-headers = "include"
+
+[tool.pytest.ini_options]
+minversion = "9"
+addopts = "-rf"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["tools"]  # reference scripts of the audits and of the comparison with Wasmtime, kept as they were written
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pyright>=1.1.400",
+    "ruff>=0.16.0",
+]
