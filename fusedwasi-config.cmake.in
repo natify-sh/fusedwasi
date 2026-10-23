@@ -1,0 +1,6 @@
+@PACKAGE_INIT@
+
+# Provide the header-only target
+include("${CMAKE_CURRENT_LIST_DIR}/fusedwasi-targets.cmake")
+
+check_required_components(fusedwasi)
