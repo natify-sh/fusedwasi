@@ -133,7 +133,9 @@ CALL(fd_tell, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_close, 1, (uint32_t)A(0), )
 CALL(fd_renumber, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_advise, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3), )
-CALL(fd_fdstat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
+static uint32_t c_fd_fdstat_get(fusedwasi_p1_state *w, const uint64_t *a, int *t) {
+    return unstable ? fusedwasi_p1_unstable_fd_fdstat_get(w, (uint32_t)A(0), (uint32_t)A(1), t) : fusedwasi_p1_fd_fdstat_get(w, (uint32_t)A(0), (uint32_t)A(1), t);
+}
 CALL(fd_prestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
 CALL(fd_prestat_dir_name, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
 

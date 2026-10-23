@@ -148,3 +148,20 @@ mem u64 5032 4000000
 mem zero 6000 256
 call poll_oneoff 5000 6000 1 6400
 mem dump 6000 32 legacy_clock_event
+
+# wasi_unstable: the rights are of 29 bits (no sock_accept); a seek by 0 bytes from the current position needs the right to tell only; the standard output has one name
+call fd_fdstat_get 3 3300
+mem dump 3308 16 legacy_rights
+mode default
+call fd_fdstat_get 3 3300
+mem dump 3308 16 rights
+mode unstable
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 0 32 0 0 3100
+call fd_seek 4 0 0 3208
+mem dump 3208 8 tell_by_seek
+call fd_seek 4 1 0 3208
+call fd_seek 4 0 1 3208
+call fd_close 4
+call fd_filestat_get 1 3000
+mem dump 3020 4 stdout_nlink

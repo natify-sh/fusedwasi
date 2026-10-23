@@ -263,6 +263,11 @@ def fd_read(s: State, fd: int, iovs: int, count: int, nread: int) -> int:
     return E_SUCCESS if s.put_u32(nread, total) else E_FAULT
 
 
+def _seek_right(offset: int, whence: int) -> int:
+    """What fd_seek asks of the descriptor: its right, or (a seek by 0 bytes from the current position is a tell) the right to tell."""
+    return R_FD_SEEK | (R_FD_TELL if offset == 0 and whence == 1 else 0)
+
+
 def _seek_native(s: State, fd: int, offset: int, whence: int, ptr: int, right: int) -> int:
     entry = s.entry_of(fd)
     if entry is None:
@@ -283,7 +288,7 @@ def fd_seek(s: State, fd: int, offset: int, whence: int, ptr: int) -> int:
     """The order of whence in this snapshot: set, cur, end."""
     if whence > 2:
         return E_INVAL
-    return _seek_native(s, fd, _signed(offset), whence, ptr, R_FD_SEEK)
+    return _seek_native(s, fd, _signed(offset), whence, ptr, _seek_right(_signed(offset), whence))
 
 
 def fd_tell(s: State, fd: int, ptr: int) -> int:
@@ -402,7 +407,7 @@ def filestat_of_fd(s: State, fd: int, ptr: int, legacy: bool) -> int:
             if number == E_SUCCESS and st is not None:
                 return _put_filestat(s, ptr, st, legacy)  # what it is
         return _put_filestat(
-            s, ptr, Stat(filetype=FT_CHAR), legacy
+            s, ptr, Stat(filetype=FT_CHAR, nlink=1), legacy
         )  # a stream of the host: nothing to say but that it is a character device
     if not entry.rights & R_FD_FILESTAT_GET:
         return E_NOTCAPABLE

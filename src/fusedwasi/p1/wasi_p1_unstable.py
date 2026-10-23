@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import struct
 from typing import TYPE_CHECKING
 
 from .wasi_p1 import (
     _poll,  # pyright: ignore[reportPrivateUsage]
     _seek_native,  # pyright: ignore[reportPrivateUsage]
+    _seek_right,  # pyright: ignore[reportPrivateUsage]
     _signed,  # pyright: ignore[reportPrivateUsage]
     filestat_of_fd,
     filestat_of_path,
@@ -46,7 +48,7 @@ from .wasi_p1 import (
     fd_datasync as fd_datasync,
 )
 from .wasi_p1 import (
-    fd_fdstat_get as fd_fdstat_get,
+    fd_fdstat_get as _fdstat_get,
 )
 from .wasi_p1 import (
     fd_fdstat_set_flags as fd_fdstat_set_flags,
@@ -138,7 +140,7 @@ from .wasi_p1 import (
 from .wasi_p1 import (
     sock_shutdown as sock_shutdown,
 )
-from .wasi_p1_core import E_INVAL, R_FD_SEEK
+from .wasi_p1_core import E_INVAL, E_SUCCESS
 
 if TYPE_CHECKING:
     from .wasi_p1_core import State
@@ -148,7 +150,18 @@ def fd_seek(s: State, fd: int, offset: int, whence: int, ptr: int) -> int:
     """The order of whence in this snapshot: cur, end, set."""
     if whence > 2:
         return E_INVAL
-    return _seek_native(s, fd, _signed(offset), (1, 2, 0)[whence], ptr, R_FD_SEEK)
+    native = (1, 2, 0)[whence]  # cur, end, set
+    return _seek_native(s, fd, _signed(offset), native, ptr, _seek_right(_signed(offset), native))
+
+
+def fd_fdstat_get(s: State, fd: int, ptr: int) -> int:
+    """This snapshot has one right less, the last (sock_accept): the rights that a descriptor tells are of 29 bits."""
+    number = _fdstat_get(s, fd, ptr)
+    if number == E_SUCCESS:
+        mask = (1 << 29) - 1
+        base, inheriting = struct.unpack("<QQ", s.load(ptr + 8, 16))
+        s.put_bytes(ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
+    return number
 
 
 def fd_filestat_get(s: State, fd: int, ptr: int) -> int:

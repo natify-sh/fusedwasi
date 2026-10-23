@@ -1037,6 +1037,10 @@ static inline uint32_t fusedwasi_p1_fd_read(void *s, uint32_t fd, uint32_t iovs,
     return fusedwasi_p1_put_u32(w, nread, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
+/* what fd_seek asks of the descriptor: its right, or (a seek by 0 bytes from the current position is a tell) the right to tell */
+#define FUSEDWASI_P1_SEEK_RIGHT(offset, native) \
+    (FUSEDWASI_P1_R_FD_SEEK | ((offset) == 0 && (native) == SEEK_CUR ? FUSEDWASI_P1_R_FD_TELL : 0))
+
 static inline uint32_t fusedwasi_p1_seek_native(fusedwasi_p1_state *w, uint32_t fd, int64_t offset, int native, uint32_t ptr, uint64_t right) {
     fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(w, fd);
     if (e == NULL) return FUSEDWASI_P1_E_BADF;
@@ -1054,7 +1058,7 @@ static inline uint32_t fusedwasi_p1_fd_seek(void *s, uint32_t fd, uint64_t offse
     (void)trapped;
     static const int native[3] = {SEEK_SET, SEEK_CUR, SEEK_END};
     if (whence > 2) return FUSEDWASI_P1_E_INVAL;
-    return fusedwasi_p1_seek_native(w, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_R_FD_SEEK);
+    return fusedwasi_p1_seek_native(w, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_SEEK_RIGHT((int64_t)offset, native[whence]));
 }
 
 static inline uint32_t fusedwasi_p1_fd_tell(void *s, uint32_t fd, uint32_t ptr, int *trapped) {
@@ -1716,8 +1720,9 @@ static inline uint32_t fusedwasi_p1_filestat_of_fd(fusedwasi_p1_state *w, uint32
     if (e->kind == FUSEDWASI_P1_K_STD) {
         if (fusedwasi_p1_std_is_real(w, e) && fusedwasi_p1_be_stat_fd(w, e, &st, trapped) == FUSEDWASI_P1_E_SUCCESS) return fusedwasi_p1_put_filestat(w, ptr, &st, legacy);  /* what it is */
         *trapped = 0;
-        memset(&st, 0, sizeof st);  /* a stream of the host: nothing to say but that it is a character device */
+        memset(&st, 0, sizeof st);  /* a stream of the host: nothing to say but that it is a character device (with one name) */
         st.filetype = FUSEDWASI_P1_FT_CHAR;
+        st.nlink = 1;
         return fusedwasi_p1_put_filestat(w, ptr, &st, legacy);
     }
     if (!(e->rights & FUSEDWASI_P1_R_FD_FILESTAT_GET)) return FUSEDWASI_P1_E_NOTCAPABLE;

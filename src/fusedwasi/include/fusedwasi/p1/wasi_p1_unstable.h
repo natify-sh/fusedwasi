@@ -12,7 +12,22 @@ static inline uint32_t fusedwasi_p1_unstable_fd_seek(void *s, uint32_t fd, uint6
     (void)trapped;
     static const int native[3] = {SEEK_CUR, SEEK_END, SEEK_SET};
     if (whence > 2) return FUSEDWASI_P1_E_INVAL;
-    return fusedwasi_p1_seek_native(w, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_R_FD_SEEK);
+    return fusedwasi_p1_seek_native(w, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_SEEK_RIGHT((int64_t)offset, native[whence]));
+}
+
+/* this snapshot has one right less, the last (sock_accept): the rights that a descriptor tells are of 29 bits */
+static inline uint32_t fusedwasi_p1_unstable_fd_fdstat_get(void *s, uint32_t fd, uint32_t ptr, int *trapped) {
+    FUSEDWASI_P1_STATE(s);
+    uint32_t rc = fusedwasi_p1_fd_fdstat_get(s, fd, ptr, trapped);
+    if (rc == FUSEDWASI_P1_E_SUCCESS) {
+        uint64_t base = 0, inheriting = 0;
+        const uint64_t mask = ((uint64_t)1 << 29) - 1;
+        memcpy(&base, FUSEDWASI_P1_MEM(w) + ptr + 8, 8);  /* (little-endian hosts) */
+        memcpy(&inheriting, FUSEDWASI_P1_MEM(w) + ptr + 16, 8);
+        fusedwasi_p1_put_u64(w, ptr + 8, base & mask);
+        fusedwasi_p1_put_u64(w, ptr + 16, inheriting & mask);
+    }
+    return rc;
 }
 
 /* the filestat of this snapshot has a 32-bit link count (56 bytes) */
