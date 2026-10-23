@@ -199,7 +199,8 @@ int main(int argc, char **argv) {
             env_size += l[1] + 1;
             envc++;
         } else if (!strcmp(t[0], "preopen")) {
-            snprintf(preopen_host[npreopens], sizeof preopen_host[0], "%s", !strcmp(t[1], "$TMP") ? tmp : t[1]);
+            snprintf(preopen_host[npreopens], sizeof preopen_host[0], "%s%s", strncmp(t[1], "$TMP", 4) ? "" : tmp,
+                     strncmp(t[1], "$TMP", 4) ? t[1] : t[1] + 4);
             snprintf(preopen_name[npreopens], sizeof preopen_name[0], "%s", t[2]);
             preopens[npreopens].name = preopen_name[npreopens];
             preopens[npreopens].name_len = l[2];

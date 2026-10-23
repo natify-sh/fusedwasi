@@ -74,7 +74,7 @@ def run(script: Path, tmp: str) -> list[str]:
         elif word == "env":
             env.append(t[1])
         elif word == "preopen":
-            host_path = tmp if t[1] == b"$TMP" else t[1].decode()
+            host_path = tmp + t[1][4:].decode() if t[1].startswith(b"$TMP") else t[1].decode()
             preopens.append((host_path, t[2].decode(), not (len(t) > 3 and t[3] == b"ro")))
         elif word == "hooks":
             hooks_on = t[1] == b"on"
