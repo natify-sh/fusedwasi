@@ -1,6 +1,6 @@
 /* The system calls of sockets as they are on POSIX and on Windows (Winsock), for wasi_p2_sockets.h and wasi_p2_http.h. */
-#ifndef WASI_P2_NET_H
-#define WASI_P2_NET_H
+#ifndef FUSEDWASI_P2_NET_H
+#define FUSEDWASI_P2_NET_H
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -8,7 +8,6 @@
 #include <errno.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "ws2_32") /* elsewhere: -lws2_32 */
-typedef intptr_t ssize_t;
 #endif
 #else
 #include <arpa/inet.h>
@@ -22,32 +21,28 @@ typedef intptr_t ssize_t;
 #include <unistd.h>
 #endif
 
-#include "wasi_p2_io.h" /* WASI_P2_FN */
+#include "wasi_p2_io.h" /* FUSEDWASI_P2_FN */
 
 /* The system calls, as they are on POSIX and on Windows (Winsock): the descriptor is an `int` in this file (a SOCKET is a handle, whose value fits in 32 bits), the errors are
-   those of `errno` (on Windows the WSA numbers are turned into them by `wasi_p2_errno`), and a socket is non-blocking. */
+   those of `errno` (on Windows the WSA numbers are turned into them by `fusedwasi_p2_errno`), and a socket is non-blocking. */
 #ifdef _WIN32
-#define WASI_P2_CLOSE(fd) closesocket((SOCKET)(fd))
-#define WASI_P2_POLL(p, n, ms) WSAPoll((p), (ULONG)(n), (ms))
-#define WASI_P2_RECV(fd, b, n, f) recv((SOCKET)(fd), (char *)(b), (int)(n), (f))
-#define WASI_P2_SEND(fd, b, n, f) send((SOCKET)(fd), (const char *)(b), (int)(n), (f))
-#define WASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((SOCKET)(fd), (char *)(b), (int)(n), (f), (a), (l))
-#define WASI_P2_SENDTO(fd, b, n, f, a, l) sendto((SOCKET)(fd), (const char *)(b), (int)(n), (f), (a), (l))
-#define WASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((SOCKET)(fd), (level), (name), (const char *)(v), (int)(n))
-#define WASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((SOCKET)(fd), (level), (name), (char *)(v), (n))
-#define WASI_P2_CLOEXEC(fd) ((void)(fd))
-#define WASI_P2_SOCKET(family, type) ((int)socket((family), (type), 0))
-#define WASI_P2_ACCEPT(fd) ((int)accept((SOCKET)(fd), NULL, NULL))
-#ifndef MSG_NOSIGNAL
-#define MSG_NOSIGNAL 0
-#endif
-#ifndef SHUT_RD
-#define SHUT_RD SD_RECEIVE
-#define SHUT_WR SD_SEND
-#define SHUT_RDWR SD_BOTH
-#endif
+#define FUSEDWASI_P2_CLOSE(fd) closesocket((SOCKET)(fd))
+#define FUSEDWASI_P2_POLL(p, n, ms) WSAPoll((p), (ULONG)(n), (ms))
+#define FUSEDWASI_P2_RECV(fd, b, n, f) recv((SOCKET)(fd), (char *)(b), (int)(n), (f))
+#define FUSEDWASI_P2_SEND(fd, b, n, f) send((SOCKET)(fd), (const char *)(b), (int)(n), (f))
+#define FUSEDWASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((SOCKET)(fd), (char *)(b), (int)(n), (f), (a), (l))
+#define FUSEDWASI_P2_SENDTO(fd, b, n, f, a, l) sendto((SOCKET)(fd), (const char *)(b), (int)(n), (f), (a), (l))
+#define FUSEDWASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((SOCKET)(fd), (level), (name), (const char *)(v), (int)(n))
+#define FUSEDWASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((SOCKET)(fd), (level), (name), (char *)(v), (n))
+#define FUSEDWASI_P2_CLOEXEC(fd) ((void)(fd))
+#define FUSEDWASI_P2_SOCKET(family, type) ((int)socket((family), (type), 0))
+#define FUSEDWASI_P2_ACCEPT(fd) ((int)accept((SOCKET)(fd), NULL, NULL))
+#define FUSEDWASI_P2_MSG_NOSIGNAL 0
+#define FUSEDWASI_P2_SHUT_RD SD_RECEIVE
+#define FUSEDWASI_P2_SHUT_WR SD_SEND
+#define FUSEDWASI_P2_SHUT_RDWR SD_BOTH
 /* the number of a Winsock error as the `errno` that has the same meaning */
-WASI_P2_FN int wasi_p2_wsa_errno(int e) {
+FUSEDWASI_P2_FN int fusedwasi_p2_wsa_errno(int e) {
     switch (e) {
     case WSAEWOULDBLOCK: return EWOULDBLOCK;
     case WSAEINPROGRESS: return EINPROGRESS;
@@ -78,29 +73,37 @@ WASI_P2_FN int wasi_p2_wsa_errno(int e) {
     default: return EIO;
     }
 }
-WASI_P2_FN int wasi_p2_errno(void) { return wasi_p2_wsa_errno(WSAGetLastError()); }
-WASI_P2_FN int wasi_p2_sockerr(int e) { return wasi_p2_wsa_errno(e); } /* the value of SO_ERROR */
-WASI_P2_FN void wasi_p2_net_start(void) {
+FUSEDWASI_P2_FN int fusedwasi_p2_errno(void) { return fusedwasi_p2_wsa_errno(WSAGetLastError()); }
+FUSEDWASI_P2_FN int fusedwasi_p2_sockerr(int e) { return fusedwasi_p2_wsa_errno(e); } /* the value of SO_ERROR */
+FUSEDWASI_P2_FN void fusedwasi_p2_net_start(void) {
     WSADATA data;
     WSAStartup(MAKEWORD(2, 2), &data); /* counted by the system: calling it again is harmless */
 }
 #else
-#define WASI_P2_CLOSE(fd) close(fd)
-#define WASI_P2_POLL(p, n, ms) poll((p), (n), (ms))
-#define WASI_P2_RECV(fd, b, n, f) recv((fd), (b), (n), (f))
-#define WASI_P2_SEND(fd, b, n, f) send((fd), (b), (n), (f))
-#define WASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((fd), (b), (n), (f), (a), (l))
-#define WASI_P2_SENDTO(fd, b, n, f, a, l) sendto((fd), (b), (n), (f), (a), (l))
-#define WASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((fd), (level), (name), (v), (n))
-#define WASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((fd), (level), (name), (v), (n))
-#define WASI_P2_CLOEXEC(fd) fcntl((fd), F_SETFD, FD_CLOEXEC)
-#define WASI_P2_SOCKET(family, type) socket((family), (type), 0)
-#define WASI_P2_ACCEPT(fd) accept((fd), NULL, NULL)
-WASI_P2_FN int wasi_p2_errno(void) { return errno; }
-WASI_P2_FN int wasi_p2_sockerr(int e) { return e; }
-WASI_P2_FN void wasi_p2_net_start(void) {}
+#define FUSEDWASI_P2_CLOSE(fd) close(fd)
+#ifdef MSG_NOSIGNAL
+#define FUSEDWASI_P2_MSG_NOSIGNAL MSG_NOSIGNAL
+#else
+#define FUSEDWASI_P2_MSG_NOSIGNAL 0
 #endif
-WASI_P2_FN int wasi_p2_set_blocking(int fd, int blocking) {
+#define FUSEDWASI_P2_SHUT_RD SHUT_RD
+#define FUSEDWASI_P2_SHUT_WR SHUT_WR
+#define FUSEDWASI_P2_SHUT_RDWR SHUT_RDWR
+#define FUSEDWASI_P2_POLL(p, n, ms) poll((p), (n), (ms))
+#define FUSEDWASI_P2_RECV(fd, b, n, f) recv((fd), (b), (n), (f))
+#define FUSEDWASI_P2_SEND(fd, b, n, f) send((fd), (b), (n), (f))
+#define FUSEDWASI_P2_RECVFROM(fd, b, n, f, a, l) recvfrom((fd), (b), (n), (f), (a), (l))
+#define FUSEDWASI_P2_SENDTO(fd, b, n, f, a, l) sendto((fd), (b), (n), (f), (a), (l))
+#define FUSEDWASI_P2_SETSOCKOPT(fd, level, name, v, n) setsockopt((fd), (level), (name), (v), (n))
+#define FUSEDWASI_P2_GETSOCKOPT(fd, level, name, v, n) getsockopt((fd), (level), (name), (v), (n))
+#define FUSEDWASI_P2_CLOEXEC(fd) fcntl((fd), F_SETFD, FD_CLOEXEC)
+#define FUSEDWASI_P2_SOCKET(family, type) socket((family), (type), 0)
+#define FUSEDWASI_P2_ACCEPT(fd) accept((fd), NULL, NULL)
+FUSEDWASI_P2_FN int fusedwasi_p2_errno(void) { return errno; }
+FUSEDWASI_P2_FN int fusedwasi_p2_sockerr(int e) { return e; }
+FUSEDWASI_P2_FN void fusedwasi_p2_net_start(void) {}
+#endif
+FUSEDWASI_P2_FN int fusedwasi_p2_set_blocking(int fd, int blocking) {
 #ifdef _WIN32
     u_long on = blocking ? 0 : 1;
     return ioctlsocket((SOCKET)fd, FIONBIO, &on) == 0 ? 0 : -1;
@@ -111,4 +114,4 @@ WASI_P2_FN int wasi_p2_set_blocking(int fd, int blocking) {
 #endif
 }
 
-#endif /* WASI_P2_NET_H */
+#endif /* FUSEDWASI_P2_NET_H */
