@@ -31,20 +31,20 @@ flowchart TB
 
 ## The API (planned; the shape of the current code)
 
-One state, one flat function per import, the same names and arguments in C and in Python. The host gives the state what it decides (arguments, preopened directories, which sockets are allowed, the standard streams, a trap); the rest is the library.
+One state, one flat function per import, the same arguments in C and in Python. **Every C name has the prefix of the library** (`fusedwasi_` for functions and types, `FUSEDWASI_` for macros, then `p2_` for WASI 0.2): the headers are included into the C of other projects, so nothing may meet a name of the system, of another WASI host or of the user. The function of an import is `fusedwasi_` + the name that the Python twin has (`wasi_cli_environment_get_arguments`). The host gives the state what it decides (arguments, preopened directories, which sockets are allowed, the standard streams, a trap); the rest is the library.
 
 ```c
 #include "wasi_p2_cli.h"             /* or wasi_p2_filesystem.h, wasi_p2_sockets.h, ... */
 
-wasi_p2_state s;
-wasi_p2_init(&s);                    /* defaults: system clocks, /dev/urandom, nothing allowed in sockets */
+fusedwasi_p2_state s;
+fusedwasi_p2_init(&s);                  /* defaults: system clocks, /dev/urandom, nothing allowed in sockets */
 s.args = args, s.arg_count = 2;
 s.realloc = my_cabi_realloc;         /* the cabi_realloc of component `comp` */
 s.trap = my_trap;                    /* in a wasm2c module: wasm_rt_trap */
-wasi_p2_set_memory(&s, 0, base, size);       /* once for each component; set again when the memory grows */
+fusedwasi_p2_set_memory(&s, 0, base, size);       /* once for each component; set again when the memory grows */
 
 /* the body of an import of the module: the first argument is the component whose memory it is */
-wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
+fusedwasi_wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
 ```
 
 ```python

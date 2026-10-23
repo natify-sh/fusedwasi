@@ -2,12 +2,12 @@
 #include <inttypes.h>
 #include "wasi_p2_filesystem.h"
 
-static wasi_p2_state s;
+static fusedwasi_p2_state s;
 static uint8_t memory[4096];
 
-static void trap(wasi_p2_state *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
-static uint64_t wall(wasi_p2_state *st) { (void)st; return 1700000000123456789ULL; }
-static uint32_t bump(wasi_p2_state *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static void trap(fusedwasi_p2_state *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
+static uint64_t wall(fusedwasi_p2_state *st) { (void)st; return 1700000000123456789ULL; }
+static uint32_t bump(fusedwasi_p2_state *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     uint32_t *next = (uint32_t *)st->user;
     (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (*next + align - 1) / align * align;
@@ -20,7 +20,7 @@ static void show(const char *label, uint32_t off, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) printf("%02x", memory[off + i]);
     printf("\n");
 }
-static uint32_t u32(uint32_t off) { return wasi_p2_load_u32(&s, 0, off); }
+static uint32_t u32(uint32_t off) { return fusedwasi_p2_load_u32(&s, 0, off); }
 static uint64_t u64(uint32_t off) { return (uint64_t)u32(off) | (uint64_t)u32(off + 4) << 32; }
 static void clear(uint32_t off, uint32_t n) { memset(memory + off, 0, n); }
 static uint32_t path(const char *text, size_t n) {
@@ -36,8 +36,8 @@ static void times(const char *label, uint32_t r) {
     printf("%s atime %" PRIu64 ".%u mtime %" PRIu64 ".%u\n", label, u64(r + 8 + 32), u32(r + 8 + 40), u64(r + 8 + 56), u32(r + 8 + 64));
 }
 
-#define FS(fn, ...) wasi_filesystem_types_##fn(&s, 0, __VA_ARGS__)
-#define IO(fn, ...) wasi_io_streams_##fn(&s, 0, __VA_ARGS__)
+#define FS(fn, ...) fusedwasi_wasi_filesystem_types_##fn(&s, 0, __VA_ARGS__)
+#define IO(fn, ...) fusedwasi_wasi_io_streams_##fn(&s, 0, __VA_ARGS__)
 
 static void read_all(const char *label, uint32_t h, uint64_t len, uint64_t off) {
     clear(220, 16);
@@ -70,18 +70,18 @@ int main(int argc, char **argv) {
     const char *scenario = argc > 1 ? argv[1] : "main";
     const char *root = argc > 2 ? argv[2] : ".";
     uint32_t next = 1600;
-    struct wasi_p2_preopen pre[2] = {{root, "/", 1}, {root, "/ro", 0}};
-    wasi_p2_init(&s);
+    struct fusedwasi_p2_preopen pre[2] = {{root, "/", 1}, {root, "/ro", 0}};
+    fusedwasi_p2_init(&s);
     s.trap = trap;
     s.user = &next;
     s.realloc = bump;
     s.wall_ns = wall;
     s.preopens = pre, s.preopen_count = 2;
-    wasi_p2_set_memory(&s, 0, memory, sizeof memory);
+    fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     memcpy(memory + 1500, "hello", 5);
     memcpy(memory + 1510, " world", 6);
     if (!strcmp(scenario, "main")) {
-        wasi_filesystem_preopens_get_directories(&s, 0, 0);
+        fusedwasi_wasi_filesystem_preopens_get_directories(&s, 0, 0);
         uint32_t lp = u32(0), hd = u32(lp), ro = u32(lp + 12);
         show("dirs", 0, 8), show("dirs", lp, 24), show("names", u32(lp + 4), 1), show("names", u32(lp + 16), 3);
         printf("handles %u %u\n", hd, ro);
@@ -103,10 +103,10 @@ int main(int argc, char **argv) {
         uint32_t hs = u32(254);
         IO(input_stream_read, hs, 100, 260), show("stream read", 260, 12), show("  data", u32(264), u32(268));
         IO(input_stream_read, hs, 100, 260), show("stream read at the end", 260, 12);
-        wasi_io_streams_input_stream_drop(&s, hs);
+        fusedwasi_wasi_io_streams_input_stream_drop(&s, hs);
         FS(descriptor_write, h, 1500, 3, 0, 270), show("write on read-only", 270, 16);
         FS(descriptor_set_size, h, 1, 290), show("set_size on read-only", 290, 2);
-        wasi_filesystem_types_descriptor_drop(&s, h);
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, h);
         /* create and write */
         n = path("sub/new", 7);
         FS(descriptor_open_at, hd, 1, 1000, n, 1, 3, 200), show("create", 200, 8);
@@ -115,24 +115,24 @@ int main(int argc, char **argv) {
         FS(descriptor_write_via_stream, hn, 5, 250);
         uint32_t hw = u32(254);
         IO(output_stream_blocking_write_and_flush, hw, 1510, 6, 260), show("stream write", 260, 8);
-        wasi_io_streams_output_stream_drop(&s, hw);
+        fusedwasi_wasi_io_streams_output_stream_drop(&s, hw);
         read_all("read back", hn, 100, 0);
         FS(descriptor_append_via_stream, hn, 250);
         uint32_t ha = u32(254);
         IO(output_stream_write, ha, 1500, 5, 260), show("append", 260, 8);
-        wasi_io_streams_output_stream_drop(&s, ha);
+        fusedwasi_wasi_io_streams_output_stream_drop(&s, ha);
         read_all("read appended", hn, 100, 0);
         FS(descriptor_set_size, hn, 3, 270), show("set_size", 270, 2);
         read_all("read truncated", hn, 100, 0);
         FS(descriptor_sync, hn, 280), FS(descriptor_sync_data, hn, 284), FS(descriptor_advise, hn, 0, 0, 0, 288);
         show("sync", 280, 10);
-        wasi_filesystem_types_descriptor_drop(&s, hn);
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, hn);
         FS(descriptor_open_at, hd, 1, 1000, n, 5, 3, 200), show("exclusive create of an existing file", 200, 8);
         FS(descriptor_open_at, ro, 1, 1000, n, 8, 2, 200), show("truncate on a read-only preopen", 200, 8);
         FS(descriptor_open_at, ro, 1, 1000, n, 1, 1, 200), show("create on a read-only preopen", 200, 8);
         FS(descriptor_open_at, ro, 1, 1000, n, 0, 3, 200), show("write on a read-only preopen", 200, 8);
         FS(descriptor_open_at, ro, 1, 1000, n, 0, 1, 200), show("read on a read-only preopen", 200, 8);
-        wasi_filesystem_types_descriptor_drop(&s, u32(204));
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, u32(204));
         FS(descriptor_get_flags, ro, 240), FS(descriptor_get_flags, hd, 242), show("preopen flags", 240, 4);
         /* directories */
         n = path("sub", 3);
@@ -147,13 +147,13 @@ int main(int argc, char **argv) {
             if (memory[244]) show("  name", u32(252), u32(256));
             else break;
         }
-        wasi_filesystem_types_directory_entry_stream_drop(&s, he);
-        wasi_filesystem_types_descriptor_drop(&s, hdir);
+        fusedwasi_wasi_filesystem_types_directory_entry_stream_drop(&s, he);
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, hdir);
         n = path("sub/f", 5);
         FS(descriptor_open_at, hd, 1, 1000, n, 0, 1, 200);
         h = u32(204);
         FS(descriptor_read_directory, h, 220), show("read_directory of a file", 220, 8);
-        wasi_filesystem_types_descriptor_drop(&s, h);
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, h);
         /* changes */
         n = path("sub/d", 5);
         FS(descriptor_create_directory_at, hd, 1000, n, 300), FS(descriptor_create_directory_at, hd, 1000, n, 302);
@@ -183,7 +183,7 @@ int main(int argc, char **argv) {
         uint32_t b = u32(204);
         FS(descriptor_open_at, hd, 1, 1100, 6, 0, 1, 200);
         uint32_t c = u32(204);
-        printf("same %u %u\n", wasi_filesystem_types_descriptor_is_same_object(&s, a, b), wasi_filesystem_types_descriptor_is_same_object(&s, a, c));
+        printf("same %u %u\n", fusedwasi_wasi_filesystem_types_descriptor_is_same_object(&s, a, b), fusedwasi_wasi_filesystem_types_descriptor_is_same_object(&s, a, c));
         FS(descriptor_metadata_hash, a, 400), FS(descriptor_metadata_hash, b, 430), FS(descriptor_metadata_hash, c, 460);
         FS(descriptor_metadata_hash_at, hd, 1, 1000, n, 490);
         printf("hash a==b %d a==c %d a==at %d\n", !memcmp(memory + 408, memory + 438, 16), !memcmp(memory + 408, memory + 468, 16),
@@ -209,19 +209,19 @@ int main(int argc, char **argv) {
         FS(descriptor_metadata_hash_at, hd, 1, 1000, n, 640);
         FS(descriptor_open_at, hd, 1, 1000, n, 0, 2, 200), h = u32(204);
         FS(descriptor_write, h, 1500, 1, 100, 670), show("write past the end", 670, 16);
-        wasi_filesystem_types_descriptor_drop(&s, h);
+        fusedwasi_wasi_filesystem_types_descriptor_drop(&s, h);
         FS(descriptor_metadata_hash_at, hd, 1, 1000, n, 700);
         printf("hash after a write: same %d\n", !memcmp(memory + 648, memory + 708, 16));
         /* an error with a code */
         FS(descriptor_read_via_stream, hd, 0, 250);
         hs = u32(254);
         IO(input_stream_read, hs, 10, 260), show("read of a directory", 260, 12);
-        wasi_filesystem_types_filesystem_error_code(&s, 0, u32(268), 280), show("error code", 280, 2);
+        fusedwasi_wasi_filesystem_types_filesystem_error_code(&s, 0, u32(268), 280), show("error code", 280, 2);
     } else if (!strcmp(scenario, "bad_handle")) {
         FS(descriptor_get_flags, 12345, 0);
     } else if (!strcmp(scenario, "outside")) {
         FS(descriptor_stat_at, 1048577, 1, 4090, 100, 0);
     }
-    wasi_p2_free(&s);
+    fusedwasi_p2_free(&s);
     return 0;
 }

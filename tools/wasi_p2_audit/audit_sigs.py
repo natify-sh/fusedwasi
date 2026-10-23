@@ -48,7 +48,7 @@ def check(pyname, mod, cmod, params_flat, results_flat, uses_mem_hint):
     got = n_py - (1 if has_comp else 0)
     if got != expected:
         print(f"ARITY {pyname}: python {got}, expected {expected} ({params_flat}+ret={len(results_flat)>1})"); bad += 1
-    m = re.search(r"WASI_P2_FN\s+\w+\s+\**" + pyname + r"\(([^)]*)\)", csrc[cmod])
+    m = re.search(r"FUSEDWASI_P2_FN\s+\w+\s+\**fusedwasi_" + pyname + r"\(([^)]*)\)", csrc[cmod])
     if not m:
         if csrc[cmod]:
             print("MISSING c", pyname); bad += 1
