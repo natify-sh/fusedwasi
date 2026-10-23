@@ -102,9 +102,28 @@ def run(script: Path, tmp: str) -> list[str]:
                 memory[at : at + len(t[3])] = t[3]
             elif sub == "u32":
                 struct.pack_into("<I", memory, int(t[2], 0), int(t[3], 0))
+            elif sub == "u64":
+                struct.pack_into("<Q", memory, int(t[2], 0), int(t[3], 0))
+            elif sub == "zero":
+                at, length = int(t[2], 0), int(t[3], 0)
+                memory[at : at + length] = bytes(length)
             elif sub == "dump":
                 at, length = int(t[2], 0), int(t[3], 0)
                 out.append(f"{t[4].decode()} {bytes(memory[at : at + length]).hex()}")
+        elif (
+            word == "dirents"
+        ):  # dirents <buffer> <used address> <label>: the entries of a readdir buffer, without the inode numbers
+            used = struct.unpack_from("<I", memory, int(t[2], 0))[0]
+            at = int(t[1], 0)
+            end = at + used
+            while at + 24 <= end:
+                next_cookie, _ino, namelen, kind = struct.unpack_from("<QQIB", memory, at)
+                have = min(namelen, end - (at + 24))
+                cut = " (cut)" if have < namelen else ""
+                out.append(
+                    f"{t[3].decode()} next {next_cookie} type {kind} name {bytes(memory[at + 24 : at + 24 + have]).hex()}{cut}"
+                )
+                at += 24 + have
         elif word == "call":
             assert state is not None
             name = t[1].decode()
