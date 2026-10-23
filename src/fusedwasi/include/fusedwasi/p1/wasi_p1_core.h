@@ -5,8 +5,8 @@
 
    There is no Python in this file: what the host decides (the standard streams, the clocks, the random bytes, the sleep, the end of
    the program) comes through the hooks of `fusedwasi_p1_config`, and where a hook is absent the system's own is used. The host that
-   has Python is wasi_python.h. Only the files of Windows, until they are native (stage 3 of the plan), come through Python:
-   on Windows the file backend is wasi_p1_files_win32.h (Win32 only); with FUSEDWASI_P1_HOST_FS it is that of wasi_python.h, which must then be included as well.
+   has Python is wasi_python.h. The files are the system's own: on Windows the backend is wasi_p1_files_win32.h (Win32 only), elsewhere
+   openat and its kin (below).
 
    First stage: arguments, environment, clocks, random bytes, the standard streams, proc_exit. The calls of the file system answer
    ENOSYS (the descriptors beyond 2 are not open, so BADF where the specification asks for it). Written from the specification
@@ -49,11 +49,8 @@
 #define FUSEDWASI_P1_LSEEK(fd, off, whence) lseek((fd), (off), (whence))
 #define FUSEDWASI_P1_CLOSE(fd) close(fd)
 #endif
-#ifndef FUSEDWASI_P1_HOST_FS
-#define FUSEDWASI_P1_HOST_FS 0  /* 1: the file backend of wasi_python.h (os.stat, os.open ...); on Windows the default is wasi_p1_files_win32.h */
-#endif
-/* Windows has no openat and cannot open a directory: there (and with the backend of Python, which is made for it) a directory is a path */
-#if FUSEDWASI_P1_HOST_FS || defined(_WIN32)
+/* Windows has no openat and cannot open a directory: there a directory is a path */
+#if defined(_WIN32)
 #define FUSEDWASI_P1_DIRS_ARE_PATHS 1
 #else
 #define FUSEDWASI_P1_DIRS_ARE_PATHS 0
@@ -184,7 +181,7 @@ typedef struct {
     int osfd;            /* a file, or a directory when the system has openat (an operating system descriptor) */
     uint8_t owns_fd;     /* ... which is closed with the descriptor */
     uint64_t rights, inheriting;
-    char *root;          /* a directory when the file system goes through Python: the real path of the preopen it is under */
+    char *root;          /* a directory on Windows (where a directory is a path): the real path of the preopen it is under */
     char *rel;           /* ... and its place below it, '/' between names, "" at the root */
     char *preopen;       /* the name the program sees, for a preopen */
     size_t preopen_len;
@@ -436,10 +433,10 @@ static inline int fusedwasi_p1_release(fusedwasi_p1_entry *e) {
     return rc;
 }
 
-/* the directory of a preopen, from its real path: an open descriptor, or (through Python) the path */
+/* the directory of a preopen, from its real path: an open descriptor, or (on Windows) the path */
 static inline int fusedwasi_p1_fill_preopen(fusedwasi_p1_entry *e, const char *root) {
 #if FUSEDWASI_P1_DIRS_ARE_PATHS
-#if defined(_WIN32) && !FUSEDWASI_P1_HOST_FS
+#if defined(_WIN32)
     { /* the directory must be there: on POSIX it is opened here, and a path that is not a directory fails at once */
         int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, root, -1, NULL, 0);
         wchar_t *wide = n > 0 ? (wchar_t *)FUSEDWASI_P1_MALLOC((size_t)n * sizeof(wchar_t)) : NULL;
@@ -1271,28 +1268,7 @@ static inline int fusedwasi_p1_open_flags(uint64_t base, uint32_t oflags, uint32
     return flags | fusedwasi_p1_native_fdflags(fdflags);
 }
 
-#if FUSEDWASI_P1_HOST_FS
-/* the file backend is that of wasi_python.h (included after this header by whoever sets FUSEDWASI_P1_HOST_FS) */
-static inline uint32_t fusedwasi_p1_be_stat_fd(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, fusedwasi_p1_stat *out, int *trapped);
-static inline uint32_t fusedwasi_p1_be_stat_path(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow,
-                                         fusedwasi_p1_stat *out, int *trapped);
-static inline uint32_t fusedwasi_p1_be_open(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t oflags,
-                                    uint64_t base, uint32_t fdflags, fusedwasi_p1_entry *e, int *trapped);
-static inline uint32_t fusedwasi_p1_be_mkdir(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int *trapped);
-static inline uint32_t fusedwasi_p1_be_remove(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped);
-static inline uint32_t fusedwasi_p1_be_times_fd(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped);
-static inline uint32_t fusedwasi_p1_be_times_path(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint64_t atim,
-                                          uint64_t mtim, uint32_t flags, int *trapped);
-static inline uint32_t fusedwasi_p1_be_rename(fusedwasi_p1_state *w, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, fusedwasi_p1_entry *d2, uint32_t p2,
-                                      uint32_t l2, int *trapped);
-static inline uint32_t fusedwasi_p1_be_link(fusedwasi_p1_state *w, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow, fusedwasi_p1_entry *d2,
-                                    uint32_t p2, uint32_t l2, int *trapped);
-static inline uint32_t fusedwasi_p1_be_symlink(fusedwasi_p1_state *w, const unsigned char *target, uint32_t tlen, fusedwasi_p1_entry *dir, uint32_t path,
-                                       uint32_t len, int *trapped);
-static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_state *w, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
-                                        size_t *used, int *trapped);
-static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_state *w, fusedwasi_p1_entry *e, fusedwasi_p1_dirlist *list, int *trapped);
-#elif defined(_WIN32)
+#if defined(_WIN32)
 #include "wasi_p1_files_win32.h"
 #else
 /* ---- the file system through the system: openat and its kin (POSIX) ----------------------------------------------------
