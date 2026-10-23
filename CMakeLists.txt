@@ -45,7 +45,7 @@ add_library(fusedwasi::headers ALIAS fusedwasi_headers)
 set_target_properties(fusedwasi_headers PROPERTIES EXPORT_NAME headers)
 
 target_include_directories(fusedwasi_headers INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/fusedwasi/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
     $<INSTALL_INTERFACE:include>)
 
@@ -55,7 +55,7 @@ if(FUSEDWASI_INSTALL)
     include(CMakePackageConfigHelpers)
 
     # Headers
-    install(DIRECTORY include/
+    install(DIRECTORY src/fusedwasi/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fusedwasi/version.h"
