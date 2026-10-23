@@ -32,6 +32,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
             str(DATA / "wasi_p1_driver.c"),
             "-o",
             str(binary),
+            *(["-lbcrypt"] if sys.platform == "win32" else []),
         ],
         check=True,
     )
@@ -64,9 +65,9 @@ def test_c_and_python_agree(driver: Path, name: str, tmp_path: Path) -> None:
     assert run(script, str(tmp_path / "py")) == c
 
 
-def test_what_the_first_stage_gives() -> None:
+def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     """A few values read by hand, so that two wrong twins do not agree."""
-    lines = run(DATA / "p1" / "core.txt", "/tmp")
+    lines = run(DATA / "p1" / "core.txt", str(tmp_path))
     assert "sizes 030000000b000000" in lines  # 3 arguments, 11 bytes: "prog\0a b\0c\0"
     assert "argbuf 70726f670061206200630000" in lines
     assert "envsizes 0200000008000000" in lines
