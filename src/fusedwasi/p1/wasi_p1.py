@@ -9,7 +9,11 @@ random bytes, `proc_exit` and `proc_raise`, `sched_yield`, the standard streams 
 from __future__ import annotations
 
 import os
+import select
+import stat
 import struct
+import sys
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,6 +30,7 @@ from .wasi_p1_core import (
     E_NOENT,
     E_NOTCAPABLE,
     E_NOTDIR,
+    E_NOTSOCK,
     E_NOTSUP,
     E_SPIPE,
     E_SUCCESS,
@@ -67,6 +72,7 @@ from .wasi_p1_core import (
     R_PATH_RENAME_TARGET,
     R_PATH_SYMLINK,
     R_PATH_UNLINK_FILE,
+    R_POLL_FD_READWRITE,
     RIGHTS_STDIN,
     RIGHTS_STDOUT,
     Entry,
@@ -721,3 +727,223 @@ def path_readlink(s: State, fd: int, path: int, length: int, buf: int, buf_len: 
         return number
     s.put_bytes(buf, text)
     return E_SUCCESS if s.put_u32(used, len(text)) else E_FAULT
+
+
+# ---- poll_oneoff and the sockets ----------------------------------------------------------------------------------------------
+
+# A regular file is always ready; what makes the program wait is a clock, and it sleeps (the hook of the host, or the system's, in slices of
+# 100 ms) until the first one. A pipe, a FIFO, a terminal or the standard input of the process is asked of the system (select.poll).
+
+
+if sys.platform != "win32":
+    _POLLIN, _POLLOUT, _POLLHUP, _POLLERR, _POLLNVAL = (
+        select.POLLIN,
+        select.POLLOUT,
+        select.POLLHUP,
+        select.POLLERR,
+        select.POLLNVAL,
+    )
+else:  # no poll in the system's select: the descriptors that could need it are answered at once
+    _POLLIN, _POLLOUT, _POLLHUP, _POLLERR, _POLLNVAL = 1, 4, 16, 8, 32
+
+
+def _subscription_wait(s: State, sub: int, legacy: bool, now: dict[int, int]) -> tuple[int, int]:
+    """(errno, nanoseconds a clock subscription still has to wait). `legacy`: the first snapshot, whose clock subscription starts with an identifier."""
+    memory = s.mem()
+    assert memory is not None
+    shift = 8 if legacy else 0
+    ident = struct.unpack_from("<I", memory, sub + 16 + shift)[0]
+    timeout = struct.unpack_from("<Q", memory, sub + 24 + shift)[0]
+    flags = struct.unpack_from("<H", memory, sub + 40 + shift)[0]
+    if (
+        ident > 1 or flags & ~1
+    ):  # the clocks of the process and the thread are not something to wait for; the one flag is abstime
+        return E_INVAL, 0
+    if not flags & 1:
+        return E_SUCCESS, timeout
+    if ident not in now:
+        status, value = s.clock_ns(ident)
+        if status:
+            return status, 0
+        now[ident] = value
+    return E_SUCCESS, max(0, timeout - now[ident])
+
+
+def _poll_kind(s: State, sub: int, tag: int) -> tuple[int, int | None]:
+    """(errno of the event, descriptor the system has to say about, or None when the answer is at once)."""
+    memory = s.mem()
+    assert memory is not None
+    entry = s.entry_of(struct.unpack_from("<I", memory, sub + 16)[0])
+    if entry is None:
+        return E_BADF, None
+    need = R_POLL_FD_READWRITE | (R_FD_READ if tag == 1 else R_FD_WRITE)
+    if entry.kind == K_STD:  # the rights of the standard streams are fixed and include polling
+        return E_SUCCESS, 0 if tag == 1 and entry.fd == 0 and s.stdin_read is None and sys.platform != "win32" else None
+    if entry.rights & need != need:
+        return E_NOTCAPABLE, None
+    if entry.kind == K_FILE and entry.fd >= 0 and sys.platform != "win32":
+        try:
+            mode = os.fstat(entry.fd).st_mode
+        except OSError:
+            return E_SUCCESS, None
+        if not stat.S_ISREG(mode) and not stat.S_ISDIR(mode):
+            return E_SUCCESS, entry.fd
+    return E_SUCCESS, None
+
+
+def _sleep(s: State, ns: int) -> None:
+    if s.sleep is not None:
+        s.sleep(ns)
+        return
+    end = time.monotonic_ns() + ns
+    while True:
+        left = end - time.monotonic_ns()
+        if left <= 0:
+            return
+        time.sleep(min(left, 100_000_000) / 1e9)
+
+
+def _pending(fd: int) -> int:
+    if sys.platform == "win32":
+        return 0
+    import fcntl
+    import termios
+
+    try:
+        return struct.unpack("i", fcntl.ioctl(fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+    except OSError:
+        return 0
+
+
+def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) -> int:
+    stride = 56 if legacy else 48
+    if count == 0:
+        return E_INVAL
+    if not s.in_memory(in_, count * stride) or not s.in_memory(out, count * 32):
+        return E_FAULT
+    memory = s.mem()
+    assert memory is not None
+    now: dict[int, int] = {}
+    shortest: int | None = None  # a clock was subscribed
+    immediate = False
+    watched: dict[int, int] = {}  # subscription -> the descriptor
+    for i in range(count):
+        sub = in_ + i * stride
+        tag = memory[sub + 8]
+        if tag == 0:
+            status, wait = _subscription_wait(s, sub, legacy, now)
+            if status == E_SUCCESS:
+                if shortest is None or wait < shortest:
+                    shortest = wait
+            elif status == E_INVAL:
+                immediate = True
+            else:
+                return status
+        elif tag in (1, 2):
+            _, fd = _poll_kind(s, sub, tag)
+            if fd is None:
+                immediate = True
+            else:
+                watched[i] = fd
+        else:
+            return E_INVAL
+    waited = 0
+    ready: dict[int, int] = {}
+    if watched and sys.platform != "win32":
+        poller = select.poll()
+        for i, fd in watched.items():
+            ready[i] = 0
+            poller.register(fd, _POLLIN if memory[in_ + i * stride + 8] == 1 else _POLLOUT)
+        started = time.monotonic_ns()
+        timeout: float | None
+        if immediate:
+            timeout = 0
+        elif shortest is None:
+            timeout = None
+        else:
+            timeout = max(0, shortest - (time.monotonic_ns() - started)) / 1e6
+        while True:
+            try:
+                events = poller.poll(timeout)
+                break
+            except InterruptedError:
+                continue
+        by_fd: dict[int, int] = {}
+        for fd, revents in events:
+            by_fd[fd] = revents
+        for i, fd in watched.items():
+            ready[i] = by_fd.get(fd, 0)
+        if not events and not immediate and shortest is not None:
+            waited = shortest
+        elif events:
+            waited = time.monotonic_ns() - started
+    elif not immediate and shortest:
+        _sleep(s, shortest)
+        waited = shortest
+    made = 0
+    for i in range(count):
+        sub = in_ + i * stride
+        event = out + made * 32
+        tag = memory[sub + 8]
+        error = E_SUCCESS
+        nbytes = 0
+        flags = 0
+        if tag == 0:
+            status, wait = _subscription_wait(s, sub, legacy, now)
+            if status == E_SUCCESS and wait > waited:
+                continue  # not yet
+            error = status
+        else:
+            number = struct.unpack_from("<I", memory, sub + 16)[0]
+            entry = s.entry_of(number)
+            if i in watched:
+                revents = ready[i]
+                if not revents & (_POLLIN | _POLLOUT | _POLLHUP | _POLLERR | _POLLNVAL):
+                    continue  # not ready
+                if revents & _POLLNVAL:
+                    error = E_BADF
+                elif revents & (_POLLHUP | _POLLERR) and not revents & (_POLLIN | _POLLOUT):
+                    flags = 1  # fd_readwrite_hangup
+                if tag == 1 and not revents & _POLLNVAL:
+                    nbytes = _pending(watched[i])
+            else:
+                error, _ = _poll_kind(s, sub, tag)
+                if error == E_SUCCESS and entry is not None and entry.kind == K_FILE and tag == 1:
+                    where, position = s.files.seek(entry, 0, 1)
+                    found, st = s.files.stat_fd(entry)
+                    if where == E_SUCCESS and found == E_SUCCESS and st is not None and st.size > position:
+                        nbytes = st.size - position
+        memory[event : event + 32] = bytes(32)
+        memory[event : event + 8] = memory[sub : sub + 8]  # userdata
+        struct.pack_into("<H", memory, event + 8, error)
+        memory[event + 10] = tag
+        if tag != 0:
+            struct.pack_into("<Q", memory, event + 16, nbytes)
+            struct.pack_into("<H", memory, event + 24, flags)
+        made += 1
+    return E_SUCCESS if s.put_u32(nevents, made) else E_FAULT
+
+
+def poll_oneoff(s: State, in_: int, out: int, count: int, nevents: int) -> int:
+    return _poll(s, in_, out, count, nevents, False)
+
+
+def _socket(s: State, fd: int) -> int:
+    """A descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor."""
+    return E_BADF if s.entry_of(fd) is None else E_NOTSOCK
+
+
+def sock_accept(s: State, fd: int, flags: int, result: int) -> int:
+    return _socket(s, fd)
+
+
+def sock_recv(s: State, fd: int, iovs: int, count: int, flags: int, nread: int, roflags: int) -> int:
+    return _socket(s, fd)
+
+
+def sock_send(s: State, fd: int, iovs: int, count: int, flags: int, nsent: int) -> int:
+    return _socket(s, fd)
+
+
+def sock_shutdown(s: State, fd: int, how: int) -> int:
+    return _socket(s, fd)
