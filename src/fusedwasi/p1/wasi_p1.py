@@ -754,12 +754,11 @@ else:  # no poll in the system's select: the descriptors that could need it are 
 
 def _subscription_wait(s: State, sub: int, legacy: bool, now: dict[int, int]) -> tuple[int, int]:
     """(errno, nanoseconds a clock subscription still has to wait). `legacy`: the first snapshot, whose clock subscription starts with an identifier."""
-    memory = s.mem()
-    assert memory is not None
     shift = 8 if legacy else 0
-    ident = struct.unpack_from("<I", memory, sub + 16 + shift)[0]
-    timeout = struct.unpack_from("<Q", memory, sub + 24 + shift)[0]
-    flags = struct.unpack_from("<H", memory, sub + 40 + shift)[0]
+    raw = s.load(sub + 16 + shift, 28)  # the identifier at 0, the timeout at 8, the flags at 24
+    ident = struct.unpack_from("<I", raw, 0)[0]
+    timeout = struct.unpack_from("<Q", raw, 8)[0]
+    flags = struct.unpack_from("<H", raw, 24)[0]
     if (
         ident > 1 or flags & ~1
     ):  # the clocks of the process and the thread are not something to wait for; the one flag is abstime
@@ -776,9 +775,7 @@ def _subscription_wait(s: State, sub: int, legacy: bool, now: dict[int, int]) ->
 
 def _poll_kind(s: State, sub: int, tag: int) -> tuple[int, int | None]:
     """(errno of the event, descriptor the system has to say about, or None when the answer is at once)."""
-    memory = s.mem()
-    assert memory is not None
-    entry = s.entry_of(struct.unpack_from("<I", memory, sub + 16)[0])
+    entry = s.entry_of(struct.unpack("<I", s.load(sub + 16, 4))[0])
     if entry is None:
         return E_BADF, None
     need = R_POLL_FD_READWRITE | (R_FD_READ if tag == 1 else R_FD_WRITE)
@@ -826,15 +823,14 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
         return E_INVAL
     if not s.in_memory(in_, count * stride) or not s.in_memory(out, count * 32):
         return E_FAULT
-    memory = s.mem()
-    assert memory is not None
+    subs = s.load(in_, count * stride)  # the subscriptions, read once
     now: dict[int, int] = {}
     shortest: int | None = None  # a clock was subscribed
     immediate = False
     watched: dict[int, int] = {}  # subscription -> the descriptor
     for i in range(count):
         sub = in_ + i * stride
-        tag = memory[sub + 8]
+        tag = subs[i * stride + 8]
         if tag == 0:
             status, wait = _subscription_wait(s, sub, legacy, now)
             if status == E_SUCCESS:
@@ -858,7 +854,7 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
         poller = select.poll()
         for i, fd in watched.items():
             ready[i] = 0
-            poller.register(fd, _POLLIN if memory[in_ + i * stride + 8] == 1 else _POLLOUT)
+            poller.register(fd, _POLLIN if subs[i * stride + 8] == 1 else _POLLOUT)
         started = time.monotonic_ns()
         timeout: float | None
         if immediate:
@@ -889,7 +885,7 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
     for i in range(count):
         sub = in_ + i * stride
         event = out + made * 32
-        tag = memory[sub + 8]
+        tag = subs[i * stride + 8]
         error = E_SUCCESS
         nbytes = 0
         flags = 0
@@ -899,7 +895,7 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
                 continue  # not yet
             error = status
         else:
-            number = struct.unpack_from("<I", memory, sub + 16)[0]
+            number = struct.unpack_from("<I", subs, i * stride + 16)[0]
             entry = s.entry_of(number)
             if i in watched:
                 revents = ready[i]
@@ -918,13 +914,14 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
                     found, st = s.files.stat_fd(entry)
                     if where == E_SUCCESS and found == E_SUCCESS and st is not None and st.size > position:
                         nbytes = st.size - position
-        memory[event : event + 32] = bytes(32)
-        memory[event : event + 8] = memory[sub : sub + 8]  # userdata
-        struct.pack_into("<H", memory, event + 8, error)
-        memory[event + 10] = tag
+        record = bytearray(32)
+        record[0:8] = subs[i * stride : i * stride + 8]  # userdata
+        struct.pack_into("<H", record, 8, error)
+        record[10] = tag
         if tag != 0:
-            struct.pack_into("<Q", memory, event + 16, nbytes)
-            struct.pack_into("<H", memory, event + 24, flags)
+            struct.pack_into("<Q", record, 16, nbytes)
+            struct.pack_into("<H", record, 24, flags)
+        s.store(event, bytes(record))
         made += 1
     return E_SUCCESS if s.put_u32(nevents, made) else E_FAULT
 

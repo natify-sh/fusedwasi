@@ -331,28 +331,46 @@ class State:
 
     # ---- the memory of the instance (little-endian, as WebAssembly says) ----------------------------------------------------
 
-    def mem(self) -> memoryview | None:
+    def _buffer(self) -> tuple[memoryview | None, Any]:
+        """(a view of the memory, else None; the memory as the host gave it). The memory is a buffer (a `bytearray`, a `memoryview`, `mmap`) or, for an engine
+        that keeps it out of this process, an object with `read(offset, length)`, `write(offset, data)` and `len()` (what a call then costs is a copy of what it touches)."""
         memory = self.memory() if callable(self.memory) else self.memory
-        return None if memory is None else memoryview(memory)  # type: ignore[arg-type]
+        if memory is None:
+            return None, None
+        try:
+            return memoryview(memory), memory  # type: ignore[arg-type]
+        except TypeError:
+            return None, memory
+
+    def mem(self) -> memoryview | None:
+        """The memory as a view, when it is a buffer."""
+        return self._buffer()[0]
+
+    def size(self) -> int:
+        view, memory = self._buffer()
+        return len(view) if view is not None else len(memory) if memory is not None else 0
+
+    def load(self, ptr: int, length: int) -> bytes:
+        view, memory = self._buffer()
+        if view is not None:
+            return bytes(view[ptr : ptr + length])
+        return bytes(memory.read(ptr, length)) if length else b""
+
+    def store(self, ptr: int, data: bytes) -> None:
+        view, memory = self._buffer()
+        if view is not None:
+            view[ptr : ptr + len(data)] = data
+        elif data:
+            memory.write(ptr, data)
 
     def in_memory(self, ptr: int, length: int) -> bool:
-        memory = self.mem()
-        return memory is not None and ptr + length <= len(memory)
+        return ptr + length <= self.size()
 
     def put_u8(self, ptr: int, value: int) -> bool:
-        memory = self.mem()
-        if memory is None or ptr + 1 > len(memory):
-            return False
-        memory[ptr] = value & 0xFF
-        return True
+        return self.put_bytes(ptr, bytes((value & 0xFF,)))
 
     def put(self, ptr: int, fmt: str, *values: int) -> bool:
-        memory = self.mem()
-        size = struct.calcsize("<" + fmt)
-        if memory is None or ptr + size > len(memory):
-            return False
-        struct.pack_into("<" + fmt, memory, ptr, *values)
-        return True
+        return self.put_bytes(ptr, struct.pack("<" + fmt, *values))
 
     def put_u16(self, ptr: int, value: int) -> bool:
         return self.put(ptr, "H", value & 0xFFFF)
@@ -364,22 +382,18 @@ class State:
         return self.put(ptr, "Q", value & 0xFFFFFFFFFFFFFFFF)
 
     def get_u32(self, ptr: int) -> int | None:
-        memory = self.mem()
-        if memory is None or ptr + 4 > len(memory):
+        if not self.in_memory(ptr, 4):
             return None
-        return struct.unpack_from("<I", memory, ptr)[0]
+        return struct.unpack("<I", self.load(ptr, 4))[0]
 
     def put_bytes(self, ptr: int, data: bytes) -> bool:
-        memory = self.mem()
-        if memory is None or ptr + len(data) > len(memory):
+        if not self.in_memory(ptr, len(data)):
             return False
-        memory[ptr : ptr + len(data)] = data
+        self.store(ptr, data)
         return True
 
     def read_bytes(self, ptr: int, length: int) -> bytes:
-        memory = self.mem()
-        assert memory is not None
-        return bytes(memory[ptr : ptr + length])
+        return self.load(ptr, length)
 
     # ---- descriptors --------------------------------------------------------------------------------------------------------
 
