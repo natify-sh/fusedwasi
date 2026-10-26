@@ -1248,9 +1248,15 @@ static inline uint32_t fusedwasi_p1_be_remove(fusedwasi_p1_state *w, fusedwasi_p
     int itself;
     uint32_t rc = fusedwasi_p1_be_walk(w, dir, path, len, 0, &walk, &itself);
     if (rc) return rc;
-    /* unlink of a directory: EISDIR on Linux, EPERM on macOS; the system's own answer is what is given */
     int code = itself ? FUSEDWASI_P2_E_INVALID : isdir ? fusedwasi_p2_sys_rmdir(walk.dir, walk.leaf) : fusedwasi_p2_sys_unlink(walk.dir, walk.leaf);
     fusedwasi_p2_walk_close(&walk);
+    if (!isdir && code == FUSEDWASI_P2_E_IS_DIRECTORY) { /* unlink of a directory: the answer of the system (the layer of 0.2 says is-directory for all) */
+#if defined(__APPLE__)
+        return FUSEDWASI_P1_E_PERM;
+#elif defined(_WIN32)
+        return FUSEDWASI_P1_E_ACCES;
+#endif
+    }
     return fusedwasi_p1_of_code(code);
 }
 

@@ -69,6 +69,8 @@ if sys.platform != "win32":
     import fcntl
 
 INT64_MAX = (1 << 63) - 1
+# unlink of a directory: the answer of the system (the layer of 0.2 says is-directory for all)
+_UNLINK_OF_DIRECTORY = E_PERM if sys.platform == "darwin" else E_ACCES if sys.platform == "win32" else E_ISDIR
 PATH_MAX = 4096
 LINK_NAMES = {  # the errno of WASI for a code of 0.2 (the host of Wasmtime does the same for 0.1 over 0.2); the walk's not-permitted is a way out, which is not a capability
     "access": E_ACCES, "bad-descriptor": E_BADF, "exist": E_EXIST, "file-too-large": E_FBIG, "invalid": E_INVAL, "io": E_IO, "is-directory": E_ISDIR,
@@ -360,17 +362,14 @@ class SystemFiles(Files):
                 else:
                     try:
                         fs.sys_unlink(parent, leaf)
-                    except (
-                        PermissionError
-                    ):  # some systems say EPERM (or EACCES) for a directory; the layer of 0.2 says is-directory
+                    except PermissionError:  # some systems say EPERM (or EACCES) for a directory
                         if _stat.S_ISDIR(fs.sys_lstat(parent, leaf).st_mode):
-                            return E_ISDIR
+                            return _UNLINK_OF_DIRECTORY
                         raise
                 return E_SUCCESS
             except (OSError, fs.FsError) as caught:
-                return failure(
-                    caught
-                )  # unlink of a directory: EISDIR on Linux, EPERM on macOS; the system's own answer is what is given
+                code = failure(caught)
+                return _UNLINK_OF_DIRECTORY if code == E_ISDIR and not is_directory else code
 
     @staticmethod
     def _times(current: os.stat_result, atim: int, mtim: int, flags: int) -> tuple[int, int]:

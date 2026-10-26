@@ -292,7 +292,16 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_rename(fusedwasi_p2_dirref d1, const char *
     if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_target(d2, l2, b, sizeof b);
     if (rc != FUSEDWASI_P2_OK) return rc;
     wchar_t *wa = fusedwasi_p2_wide(a), *wb = fusedwasi_p2_wide(b);
-    rc = wa && wb ? (MoveFileExW(wa, wb, MOVEFILE_REPLACE_EXISTING) ? FUSEDWASI_P2_OK : fusedwasi_p2_win_last()) : FUSEDWASI_P2_E_INVALID;
+    if (!wa || !wb) {
+        rc = FUSEDWASI_P2_E_INVALID;
+    } else {
+        /* POSIX replaces an empty directory by a directory; Windows does not, so it is taken away first (it says not-empty if it is not) */
+        DWORD from = GetFileAttributesW(wa), to = GetFileAttributesW(wb);
+        int dirs = from != INVALID_FILE_ATTRIBUTES && to != INVALID_FILE_ATTRIBUTES && (from & FILE_ATTRIBUTE_DIRECTORY) && (to & FILE_ATTRIBUTE_DIRECTORY) &&
+                   !(from & FILE_ATTRIBUTE_REPARSE_POINT) && !(to & FILE_ATTRIBUTE_REPARSE_POINT) && _wcsicmp(wa, wb) != 0;
+        if (dirs && !RemoveDirectoryW(wb)) rc = fusedwasi_p2_win_last();
+        else rc = MoveFileExW(wa, wb, MOVEFILE_REPLACE_EXISTING) ? FUSEDWASI_P2_OK : fusedwasi_p2_win_last();
+    }
     free(wa), free(wb);
     return rc;
 }
@@ -364,16 +373,19 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_symlink(const char *target, fusedwasi_p2_di
     DWORD flags = FUSEDWASI_P2_SYMLINK_ALLOW_UNPRIVILEGED | (fusedwasi_p2_target_is_dir(dir, text) ? FUSEDWASI_P2_SYMLINK_DIRECTORY : 0);
     rc = FUSEDWASI_P2_OK;
     if (!wf || !wt) rc = FUSEDWASI_P2_E_INVALID;
-    else if (!CreateSymbolicLinkW(wf, wt, flags)) rc = fusedwasi_p2_win_last();
+    else if (!CreateSymbolicLinkW(wf, wt, flags)) {
+        rc = fusedwasi_p2_win_last();
+        if (GetFileAttributesW(wf) != INVALID_FILE_ATTRIBUTES) rc = FUSEDWASI_P2_E_EXIST; /* a name that is taken (a directory says access denied) */
+    }
     free(wf), free(wt);
     return rc;
 }
 
-/* times (a link is followed, as os.utime does on Windows) */
+/* times */
 
-FUSEDWASI_P2_FN int fusedwasi_p2_win_set_times_path(const char *path, int64_t atime_ns, int64_t mtime_ns) {
+FUSEDWASI_P2_FN int fusedwasi_p2_win_set_times_path(const char *path, int64_t atime_ns, int64_t mtime_ns, int follow) {
     int rc = FUSEDWASI_P2_OK;
-    HANDLE h = fusedwasi_p2_win_open(path, FILE_WRITE_ATTRIBUTES, 1, &rc);
+    HANDLE h = fusedwasi_p2_win_open(path, FILE_WRITE_ATTRIBUTES, follow, &rc);
     if (h == INVALID_HANDLE_VALUE) return rc;
     FILETIME a = fusedwasi_p2_ns_ft(atime_ns), m = fusedwasi_p2_ns_ft(mtime_ns);
     rc = SetFileTime(h, NULL, &a, &m) ? FUSEDWASI_P2_OK : fusedwasi_p2_win_last();
@@ -384,11 +396,11 @@ FUSEDWASI_P2_FN int fusedwasi_p2_win_set_times_path(const char *path, int64_t at
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_set_times(fusedwasi_p2_dirref dir, const char *leaf, int64_t atime_ns, int64_t mtime_ns) {
     char full[FUSEDWASI_P2_PATH_MAX];
     int rc = fusedwasi_p2_target(dir, leaf, full, sizeof full);
-    return rc != FUSEDWASI_P2_OK ? rc : fusedwasi_p2_win_set_times_path(full, atime_ns, mtime_ns);
+    return rc != FUSEDWASI_P2_OK ? rc : fusedwasi_p2_win_set_times_path(full, atime_ns, mtime_ns, 0); /* a link at the end is the one that is touched (the caller walked it if it was to be followed) */
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_set_times_fd(const fusedwasi_p2_descriptor *d, int64_t atime_ns, int64_t mtime_ns) {
-    return fusedwasi_p2_win_set_times_path(d->path, atime_ns, mtime_ns);
+    return fusedwasi_p2_win_set_times_path(d->path, atime_ns, mtime_ns, 1);
 }
 
 /* open */

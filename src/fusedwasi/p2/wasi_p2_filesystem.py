@@ -221,8 +221,15 @@ if sys.platform == "win32":
     def _unlink(parent: Ref, name: bytes) -> None:
         os.unlink(_target(parent, name))
 
+    def _is_plain_dir(path: str) -> bool:
+        return os.path.isdir(path) and not os.path.islink(path)
+
     def _rename(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
-        os.replace(_target(p1, name1), _target(p2, name2))
+        a, b = _target(p1, name1), _target(p2, name2)
+        # POSIX replaces an empty directory by a directory; Windows does not, so it is taken away first (it says not-empty if it is not)
+        if _is_plain_dir(a) and _is_plain_dir(b) and os.path.normcase(a) != os.path.normcase(b):
+            os.rmdir(b)
+        os.replace(a, b)
 
     def _link(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
         os.link(_target(p1, name1), _target(p2, name2))
@@ -230,10 +237,20 @@ if sys.platform == "win32":
     def _symlink(target: bytes, parent: Ref, name: bytes) -> None:
         text = os.fsdecode(target).replace("/", "\\")
         beside = os.path.normpath(os.path.join(str(parent).removeprefix("\\\\?\\"), text))
-        os.symlink(text, _target(parent, name), target_is_directory=os.path.isdir(beside))
+        full = _target(parent, name)
+        try:
+            os.symlink(text, full, target_is_directory=os.path.isdir(beside))
+        except OSError:
+            if os.path.lexists(full):  # a name that is taken (a directory says access denied)
+                raise FileExistsError(errno.EEXIST, "exists") from None
+            raise
 
     def _utime(parent: Ref, name: bytes, ns: tuple[int, int]) -> None:
-        os.utime(_target(parent, name), ns=ns)
+        full = _target(parent, name)
+        try:
+            os.utime(full, ns=ns, follow_symlinks=False)  # a link at the end is the one that is touched
+        except NotImplementedError:  # before Python 3.13 on Windows
+            os.utime(full, ns=ns)
 
     def _utime_d(d: Descriptor, ns: tuple[int, int]) -> None:
         os.utime(d.path, ns=ns)
