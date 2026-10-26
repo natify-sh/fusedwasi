@@ -97,8 +97,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_errno_code(int e) {
     case ENOTRECOVERABLE: return FUSEDWASI_P2_E_NOT_RECOVERABLE;
 #endif
     case ENOSYS: return FUSEDWASI_P2_E_UNSUPPORTED;
-#if defined(ENOTSUP) && defined(EOPNOTSUPP) && ENOTSUP != EOPNOTSUPP
-    case ENOTSUP: return FUSEDWASI_P2_E_UNSUPPORTED;
+#ifdef ENOTSUP
+    case ENOTSUP: return FUSEDWASI_P2_E_UNSUPPORTED; /* where EOPNOTSUPP is the same number (Linux) it is this one; the Python twin maps ENOTSUP only */
 #endif
     case ENOTTY: return FUSEDWASI_P2_E_NO_TTY;
     case ENXIO: return FUSEDWASI_P2_E_NO_SUCH_DEVICE;

@@ -466,3 +466,84 @@ def test_a_directory_has_the_permissions_of_the_directory_it_was_opened_under(tm
     assert out[2].endswith("0000000000000000") and out[3].endswith("0000000000000000")  # created and removed in it
     assert out[4].startswith("open sub in the read-only") and out[5] == "flags 240:0001"
     assert out[6].startswith("create in it 250:01")  # an error under the read-only preopen
+
+
+def _link_and_target(root: Path) -> tuple[Path, Path]:
+    target, link = root / "target", root / "lnk"
+    target.write_text("x")
+    try:
+        os.symlink("target", link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links cannot be made here")
+    os.utime(target, ns=(5_000_000_000, 6_000_000_000))
+    return target, link
+
+
+def _set_times_at(root: Path, path_flags: int) -> None:
+    r = Run(root)
+    fs.wasi_filesystem_preopens_get_directories(r.host, 0, 0)
+    directory = r.u32(r.u32(0))
+    n = r.path(b"lnk")
+    # atime 1000 s, mtime 2000 s and 500 ns, both as given (tag 2): a multiple of 100 ns, so a system with 100 ns ticks keeps it exactly
+    fs.wasi_filesystem_types_descriptor_set_times_at(
+        r.host, 0, directory, path_flags, 1000, n, 2, 1000, 0, 2, 2000, 500, 520
+    )
+    assert r.memory[520] == 0, "set-times-at failed"
+
+
+def test_set_times_at_without_follow_touches_the_link_itself(tmp_path: Path) -> None:
+    """The C does it with `FILE_FLAG_OPEN_REPARSE_POINT` on Windows and `utimensat` with `AT_SYMLINK_NOFOLLOW` elsewhere; the Python must do the same on every
+    Python, including Windows before 3.13, where `os.utime(follow_symlinks=False)` is missing."""
+    target, link = _link_and_target(tmp_path)
+    _set_times_at(tmp_path, 0)
+    assert os.lstat(link).st_mtime_ns == 2_000_000_000_500
+    assert (
+        os.lstat(link).st_atime_ns == 1_000_000_000_000 or sys.platform == "win32"
+    )  # a system may not keep the access time of a link
+    assert os.stat(target).st_mtime_ns == 6_000_000_000  # the target was not touched
+
+
+def test_set_times_at_with_follow_touches_the_target(tmp_path: Path) -> None:
+    target, link = _link_and_target(tmp_path)
+    before = os.lstat(link).st_mtime_ns
+    _set_times_at(tmp_path, 1)
+    assert os.stat(target).st_mtime_ns == 2_000_000_000_500
+    assert os.lstat(link).st_mtime_ns == before  # the link itself was not
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the ctypes route is the Windows branch")
+def test_windows_reparse_point_times_on_any_python(tmp_path: Path) -> None:
+    """The route that a Python before 3.13 takes, run directly, so that the Windows runners test it on every Python they have."""
+    target, link = _link_and_target(tmp_path)
+    fs._utime_reparse_point(str(link), (1_000_000_000_000, 2_000_000_000_500))  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue, reportUnknownMemberType]
+    assert os.lstat(link).st_mtime_ns == 2_000_000_000_500
+    assert os.stat(target).st_mtime_ns == 6_000_000_000
+    with pytest.raises(OSError):
+        fs._utime_reparse_point(str(tmp_path / "missing"), (0, 0))  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue, reportUnknownMemberType]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows maps its own error numbers (GetLastError, WSA), not the C library's errno"
+)
+def test_errno_tables_of_c_and_python_agree(tmp_path: Path) -> None:
+    """Every errno from 0 to 199 gets the same `error-code` (wasi:filesystem) and the same network `error-code` (wasi:sockets) from the C and from the Python.
+    (It found that ENOTSUP, which is also EOPNOTSUPP on Linux, was `io` in C and `unsupported` in Python.)"""
+    from fusedwasi.p2 import wasi_p2_sockets as sk
+
+    if CC is None:
+        pytest.skip("no C compiler")
+    binary = tmp_path / "errno_driver"
+    source = Path(__file__).parent / "data" / "wasi_p2_errno_driver.c"
+    subprocess.run(
+        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(source), "-o", str(binary)], check=True
+    )
+    rows = [
+        line.split()
+        for line in subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.splitlines()
+    ]
+    assert len(rows) == 200
+    for number, fs_code, net_code in ((int(a), int(b), int(c)) for a, b, c in rows):
+        python_fs = fs.ERROR_CODES[fs._CODE[fs._ERRNO.get(number, "io")]]  # pyright: ignore[reportPrivateUsage]
+        assert fs.ERROR_CODES[fs_code] == python_fs, f"errno {number} (wasi:filesystem)"
+        python_net = sk.NETWORK_ERRORS[sk._CODE[sk._ERRNO.get(number, "unknown")]]  # pyright: ignore[reportPrivateUsage]
+        assert sk.NETWORK_ERRORS[net_code] == python_net, f"errno {number} (wasi:sockets)"

@@ -248,12 +248,56 @@ if sys.platform == "win32":
                 raise FileExistsError(errno.EEXIST, "exists") from None
             raise
 
+    def _utime_reparse_point(full: str, ns: tuple[int, int]) -> None:
+        """The times of a link itself, for a Python that cannot (before 3.13 on Windows): what `fusedwasi_p2_win_set_times_path` does in C, a handle opened on the
+        reparse point (`FILE_FLAG_OPEN_REPARSE_POINT`) and `SetFileTime`. `ctypes` is imported here, so nothing else pays for it."""
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel32.SetFileTime.restype = wintypes.BOOL
+        kernel32.SetFileTime.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME),
+        ]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        def filetime(value: int) -> wintypes.FILETIME:
+            ticks = max(value, 0) // 100 + 116444736000000000  # 100 ns since 1601, as `fusedwasi_p2_ns_ft`
+            return wintypes.FILETIME(ticks & 0xFFFFFFFF, ticks >> 32)
+
+        file_write_attributes, share_all, open_existing = 0x100, 0x7, 3
+        backup_semantics, open_reparse_point = 0x02000000, 0x00200000
+        handle = kernel32.CreateFileW(
+            full, file_write_attributes, share_all, None, open_existing, backup_semantics | open_reparse_point, None
+        )
+        if handle is None or handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+        try:
+            atime, mtime = filetime(ns[0]), filetime(ns[1])
+            if not kernel32.SetFileTime(handle, None, ctypes.byref(atime), ctypes.byref(mtime)):
+                raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+        finally:
+            kernel32.CloseHandle(handle)
+
     def _utime(parent: Ref, name: bytes, ns: tuple[int, int]) -> None:
         full = _target(parent, name)
         try:
             os.utime(full, ns=ns, follow_symlinks=False)  # a link at the end is the one that is touched
-        except NotImplementedError:  # before Python 3.13 on Windows
-            os.utime(full, ns=ns)
+        except NotImplementedError:  # before Python 3.13 on Windows: there it would follow the link
+            _utime_reparse_point(full, ns)
 
     def _utime_d(d: Descriptor, ns: tuple[int, int]) -> None:
         os.utime(d.path, ns=ns)

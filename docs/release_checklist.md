@@ -25,6 +25,8 @@ To decide: which fields are public (and read-only for the host), which are priva
 
 ## 3. Known gaps
 
+Done 2026-10-26: the first row is fixed (the Python touches the link itself on Windows before 3.13; the test is written for the Windows runners and was not run on Windows) and the others are written down as "Known limits" in `host_scope.md`, with tests in `tests/test_known_limits.py`. The comparison of section 2 is in `wasmtime_compare.md`; the review of section 1 is in `interface_review.md`.
+
 | Gap | Where | Note |
 | --- | --- | --- |
 | `utime` without following a link on Python <= 3.12, Windows | `p2/wasi_p2_filesystem.py` | the Python follows the link; the C does not |
