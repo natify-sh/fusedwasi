@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import select
 import sys
@@ -52,7 +53,7 @@ class FdInput(InputStream):
         try:
             data = os.read(self.fd, n)
         except OSError as exc:
-            raise StreamFailed(str(exc)) from exc
+            raise StreamFailed(str(exc), errno=exc.errno) from exc
         if not data:
             raise StreamClosed
         return data
@@ -71,7 +72,7 @@ class FdOutput(OutputStream):
             while len(view):
                 view = view[os.write(self.fd, view) :]
         except OSError as exc:
-            raise StreamFailed(str(exc)) from exc
+            raise StreamFailed(str(exc), errno=exc.errno) from exc
 
 
 class SysInput(InputStream):
@@ -109,16 +110,21 @@ class SysOutput(OutputStream):
             else:
                 target.write(data.decode(errors="replace"))
         except (OSError, ValueError) as exc:
-            raise StreamFailed(str(exc)) from exc
+            raise StreamFailed(str(exc), errno=_errno_of(exc)) from exc
 
     def flush(self) -> None:
         try:
             self._target().flush()
         except (OSError, ValueError) as exc:
-            raise StreamFailed(str(exc)) from exc
+            raise StreamFailed(str(exc), errno=_errno_of(exc)) from exc
 
 
-def _std(host: Host, name: str) -> object:
+def _errno_of(exc: OSError | ValueError) -> int:
+    """The errno of a failure of a Python stream; a stream that is closed (a `ValueError`) is a bad descriptor."""
+    return (exc.errno if isinstance(exc, OSError) else None) or errno.EBADF
+
+
+def std(host: Host, name: str) -> object:
     if name not in host.std:
         host.std[name] = SysInput() if name == "stdin" else SysOutput(name)
     return host.std[name]
@@ -181,15 +187,15 @@ def wasi_cli_exit_exit_with_code(host: Host, status_code: int) -> None:
 
 
 def wasi_cli_stdin_get_stdin(host: Host) -> int:
-    return table_new(host, KIND_INPUT_STREAM, _std(host, "stdin"))
+    return table_new(host, KIND_INPUT_STREAM, std(host, "stdin"))
 
 
 def wasi_cli_stdout_get_stdout(host: Host) -> int:
-    return table_new(host, KIND_OUTPUT_STREAM, _std(host, "stdout"))
+    return table_new(host, KIND_OUTPUT_STREAM, std(host, "stdout"))
 
 
 def wasi_cli_stderr_get_stderr(host: Host) -> int:
-    return table_new(host, KIND_OUTPUT_STREAM, _std(host, "stderr"))
+    return table_new(host, KIND_OUTPUT_STREAM, std(host, "stderr"))
 
 
 # the terminals

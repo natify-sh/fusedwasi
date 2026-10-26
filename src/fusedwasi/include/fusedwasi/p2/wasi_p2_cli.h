@@ -41,10 +41,13 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fd_read(fusedwasi_p2_state *s, fusedwasi_p2_str
 #ifdef _WIN32
     int n = _read(f->fd, buf, (unsigned)len);
 #else
-    fusedwasi_p2_ssize n = read(f->fd, buf, (size_t)len);
+    fusedwasi_p2_ssize n;
+    do n = read(f->fd, buf, (size_t)len);
+    while (n < 0 && errno == EINTR);
 #endif
     if (n < 0) {
         st->failure = "read failed";
+        st->failure_errno = errno;
         return FUSEDWASI_P2_STREAM_FAILED;
     }
     if (n == 0) return FUSEDWASI_P2_STREAM_CLOSED;
@@ -70,6 +73,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fd_write(fusedwasi_p2_state *s, fusedwasi_p2_st
 #endif
         if (n <= 0) {
             st->failure = "write failed";
+            st->failure_errno = n < 0 ? errno : EIO;
             return FUSEDWASI_P2_STREAM_FAILED;
         }
         data += n;

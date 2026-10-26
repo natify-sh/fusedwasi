@@ -18,26 +18,30 @@ static struct {
     int stdout_status, clock_status, random_status;
 } host;
 
-static int hook_stdin(void *user, uint8_t *buf, size_t cap, size_t *got) {
-    (void)user;
-    size_t left = host.stdin_len - host.stdin_pos, n = left < cap ? left : cap;
-    memcpy(buf, host.stdin_data + host.stdin_pos, n);
-    host.stdin_pos += n;
+/* the standard streams of the state of 0.2: the input is the bytes the script gave, the outputs print what is written */
+static int stream_stdin(fusedwasi_p2_state *core, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t cap, uint64_t *got) {
+    (void)core, (void)st;
+    uint64_t left = host.stdin_len - host.stdin_pos, n = left < cap ? left : cap;
+    memcpy(buf, host.stdin_data + host.stdin_pos, (size_t)n);
+    host.stdin_pos += (size_t)n;
     *got = n;
-    return 0;
+    return FUSEDWASI_P2_STREAM_OK;
 }
 
 static void hex(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; i++) printf("%02x", p[i]);
 }
 
-static int hook_stdout(void *user, int fd, const uint8_t *buf, size_t n) {
-    (void)user;
-    if (host.stdout_status) return host.stdout_status;
-    printf("out %d ", fd);
-    hex(buf, n);
+static int stream_stdout(fusedwasi_p2_state *core, fusedwasi_p2_stream *st, const uint8_t *buf, uint64_t n) {
+    (void)core;
+    if (host.stdout_status) {
+        st->failure_errno = host.stdout_status;
+        return FUSEDWASI_P2_STREAM_FAILED;
+    }
+    printf("out %d ", (int)(intptr_t)st->ctx);
+    hex(buf, (size_t)n);
     printf("\n");
-    return 0;
+    return FUSEDWASI_P2_STREAM_OK;
 }
 
 static int hook_clock(fusedwasi_p2_state *core, uint32_t id, uint64_t *ns) {
@@ -59,6 +63,9 @@ static int hook_sleep(fusedwasi_p2_state *core, uint64_t ns) {
     printf("sleep %llu\n", (unsigned long long)ns);
     return 0;
 }
+
+/* the script gives an errno of WASI; the stream gives the errno of the system (EINVAL for 28) */
+static int errno_of_wasi(int wasi) { return wasi == 28 ? EINVAL : wasi ? EIO : 0; }
 
 static int unstable;  /* the first snapshot: the calls that differ are those of wasi_p1_unstable.h */
 
@@ -206,6 +213,8 @@ int main(int argc, char **argv) {
     const char *arg_items[32], *env_names[32], *env_values[32];
     uint32_t argc_wasi = 0, envc = 0;
     fusedwasi_p2_state core;
+    fusedwasi_p2_stream streams[3];
+    memset(streams, 0, sizeof streams);
     fusedwasi_p2_init(&core);
     fusedwasi_p1_preopen preopens[4];
     char preopen_host[4][512], preopen_name[4][64];
@@ -256,8 +265,12 @@ int main(int argc, char **argv) {
             cfg.preopens = preopens;
             cfg.npreopens = npreopens;
             if (hooks_on) {
-                cfg.hooks.stdin_read = hook_stdin;
-                cfg.hooks.stdout_write = hook_stdout;
+                streams[0].read = stream_stdin;
+                for (int k = 1; k < 3; k++) {
+                    streams[k].write = stream_stdout;
+                    streams[k].ctx = (void *)(intptr_t)k;
+                }
+                for (int k = 0; k < 3; k++) core.std[k] = &streams[k];
                 core.clock = hook_clock;
                 core.random_bytes = hook_random;
                 core.sleep = hook_sleep;
@@ -277,7 +290,7 @@ int main(int argc, char **argv) {
             host.stdin_pos = 0;
             memcpy(host.stdin_data, t[1], l[1]);
         } else if (!strcmp(t[0], "stdout_status")) {
-            host.stdout_status = atoi(t[1]);
+            host.stdout_status = errno_of_wasi(atoi(t[1]));
         } else if (!strcmp(t[0], "clock_status")) {
             host.clock_status = atoi(t[1]);
         } else if (!strcmp(t[0], "random_status")) {

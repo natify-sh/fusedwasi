@@ -46,8 +46,13 @@ class StreamClosed(Exception):
 class StreamFailed(Exception):
     """The operation failed: the case `last-operation-failed`, with an `error` resource that carries the message (and, from a file, the `error-code` of wasi:filesystem)."""
 
-    def __init__(self, message: str = "", code: int | None = None, network_code: int | None = None) -> None:
+    def __init__(
+        self, message: str = "", code: int | None = None, network_code: int | None = None, errno: int | None = None
+    ) -> None:
         super().__init__(message)
+        self.errno = (
+            errno  # the errno of the system, when the failure came from it: WASI 0.1 gives it to the program as it is
+        )
         self.code = code
         self.network_code = network_code  # the `error-code` of wasi:sockets, for a socket stream
 

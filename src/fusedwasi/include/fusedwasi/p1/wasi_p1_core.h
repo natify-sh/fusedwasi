@@ -57,7 +57,7 @@
 #endif
 #include <stdlib.h>
 #include <time.h>
-#include "wasi_p2_core.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
+#include "wasi_p2_cli.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
 #if !FUSEDWASI_P1_DIRS_ARE_PATHS
 #include <dirent.h>
 #include <sys/stat.h>
@@ -184,8 +184,6 @@ typedef struct {
 #define FUSEDWASI_P1_HOOK_TRAP 0x10000
 
 typedef struct {
-    int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);
-    int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */
     void (*end)(void *user, int how, uint32_t value);  /* proc_exit, proc_raise: told before the program is marked as over */
 } fusedwasi_p1_hooks;
 
@@ -736,11 +734,21 @@ static inline uint32_t fusedwasi_p1_iovs_valid(fusedwasi_p1_state *w, uint32_t i
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
+/* the status of a stream that failed: a closed one is a broken pipe; the errno of the system, when the stream knows it, as it is */
+static inline uint32_t fusedwasi_p1_stream_status(int result, const fusedwasi_p2_stream *st) {
+    if (result == FUSEDWASI_P2_STREAM_CLOSED) return FUSEDWASI_P1_E_PIPE;
+    return st->failure_errno ? fusedwasi_p1_errno(st->failure_errno) : FUSEDWASI_P1_E_IO;
+}
+
+/* The standard streams are those of the state of 0.2 (`s->std[i]`, else the descriptors of the process): what was written is reported (a short write); the error comes
+   with the next call. A trap of the host is a trap, through `s->trap`. */
 static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_state *w, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten, int *trapped) {
+    (void)trapped;
     {
         uint32_t bad = fusedwasi_p1_iovs_valid(w, iovs, count);
         if (bad) return bad;
     }
+    fusedwasi_p2_stream *st = fusedwasi_p2_std(w->core, (int)fd);
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -748,30 +756,10 @@ static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_state *w, uint32_t fd
         fusedwasi_p1_get_u32(w, iovs + 8 * i + 4, &len);
         if (!fusedwasi_p1_in_memory(w, base, len)) return FUSEDWASI_P1_E_FAULT;
         if (len == 0) continue;
-        if (w->hooks.stdout_write != NULL) {
-            int rc = w->hooks.stdout_write(w->user, (int)fd, FUSEDWASI_P1_MEM(w) + base, len);
-            if (rc) {  /* what was written is reported (a short write); the error comes with the next call. A trap is a trap. */
-                uint32_t status = fusedwasi_p1_hook_status(rc, trapped);
-                if (*trapped || total == 0) return status;
-                break;
-            }
-        } else {
-            long long done = 0;
-            int failed = 0;
-            while (done < (long long)len) {  /* all of it: a short write of a pipe is not the end of the iovec */
-                long long n = FUSEDWASI_P1_WRITE((int)fd, FUSEDWASI_P1_MEM(w) + base + done, len - done);
-                if (n < 0) {
-                    if (errno == EINTR) continue;
-                    if (total + (uint64_t)done == 0) return fusedwasi_p1_errno(errno);
-                    failed = 1;
-                    break;
-                }
-                done += n;
-            }
-            if (failed) {
-                total += (uint64_t)done;
-                break;
-            }
+        int result = st->write(w->core, st, FUSEDWASI_P1_MEM(w) + base, len);
+        if (result != FUSEDWASI_P2_STREAM_OK) {
+            if (total == 0) return fusedwasi_p1_stream_status(result, st);
+            break;
         }
         total += len;
     }
@@ -779,6 +767,7 @@ static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_state *w, uint32_t fd
 }
 
 static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_state *w, uint32_t iovs, uint32_t count, uint32_t nread, int *trapped) {
+    (void)trapped;
     {
         uint32_t bad = fusedwasi_p1_iovs_valid(w, iovs, count);
         if (bad) return bad;
@@ -790,18 +779,19 @@ static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_state *w, uint32_t iov
         if (len) break;
     }
     if (!fusedwasi_p1_in_memory(w, base, len)) return FUSEDWASI_P1_E_FAULT;
-    size_t got = 0;
+    uint64_t got = 0;
     if (len) {
-        if (w->hooks.stdin_read != NULL) {
-            int rc = w->hooks.stdin_read(w->user, FUSEDWASI_P1_MEM(w) + base, len, &got);
-            if (rc) return fusedwasi_p1_hook_status(rc, trapped);
+        fusedwasi_p2_stream *st = fusedwasi_p2_std(w->core, 0);
+        for (;;) {  /* a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end */
+            int result = st->read(w->core, st, FUSEDWASI_P1_MEM(w) + base, len, &got);
+            if (result == FUSEDWASI_P2_STREAM_FAILED) return fusedwasi_p1_stream_status(result, st);
+            if (result == FUSEDWASI_P2_STREAM_CLOSED) {
+                got = 0;
+                break;
+            }
             if (got > len) return FUSEDWASI_P1_E_IO;
-        } else {
-            long long n;
-            do n = FUSEDWASI_P1_READ(0, FUSEDWASI_P1_MEM(w) + base, len);
-            while (n < 0 && errno == EINTR);
-            if (n < 0) return fusedwasi_p1_errno(errno);
-            got = (size_t)n;
+            if (got > 0) break;
+            w->core->wait(w->core);
         }
     }
     return fusedwasi_p1_put_u32(w, nread, (uint32_t)got) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
@@ -1003,7 +993,7 @@ static inline uint8_t fusedwasi_p1_filetype_of(unsigned long mode) {
    uvwasi, which asks the descriptor). A stream that goes through a hook (Python's `sys.stdout`) has no descriptor to ask and stays a character device. */
 static inline int fusedwasi_p1_std_is_real(fusedwasi_p1_state *w, fusedwasi_p1_entry *e) {
 #if FUSEDWASI_P1_NATIVE_POLL
-    return e->kind == FUSEDWASI_P1_K_STD && (e->osfd == 0 ? w->hooks.stdin_read == NULL : w->hooks.stdout_write == NULL);
+    return e->kind == FUSEDWASI_P1_K_STD && w->core->std[e->osfd] == NULL;
 #else
     (void)w, (void)e;
     return 0;
@@ -2003,7 +1993,7 @@ static inline int fusedwasi_p1_poll_kind(fusedwasi_p1_state *w, uint32_t sub, ui
     uint64_t need = FUSEDWASI_P1_R_POLL_FD_READWRITE | (tag == 1 ? FUSEDWASI_P1_R_FD_READ : FUSEDWASI_P1_R_FD_WRITE);
     if (e->kind == FUSEDWASI_P1_K_STD) {  /* the rights of the standard streams are fixed and include polling */
 #if FUSEDWASI_P1_NATIVE_POLL
-        if (tag == 1 && e->osfd == 0 && w->hooks.stdin_read == NULL) {
+        if (tag == 1 && e->osfd == 0 && w->core->std[0] == NULL) {
             *fd = 0;
             return 1;
         }

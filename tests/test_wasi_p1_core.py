@@ -106,9 +106,11 @@ _NATIVE_POLL = """
 import struct, sys
 from fusedwasi.p1 import wasi_p1
 from fusedwasi.p1.wasi_p1_core import State
+from fusedwasi.p2.wasi_p2_cli import FdInput
+from fusedwasi.p2.wasi_p2_core import Host
 
 memory = bytearray(4096)
-s = State(memory)
+s = State(memory, core=Host(stdin=FdInput(0)))  # the descriptor of the process, not the Python stream
 struct.pack_into("<QBxxxxxxxI", memory, 0, 1, 1, 0)  # fd_read of fd 0
 struct.pack_into("<QBxxxxxxxIxxxxQQHxxxxxx", memory, 48, 2, 0, 1, 20_000_000, 0, 0)  # a clock of 20 ms
 rc = wasi_p1.poll_oneoff(s, 0, 1000, 2, 900)

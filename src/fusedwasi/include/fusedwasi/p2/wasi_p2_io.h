@@ -23,6 +23,7 @@ typedef struct fusedwasi_p2_stream {
     int failure_has_code, failure_code; /* the error-code of wasi:filesystem, when the failure came from a file */
     int failure_network_code;           /* the error-code of wasi:sockets, when it came from a socket; -1 none (set it with the failure: calloc gives 0, so see failure_has_network) */
     int failure_has_network;
+    int failure_errno;                  /* the errno of the system for a FAILED (0: not known); WASI 0.1 gives it to the program as it is, 0.2 has only the message */
     int dead;                           /* set when an operation failed: from then on every call is `closed` (the rule of stream-error) */
     void *ctx;
 } fusedwasi_p2_stream;

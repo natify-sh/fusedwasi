@@ -17,7 +17,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ..p2.wasi_p2_cli import FdInput, FdOutput, std
 from ..p2.wasi_p2_core import Host
+from ..p2.wasi_p2_io import StreamClosed, StreamFailed
 
 if TYPE_CHECKING:
     from .wasi_p1_files import Files, Listing
@@ -270,8 +272,6 @@ class State:
         *,
         core: Host | None = None,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
-        stdin_read: Callable[[int], bytes] | None = None,
-        stdout_write: Callable[[int, bytes], None] | None = None,
         end: Callable[[int, int], None] | None = None,
         files: Files | None = None,
     ) -> None:
@@ -290,8 +290,6 @@ class State:
                 files = PosixFiles()
         self.files = files
         # the hooks: what the host decides (the standard streams, the end of the program); where one is absent the system's own is used. The clocks, the random bytes and the sleep are those of `core`. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
-        self.stdin_read = stdin_read  # (capacity) -> up to that many bytes
-        self.stdout_write = stdout_write  # (fd 1 or 2, data); it stands for both streams
         self.end = end  # (how: END_EXIT or END_SIGNAL, value), told before the program is marked as over
         self.finished = END_NONE  # the program is over: 0, or how it ended
         self.end_value = 0
@@ -462,9 +460,14 @@ class State:
                 return E_FAULT
         return E_SUCCESS
 
+    def std_stream(self, fd: int) -> Any:
+        """The standard stream `fd` (0, 1, 2) of the state of 0.2."""
+        return std(self.core, ("stdin", "stdout", "stderr")[fd])
+
     def std_is_real(self, entry: Entry) -> bool:
-        """A standard stream that is the descriptor of the process (no hook stands in for it): it is what the system says it is."""
-        return entry.kind == K_STD and (self.stdin_read is None if entry.fd == 0 else self.stdout_write is None)
+        """A standard stream that is the descriptor of the process (`FdInput`, `FdOutput`): it is what the system says it is."""
+        stream = self.core.std.get(("stdin", "stdout", "stderr")[entry.fd]) if entry.kind == K_STD else None
+        return isinstance(stream, (FdInput, FdOutput)) and stream.fd == entry.fd
 
     def std_filetype(self, entry: Entry) -> int:
         if self.std_is_real(entry):
@@ -474,39 +477,33 @@ class State:
                 pass
         return FT_CHAR
 
+    @staticmethod
+    def stream_status(failure: StreamClosed | StreamFailed) -> int:
+        """A closed stream is a broken pipe; the errno of the system, when the stream knows it, as it is."""
+        if isinstance(failure, StreamClosed):
+            return E_PIPE
+        return errno_of(failure.errno) if failure.errno else E_IO
+
     def write_std(self, fd: int, iovs: int, count: int, nwritten: int) -> int:
         bad = self.iovs_valid(iovs, count)
         if bad:
             return bad
+        stream = self.std_stream(fd)
         total = 0
         for i in range(count):
             base, length = self.get_u32(iovs + 8 * i), self.get_u32(iovs + 8 * i + 4)
             assert base is not None and length is not None
             if length == 0:
                 continue
-            data = self.read_bytes(base, length)
-            if self.stdout_write is not None:
-                status, _ = self.hooked(self.stdout_write, fd, data)
-                if status:  # what was written is reported (a short write); the error comes with the next call
-                    if total == 0:
-                        return status
-                    break
-            else:
-                done = 0
-                failed = False
-                while done < length:  # all of it: a short write of a pipe is not the end of the iovec
-                    try:
-                        done += os.write(fd, data[done:])
-                    except InterruptedError:
-                        continue
-                    except OSError as caught:
-                        if total + done == 0:
-                            return errno_of(caught.errno)
-                        failed = True
-                        break
-                if failed:
-                    total += done
-                    break
+            try:
+                stream.write(self.read_bytes(base, length))
+            except (
+                StreamClosed,
+                StreamFailed,
+            ) as failure:  # what was written is reported (a short write); the error comes with the next call
+                if total == 0:
+                    return self.stream_status(failure)
+                break
             total += length
         return E_SUCCESS if self.put_u32(nwritten, total) else E_FAULT
 
@@ -523,21 +520,22 @@ class State:
             return E_FAULT
         data = b""
         if length:
-            if self.stdin_read is not None:
-                status, data = self.hooked(self.stdin_read, length)
-                if status:
-                    return status
+            stream = self.std_stream(0)
+            while (
+                True
+            ):  # a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end
+                try:
+                    data = stream.read(length)
+                except StreamClosed:
+                    data = b""
+                    break
+                except StreamFailed as failure:
+                    return self.stream_status(failure)
                 if len(data) > length:
                     return E_IO
-            else:
-                while True:
-                    try:
-                        data = os.read(0, length)
-                        break
-                    except InterruptedError:
-                        continue
-                    except OSError as caught:
-                        return errno_of(caught.errno)
+                if data:
+                    break
+                self.core.wait()
             self.put_bytes(base, data)
         return E_SUCCESS if self.put_u32(nread, len(data)) else E_FAULT
 

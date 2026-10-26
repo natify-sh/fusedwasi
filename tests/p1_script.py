@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import errno
 import re
 import struct
 from pathlib import Path
 from typing import Any
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
-from fusedwasi.p1.wasi_p1_core import Exit, Signal, State, WasiError
+from fusedwasi.p1.wasi_p1_core import Exit, Signal, State
 from fusedwasi.p2.wasi_p2_core import Host
+from fusedwasi.p2.wasi_p2_io import InputStream, OutputStream, StreamFailed
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
 _ESCAPE = re.compile(r"\\(x[0-9a-fA-F]{2}|.)", re.DOTALL)
@@ -60,15 +62,23 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
     state: State | None = None
     table: Any = wasi_p1
 
-    def hook_stdin(cap: int) -> bytes:
-        nonlocal stdin_data
-        data, stdin_data = stdin_data[:cap], stdin_data[cap:]
-        return data
+    class Stdin(InputStream):
+        def read(self, n: int) -> bytes:
+            nonlocal stdin_data
+            data, stdin_data = stdin_data[:n], stdin_data[n:]
+            return data
 
-    def hook_stdout(fd: int, data: bytes) -> None:
-        if status["stdout"]:
-            raise WasiError(int(status["stdout"]))
-        out.append(f"out {fd} {data.hex()}")
+    class Stdout(OutputStream):
+        def __init__(self, fd: int) -> None:
+            self.fd = fd
+
+        def check_write(self) -> int:
+            return 4096
+
+        def write(self, data: bytes) -> None:
+            if status["stdout"]:
+                raise StreamFailed("write failed", errno=errno.EINVAL if status["stdout"] == 28 else errno.EIO)
+            out.append(f"out {self.fd} {data.hex()}")
 
     def hook_clock(ident: int) -> int:
         if status["clock"]:
@@ -110,12 +120,11 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             )
             if hooks_on:
                 core.clock, core.random_bytes, core.sleep = hook_clock, hook_random, hook_sleep
+                core.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
             state = State(
                 Remote(memory) if remote else memory,
                 core=core,
                 preopens=preopens,
-                stdin_read=hook_stdin if hooks_on else None,
-                stdout_write=hook_stdout if hooks_on else None,
                 end=hook_end if hooks_on else None,
             )
         elif word == "stdin":

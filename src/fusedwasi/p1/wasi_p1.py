@@ -776,7 +776,7 @@ def _poll_kind(s: State, sub: int, tag: int) -> tuple[int, int | None]:
         return E_BADF, None
     need = R_POLL_FD_READWRITE | (R_FD_READ if tag == 1 else R_FD_WRITE)
     if entry.kind == K_STD:  # the rights of the standard streams are fixed and include polling
-        return E_SUCCESS, 0 if tag == 1 and entry.fd == 0 and s.stdin_read is None and sys.platform != "win32" else None
+        return E_SUCCESS, 0 if tag == 1 and entry.fd == 0 and s.std_is_real(entry) and sys.platform != "win32" else None
     if entry.rights & need != need:
         return E_NOTCAPABLE, None
     if entry.kind == K_FILE and entry.fd >= 0 and sys.platform != "win32":
