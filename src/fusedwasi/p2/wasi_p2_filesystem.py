@@ -157,7 +157,10 @@ if sys.platform == "win32":
         return stat_module.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) == _REPARSE_MOUNT_POINT
 
     def _join(parent: Ref, name: bytes) -> str:
-        text = os.fsdecode(name)
+        try:
+            text = os.fsdecode(name)
+        except UnicodeDecodeError:  # Windows wants text
+            raise FsError("invalid") from None
         if "\\" in text or ":" in text or "/" in text or text in ("", ".", ".."):
             raise FsError("invalid")
         return f"{parent}\\{text}"
