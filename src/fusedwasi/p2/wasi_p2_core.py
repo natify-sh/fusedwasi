@@ -72,11 +72,22 @@ class Slot:
         self.obj: object = None
 
 
-_CLOCKS = (time.time_ns, time.monotonic_ns, time.process_time_ns, time.thread_time_ns)
-_RESOLUTIONS = tuple(
-    max(1, round(time.get_clock_info(name).resolution * 1e9))
-    for name in ("time", "monotonic", "process_time", "thread_time")
-)
+def _cpu_time_ns() -> int:
+    return time.process_time_ns()
+
+
+# a system with no clock of the CPU time of the thread (Pyodide) gives the one of the process
+_CLOCKS = (time.time_ns, time.monotonic_ns, time.process_time_ns, getattr(time, "thread_time_ns", _cpu_time_ns))
+
+
+def _resolution(name: str) -> int:
+    try:
+        return max(1, round(time.get_clock_info(name).resolution * 1e9))
+    except ValueError:
+        return 1
+
+
+_RESOLUTIONS = tuple(_resolution(name) for name in ("time", "monotonic", "process_time", "thread_time"))
 
 
 class Host:
