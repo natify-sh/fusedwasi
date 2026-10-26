@@ -1,6 +1,6 @@
 # Before the first release
 
-fusedwasi is an alpha and nothing is published. It should come out when `wasmext` and `wasmhost` work on it and what they depend on is not going to change, not before. Until then they pin it by commit (`wasmhost` in `uv.lock`; `wasmext` takes the headers through `fusedwasi.get_include()`), so waiting costs them nothing. "Release" here means a tag in git, not a package index.
+fusedwasi is an alpha and nothing is published. It should come out when `wasmext` and `wasmhost` work on it and what they depend on is not going to change, not before. Until then they pin it by commit (`wasmhost` in `uv.lock`; `wasmext` takes the headers through `fusedwasi.get_include()`), so waiting costs them nothing.
 
 This file is a list of what to settle first. It is written 2026-10-26 from the code of the three repositories and from `host_scope.md`; an item marked **[check]** was not verified when this was written.
 
@@ -37,11 +37,11 @@ To decide: which fields are public (and read-only for the host), which are priva
 
 ## 4. Packaging
 
-Not published on PyPI (the owner, 2026-10-26: PyPI is not a goal). The users take it by commit or tag from git (`wasmhost` in `uv.lock`; `wasmext` through `fusedwasi.get_include()` and the CMake config). What stays: the headers and the Python twin install together, `get_include()` and `fusedwasi-config.cmake` work from an installed copy, and the licence and the notices of what the headers derive from (the WIT and the witx) are in the tree **[check]**.
+The name `fusedwasi` is already taken on PyPI by the owner (2026-10-26) and is ready for a publication, so the first release is a pre-release there (`0.1.0a1`), which the users can then install with `--pre` instead of a commit. What the distribution carries: the Python twin, the C headers, `get_include()`, `CMakeLists.txt` and `fusedwasi-config.cmake`. **[check]** before the upload: a test that builds the sdist and the wheel, installs them in a clean environment and compiles a C file against `get_include()` (`tests/test_package.py` and `test_wasi_p1_headers.py` cover parts of it); the licence and the notices of what the headers derive from (the WIT and the witx) are in the sdist; the upload is a trusted publisher of the CI, not a token in a file.
 
 ## 5. The order
 
 1. `wasmext`: C2a to C2e (the public `Store`, the calls rewritten); `wasmhost`: stage 7. They exercise the interface of section 1.
 2. Read and freeze section 1; close or defer the gaps of section 3 in writing.
 3. The comparison with Wasmtime of section 2 for the packages a program on WASI uses most.
-4. Tag `0.1.0a1` in git. A stable `0.1.0` after the versioned store record (C7) has shown that the layouts shared between artifacts need no change.
+4. Tag and publish `0.1.0a1`. A stable `0.1.0` after the versioned store record (C7) has shown that the layouts shared between artifacts need no change.
