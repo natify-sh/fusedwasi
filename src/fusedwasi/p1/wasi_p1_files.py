@@ -358,7 +358,14 @@ class SystemFiles(Files):
                 if is_directory:
                     fs.sys_rmdir(parent, leaf)
                 else:
-                    fs.sys_unlink(parent, leaf)
+                    try:
+                        fs.sys_unlink(parent, leaf)
+                    except (
+                        PermissionError
+                    ):  # some systems say EPERM (or EACCES) for a directory; the layer of 0.2 says is-directory
+                        if _stat.S_ISDIR(fs.sys_lstat(parent, leaf).st_mode):
+                            return E_ISDIR
+                        raise
                 return E_SUCCESS
             except (OSError, fs.FsError) as caught:
                 return failure(
