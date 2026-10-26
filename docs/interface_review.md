@@ -1,6 +1,6 @@
 # Interface review (checklist section 1)
 
-Written 2026-10-26 on the branch `wasi-p2`, at `b1c2e52`. Nothing in the library was changed for it: this is a report.
+Written 2026-10-26 on the branch `wasi-p2`, at `3736d20`. Nothing in the library was changed for it: this is a report.
 
 **Owner's requirement:** C and Python at parity, and nothing tailored to one runtime.
 
