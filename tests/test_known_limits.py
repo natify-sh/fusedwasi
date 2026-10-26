@@ -184,6 +184,7 @@ int main(void) {
     req.method = "GET", req.scheme = "https", req.authority = "example.invalid", req.path = "/";
     int rc = fusedwasi_p2_http_default_send(&s, &req, &out, &err);
     printf("%d %u %s\\n", rc, (unsigned)err.tag, err.str[0] ? err.str[0] : "");
+    fusedwasi_p2_http_error_free(&err);
     return 0;
 }
 """
