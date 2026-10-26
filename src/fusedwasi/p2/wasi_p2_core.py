@@ -224,12 +224,19 @@ def load_bytes(host: Host, comp: int, ptr: int, size: int) -> bytes:
 
 
 def alloc(host: Host, comp: int, align: int, size: int) -> int:
-    """Memory from the component for a list or a string that the host returns (`cabi_realloc`)."""
-    if size == 0:
-        return align
+    """Memory from the component for a list or a string that the host returns (`cabi_realloc`).
+
+    The canonical ABI calls `realloc(0, 0, align, size)` also for an empty list or string (a component that counts its allocations, such as the adapter of WASI 0.1 of
+    Wasmtime, relies on it); a host that has no `realloc` can still answer an empty result. A size of 0 may come back as 0: the alignment stands for it.
+    """
     if host.realloc is None:
+        if size == 0:
+            return align
         raise Trap("the component has no cabi_realloc")
-    return host.realloc(comp, 0, 0, align, size)
+    ptr = host.realloc(comp, 0, 0, align, size)
+    if not ptr and size:
+        raise Trap("cabi_realloc failed")
+    return ptr or align
 
 
 def load_u32(host: Host, comp: int, ptr: int) -> int:

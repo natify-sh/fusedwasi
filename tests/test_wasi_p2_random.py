@@ -3,6 +3,7 @@
 The sources are counters (the secure one starts at 0, the insecure one at 128), so the bytes are known.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,7 @@ C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwa
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_random_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
-SCENARIOS = ["main", "too_many", "failing"]
+SCENARIOS = ["main", "too_many", "failing", "default_source"]
 
 
 def counter(start: int):
@@ -32,10 +33,12 @@ def counter(start: int):
 
 
 def python_output(scenario: str) -> str:
-    memory = bytearray(128)
+    memory = bytearray(1024)
     next_free = [64]
+    calls = [0]
 
     def bump(comp: int, old_ptr: int, old_size: int, align: int, new_size: int) -> int:
+        calls[0] += 1
         ptr = (next_free[0] + align - 1) // align * align
         next_free[0] = ptr + new_size
         return ptr
@@ -47,7 +50,7 @@ def python_output(scenario: str) -> str:
     lines: list[str] = []
 
     def dump(what: str) -> None:
-        lines.append(f"{what} {bytes(memory).hex()}")
+        lines.append(f"{what} {bytes(memory[:128]).hex()}")
 
     try:
         if scenario == "main":
@@ -61,6 +64,16 @@ def python_output(scenario: str) -> str:
             dump("seed")
             rnd.wasi_random_random_get_random_bytes(host, 0, 0, 32)
             dump("empty")
+            lines.append(f"realloc calls {calls[0]}")  # also the empty list asked for memory
+        elif scenario == "default_source":
+            host.random_bytes = os.urandom
+            first = rnd.wasi_random_random_get_random_u64(host)
+            second = rnd.wasi_random_random_get_random_u64(host)
+            lines.append(f"distinct {int(first != second)}")
+            rnd.wasi_random_random_get_random_bytes(host, 0, 100, 0)
+            lines.append(f"bytes {int.from_bytes(memory[4:8], 'little')}")
+            rnd.wasi_random_random_get_random_bytes(host, 0, 600, 0)
+            lines.append(f"bytes {int.from_bytes(memory[4:8], 'little')}")
         elif scenario == "too_many":
             rnd.wasi_random_random_get_random_bytes(host, 0, 1 << 40, 0)
         elif scenario == "failing":

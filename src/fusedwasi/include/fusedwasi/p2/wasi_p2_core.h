@@ -29,6 +29,16 @@ typedef ssize_t fusedwasi_p2_ssize;
 #include <bcrypt.h>
 #else
 #include <time.h>
+#include <unistd.h>
+#if defined(__has_include)
+#if __has_include(<sys/random.h>)
+#include <sys/random.h>
+#define FUSEDWASI_P2_HAVE_GETENTROPY 1
+#endif
+#endif
+#endif
+#ifndef FUSEDWASI_P2_HAVE_GETENTROPY
+#define FUSEDWASI_P2_HAVE_GETENTROPY 0
 #endif
 
 struct fusedwasi_p2_state;
@@ -177,6 +187,15 @@ FUSEDWASI_P2_FN int fusedwasi_p2_default_random_bytes(fusedwasi_p2_state *s, uin
     (void)s;
 #ifdef _WIN32
     return BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0;
+#elif FUSEDWASI_P2_HAVE_GETENTROPY
+    /* one system call for each 256 bytes, with no file to open: the source is called for each `get-random-bytes` of a guest */
+    while (n > 0) {
+        size_t chunk = n < 256 ? n : 256;
+        if (getentropy(buf, chunk) != 0) return 1;
+        buf += chunk;
+        n -= chunk;
+    }
+    return 0;
 #else
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) return 1;
@@ -334,11 +353,16 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_load_u32(fusedwasi_p2_state *s, uint32_t c
 
 /* Memory from the component for a list or a string that the host returns (`cabi_realloc`). */
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_alloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t align, uint32_t size) {
-    if (size == 0) return align;
-    if (!s->realloc) s->trap(s, "the component has no cabi_realloc");
+    /* The canonical ABI calls `realloc(0, 0, align, size)` also for an empty list or string (a component that counts its allocations, such as the adapter of WASI 0.1 of
+       Wasmtime, relies on it); a host that has no `realloc` can still answer an empty result, as it could before. A size of 0 may come back as 0 (a component may give no
+       address for nothing): the alignment stands for it. */
+    if (!s->realloc) {
+        if (size == 0) return align;
+        s->trap(s, "the component has no cabi_realloc");
+    }
     uint32_t ptr = s->realloc(s, comp, 0, 0, align, size);
-    if (!ptr) s->trap(s, "cabi_realloc failed");
-    return ptr;
+    if (!ptr && size) s->trap(s, "cabi_realloc failed");
+    return ptr ? ptr : align;
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_string(fusedwasi_p2_state *s, uint32_t comp, const char *text, uint32_t at) {
