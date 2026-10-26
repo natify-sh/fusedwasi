@@ -171,6 +171,8 @@ def sched_yield(s: State) -> int:
 
 
 def proc_exit(s: State, code: int) -> None:
+    if not s.finished:  # the program ends once: the first end is the one that stays
+        s.core.exited, s.core.exit_code = True, code
     s.finish(END_EXIT, code)
     raise Exit(code)
 

@@ -87,7 +87,12 @@ def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     assert "prestat 0000000005000000" in lines  # a directory, the name "/data" is 5 bytes
     assert "proc_raise trapped" in lines and "end 2 9" in lines
     # the program ended by the signal 9; the call of proc_exit that follows traps, and the state keeps how the program ended first
-    assert lines[-2:] == ["proc_exit trapped", "end 2 9"]
+    assert lines[-3:] == ["proc_exit trapped", "end 2 9", "exit 0 0"]  # (a signal is not an exit of 0.2)
+
+
+def test_proc_exit_is_the_end_of_wasi_02(tmp_path: Path) -> None:
+    """The code of proc_exit is where a host of 0.2 reads an exit: `exited` and `exit_code` of the state of 0.2, in C and in Python."""
+    assert run(DATA / "p1" / "exit.txt", str(tmp_path)) == ["proc_exit trapped", "end 1 7", "exit 1 7"]
 
 
 def test_what_the_second_stage_gives(tmp_path: Path) -> None:

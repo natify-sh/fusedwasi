@@ -141,6 +141,8 @@ class Host:
         self.http_check: Callable[[str, str], bool] = http_check or (lambda scheme, authority: http)
         self.http_send = http_send
         self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
+        self.exited = False  # the guest called wasi:cli/exit (or proc_exit of WASI 0.1): ... with `exit_code`; `Exit` is raised as well
+        self.exit_code = 0
         self.random_bytes = random_bytes  # the secure source
         self.insecure_random_bytes = (
             insecure_random_bytes or random_bytes

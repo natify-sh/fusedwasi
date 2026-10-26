@@ -176,11 +176,13 @@ def wasi_cli_environment_initial_cwd(host: Host, comp: int, retptr: int) -> None
 
 
 def wasi_cli_exit_exit(host: Host, status: int) -> None:
-    raise Exit(0 if status == 0 else 1)
+    host.exited, host.exit_code = True, 0 if status == 0 else 1
+    raise Exit(host.exit_code)
 
 
 def wasi_cli_exit_exit_with_code(host: Host, status_code: int) -> None:
-    raise Exit(status_code & 0xFF)
+    host.exited, host.exit_code = True, status_code & 0xFF
+    raise Exit(host.exit_code)
 
 
 # the standard streams

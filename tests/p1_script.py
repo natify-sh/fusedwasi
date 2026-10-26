@@ -166,6 +166,7 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             except (Exit, Signal):
                 out.append(f"{name} trapped")
                 out.append(f"end {state.finished} {state.end_value}")
+                out.append(f"exit {int(state.core.exited)} {state.core.exit_code}")
     if state is not None:
         state.close_all()
     return out

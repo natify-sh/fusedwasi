@@ -126,7 +126,8 @@ typedef struct fusedwasi_p2_state {
     void *std[3];
     void *std_default[3];
     unsigned terminals; /* FUSEDWASI_P2_TERMINAL_*: which of the three are terminals */
-    /* the guest called wasi:cli/exit: `exit` is told, and by default records the code and traps; the code is in `exit_code` when `exited` */
+    /* the guest called wasi:cli/exit (or proc_exit of WASI 0.1, which is the same end): `exit` is told, and by default records the code and traps; the code is in `exit_code` when `exited`.
+       The state of 0.1 only records (`exited`, `exit_code`) and reports a trap in its own way, so the host reads the end of either family here. */
     void (*exit)(struct fusedwasi_p2_state *s, uint32_t code);
     int exited;
     uint32_t exit_code;

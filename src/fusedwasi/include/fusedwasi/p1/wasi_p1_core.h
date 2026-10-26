@@ -195,7 +195,7 @@ struct fusedwasi_p1_state {
     fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
     void *user;           /* the host's own state */
     int finished;         /* the program is over: 0, or how it ended (FUSEDWASI_P1_END_*) */
-    uint32_t end_value;   /* ... the code of proc_exit, or the signal of proc_raise */
+    uint32_t end_value;   /* ... the signal of proc_raise (the code of proc_exit is `core->exit_code`) */
     uint8_t **memory_data;  /* where the base of the memory is kept (it moves when the memory grows) */
     uint64_t *memory_size;  /* ... and its size in bytes: the engine owns both, the core only reads them */
     fusedwasi_p1_entry *entries;  /* the descriptors, by number */
@@ -624,6 +624,10 @@ static inline uint32_t fusedwasi_p1_sched_yield(void *s, int *trapped) {
 
 static inline void fusedwasi_p1_proc_exit(void *s, uint32_t code, int *trapped) {
     FUSEDWASI_P1_STATE(s);
+    if (!w->finished) {  /* the program ends once: the first end is the one that stays */
+        w->core->exited = 1;  /* the end of 0.2 is this one: the host reads `exited` and `exit_code` of the state of 0.2 for both families */
+        w->core->exit_code = code;
+    }
     fusedwasi_p1_finish(w, FUSEDWASI_P1_END_EXIT, code);
     *trapped = 1;
 }

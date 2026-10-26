@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
             for (int k = 0; k < calls[i].nargs; k++) a[k] = strtoull(t[2 + k], NULL, 0);
             int trapped = 0;
             uint32_t rc = calls[i].fn(w, a, &trapped);
-            if (trapped) printf("%s trapped\nend %d %u\n", t[1], w->finished, (unsigned)w->end_value);
+            if (trapped) printf("%s trapped\nend %d %u\nexit %d %u\n", t[1], w->finished, (unsigned)w->end_value, core.exited, (unsigned)core.exit_code);
             else printf("%s %u\n", t[1], (unsigned)rc);
         }
     }
