@@ -53,7 +53,7 @@ class Run:
         self.host = Host(
             [self.memory],
             realloc=bump,
-            wall_ns=lambda: 1700000000123456789,
+            clock=lambda ident: 1700000000123456789,
             preopens=[(str(root), "/"), (str(root), "/ro", False)],
         )
         self.memory[1500:1505] = b"hello"

@@ -40,22 +40,22 @@ static int hook_stdout(void *user, int fd, const uint8_t *buf, size_t n) {
     return 0;
 }
 
-static int hook_clock(void *user, uint32_t id, uint64_t *ns) {
-    (void)user;
+static int hook_clock(fusedwasi_p2_state *core, uint32_t id, uint64_t *ns) {
+    (void)core;
     if (host.clock_status) return host.clock_status;
     *ns = 1000 + 7 * (uint64_t)id;
     return 0;
 }
 
-static int hook_random(void *user, uint8_t *buf, size_t n) {
-    (void)user;
+static int hook_random(fusedwasi_p2_state *core, uint8_t *buf, size_t n) {
+    (void)core;
     if (host.random_status) return host.random_status;
     for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)((i * 3 + 1) & 0xff);
     return 0;
 }
 
-static int hook_sleep(void *user, uint64_t ns) {
-    (void)user;
+static int hook_sleep(fusedwasi_p2_state *core, uint64_t ns) {
+    (void)core;
     printf("sleep %llu\n", (unsigned long long)ns);
     return 0;
 }
@@ -203,7 +203,10 @@ int main(int argc, char **argv) {
     if (script == NULL) return 2;
     char args[1024] = "", env[1024] = "";
     size_t args_size = 0, env_size = 0;
+    const char *arg_items[32], *env_names[32], *env_values[32];
     uint32_t argc_wasi = 0, envc = 0;
+    fusedwasi_p2_state core;
+    fusedwasi_p2_init(&core);
     fusedwasi_p1_preopen preopens[4];
     char preopen_host[4][512], preopen_name[4][64];
     size_t npreopens = 0;
@@ -219,12 +222,15 @@ int main(int argc, char **argv) {
         if (n <= 0) continue;
         if (!strcmp(t[0], "arg")) {
             memcpy(args + args_size, t[1], l[1] + 1);
+            arg_items[argc_wasi++] = args + args_size;
             args_size += l[1] + 1;
-            argc_wasi++;
         } else if (!strcmp(t[0], "env")) {
             memcpy(env + env_size, t[1], l[1] + 1);
+            char *eq = strchr(env + env_size, '=');
+            *eq = '\0';
+            env_names[envc] = env + env_size;
+            env_values[envc++] = eq + 1;
             env_size += l[1] + 1;
-            envc++;
         } else if (!strcmp(t[0], "preopen")) {
             snprintf(preopen_host[npreopens], sizeof preopen_host[0], "%s%s", strncmp(t[1], "$TMP", 4) ? "" : tmp,
                      strncmp(t[1], "$TMP", 4) ? t[1] : t[1] + 4);
@@ -241,26 +247,25 @@ int main(int argc, char **argv) {
         } else if (!strcmp(t[0], "start")) {
             fusedwasi_p1_config cfg;
             memset(&cfg, 0, sizeof cfg);
-            cfg.args = argc_wasi ? args : NULL;
-            cfg.args_size = args_size;
-            cfg.argc = argc_wasi;
-            cfg.program = "program";
-            cfg.env = env;
-            cfg.env_size = env_size;
-            cfg.envc = envc;
+            if (!argc_wasi) arg_items[argc_wasi++] = "program";
+            core.args = arg_items;
+            core.arg_count = argc_wasi;
+            core.env_names = env_names;
+            core.env_values = env_values;
+            core.env_count = envc;
             cfg.preopens = preopens;
             cfg.npreopens = npreopens;
             if (hooks_on) {
                 cfg.hooks.stdin_read = hook_stdin;
                 cfg.hooks.stdout_write = hook_stdout;
-                cfg.hooks.clock = hook_clock;
-                cfg.hooks.random = hook_random;
-                cfg.hooks.sleep = hook_sleep;
+                core.clock = hook_clock;
+                core.random_bytes = hook_random;
+                core.sleep = hook_sleep;
                 cfg.hooks.end = hook_end;
             }
             int err = 0;
             size_t bad = 0;
-            w = fusedwasi_p1_create(&cfg, &err, &bad);
+            w = fusedwasi_p1_create(&cfg, &core, &err, &bad);
             if (w == NULL) {
                 printf("create failed %d %d\n", err, (int)bad);
                 return 1;

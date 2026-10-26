@@ -13,19 +13,19 @@ FUSEDWASI_P2_FN void fusedwasi_p2_datetime(fusedwasi_p2_state *s, uint32_t comp,
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_clocks_wall_clock_now(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr) {
-    fusedwasi_p2_datetime(s, comp, retptr, s->wall_ns(s));
+    fusedwasi_p2_datetime(s, comp, retptr, fusedwasi_p2_clock_ns(s, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_clocks_wall_clock_resolution(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr) {
-    fusedwasi_p2_datetime(s, comp, retptr, s->wall_resolution_ns);
+    fusedwasi_p2_datetime(s, comp, retptr, s->resolution_ns[0]);
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_now(fusedwasi_p2_state *s) { return s->monotonic_ns(s); }
+FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_now(fusedwasi_p2_state *s) { return fusedwasi_p2_clock_ns(s, 1); }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_resolution(fusedwasi_p2_state *s) { return s->monotonic_resolution_ns; }
+FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_resolution(fusedwasi_p2_state *s) { return s->resolution_ns[1]; }
 
 /* a pollable that is ready at an instant of the monotonic clock */
-FUSEDWASI_P2_FN int fusedwasi_p2_deadline_ready(fusedwasi_p2_state *s, fusedwasi_p2_pollable *p) { return s->monotonic_ns(s) >= p->deadline; }
+FUSEDWASI_P2_FN int fusedwasi_p2_deadline_ready(fusedwasi_p2_state *s, fusedwasi_p2_pollable *p) { return fusedwasi_p2_clock_ns(s, 1) >= p->deadline; }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_free_obj(fusedwasi_p2_state *s, void *obj) {
     (void)s;
@@ -45,7 +45,7 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_clocks_monotonic_clock_subscribe_instant
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_clocks_monotonic_clock_subscribe_duration(fusedwasi_p2_state *s, uint64_t when) {
-    uint64_t now = s->monotonic_ns(s);
+    uint64_t now = fusedwasi_p2_clock_ns(s, 1);
     return fusedwasi_p2_deadline_pollable(s, when > UINT64_MAX - now ? UINT64_MAX : now + when);
 }
 

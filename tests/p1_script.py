@@ -9,6 +9,7 @@ from typing import Any
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
 from fusedwasi.p1.wasi_p1_core import Exit, Signal, State, WasiError
+from fusedwasi.p2.wasi_p2_core import Host
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
 _ESCAPE = re.compile(r"\\(x[0-9a-fA-F]{2}|.)", re.DOTALL)
@@ -71,12 +72,12 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
 
     def hook_clock(ident: int) -> int:
         if status["clock"]:
-            raise WasiError(int(status["clock"]))
+            raise OSError("the clock cannot be read")
         return 1000 + 7 * ident
 
     def hook_random(n: int) -> bytes:
         if status["random"]:
-            raise WasiError(int(status["random"]))
+            raise OSError("the source of random bytes failed")
         return bytes((i * 3 + 1) & 0xFF for i in range(n))
 
     def hook_sleep(ns: int) -> None:
@@ -105,14 +106,14 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             memory = bytearray(int(t[1]))
             state = State(
                 Remote(memory) if remote else memory,
-                args=args or None,
-                env=env,
+                core=Host(
+                    args=args or ["program"],
+                    env=[tuple(v.decode().split("=", 1)) for v in env],  # type: ignore[misc]
+                    **({"clock": hook_clock, "random_bytes": hook_random, "sleep": hook_sleep} if hooks_on else {}),
+                ),
                 preopens=preopens,
                 stdin_read=hook_stdin if hooks_on else None,
                 stdout_write=hook_stdout if hooks_on else None,
-                clock=hook_clock if hooks_on else None,
-                random=hook_random if hooks_on else None,
-                sleep=hook_sleep if hooks_on else None,
                 end=hook_end if hooks_on else None,
             )
         elif word == "stdin":

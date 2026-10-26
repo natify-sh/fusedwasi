@@ -13,10 +13,11 @@ import os
 import stat as _stat
 import struct
 import sys
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from ..p2.wasi_p2_core import Host
 
 if TYPE_CHECKING:
     from .wasi_p1_files import Files, Listing
@@ -267,19 +268,17 @@ class State:
         self,
         memory: object | Callable[[], object] | None = None,
         *,
-        args: Sequence[str | bytes] | None = None,
-        program: str | bytes = "program",
-        env: Sequence[str | bytes | tuple[str, str]] = (),
+        core: Host | None = None,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
         stdin_read: Callable[[int], bytes] | None = None,
         stdout_write: Callable[[int, bytes], None] | None = None,
-        clock: Callable[[int], int] | None = None,
-        random: Callable[[int], bytes] | None = None,
-        sleep: Callable[[int], None] | None = None,
         end: Callable[[int, int], None] | None = None,
         files: Files | None = None,
     ) -> None:
         self.memory = memory
+        self.core = (
+            core if core is not None else Host()
+        )  # the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes
         if files is None:  # the backend of the system's files; a host without files gives `Files()`
             if sys.platform == "win32":
                 from .wasi_p1_files_win32 import Win32Files
@@ -290,22 +289,12 @@ class State:
 
                 files = PosixFiles()
         self.files = files
-        # the hooks: what the host decides (the standard streams, the clocks, the random bytes, the sleep, the end of the program); where one is absent
-        # the system's own is used. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
+        # the hooks: what the host decides (the standard streams, the end of the program); where one is absent the system's own is used. The clocks, the random bytes and the sleep are those of `core`. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
         self.stdin_read = stdin_read  # (capacity) -> up to that many bytes
         self.stdout_write = stdout_write  # (fd 1 or 2, data); it stands for both streams
-        self.clock = clock  # (id of the clock of WASI) -> nanoseconds
-        self.random = random  # (n) -> n bytes
-        self.sleep = sleep  # (nanoseconds)
         self.end = end  # (how: END_EXIT or END_SIGNAL, value), told before the program is marked as over
         self.finished = END_NONE  # the program is over: 0, or how it ended
         self.end_value = 0
-        arguments = [_bytes(a) for a in (args if args is not None else [program])]
-        self.args = b"".join(a + b"\0" for a in arguments)
-        self.argc = len(arguments)
-        variables = [_bytes(f"{v[0]}={v[1]}" if isinstance(v, tuple) else v) for v in env]
-        self.env = b"".join(v + b"\0" for v in variables)
-        self.envc = len(variables)
         self.entries: list[Entry] = []
         for stream in range(3):
             entry = Entry(K_STD)
@@ -555,39 +544,10 @@ class State:
     # ---- clocks and random bytes --------------------------------------------------------------------------------------------
 
     def clock_ns(self, ident: int) -> tuple[int, int]:
-        """(errno, nanoseconds) of the clock `ident` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread): the hook of the host or the system's."""
+        """(errno, nanoseconds) of the clock `ident` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread): the clock of `core`; one that cannot be read is NOTSUP."""
         if ident > 3:
             return E_INVAL, 0
-        if self.clock is not None:
-            status, value = self.hooked(self.clock, ident)
-            return status, int(value or 0)
         try:
-            if sys.platform == "win32":
-                return E_SUCCESS, (time.time_ns, time.perf_counter_ns, time.process_time_ns, time.thread_time_ns)[
-                    ident
-                ]()
-            clocks = (
-                time.CLOCK_REALTIME,
-                time.CLOCK_MONOTONIC,
-                time.CLOCK_PROCESS_CPUTIME_ID,
-                time.CLOCK_THREAD_CPUTIME_ID,
-            )
-            return E_SUCCESS, time.clock_gettime_ns(clocks[ident])
+            return E_SUCCESS, int(self.core.clock(ident))
         except OSError:
             return E_NOTSUP, 0
-
-    def clock_resolution(self, ident: int) -> int | None:
-        """The resolution of a clock in nanoseconds (at least 1), or None if the system has no such clock."""
-        try:
-            if sys.platform == "win32":
-                names = ("time", "monotonic", "process_time", "thread_time")
-                return max(1, round(time.get_clock_info(names[ident]).resolution * 1e9))
-            clocks = (
-                time.CLOCK_REALTIME,
-                time.CLOCK_MONOTONIC,
-                time.CLOCK_PROCESS_CPUTIME_ID,
-                time.CLOCK_THREAD_CPUTIME_ID,
-            )
-            return max(1, round(time.clock_getres(clocks[ident]) * 1e9))
-        except (OSError, ValueError):
-            return None

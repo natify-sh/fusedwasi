@@ -393,7 +393,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_set_times(fusedw
         fusedwasi_p2_stat st;
         rc = fusedwasi_p2_sys_fstat(d, &st);
         if (rc == FUSEDWASI_P2_OK) {
-            int64_t now = (int64_t)s->wall_ns(s);
+            int64_t now = (int64_t)fusedwasi_p2_clock_ns(s, 0);
             rc = fusedwasi_p2_sys_set_times_fd(d, fusedwasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now), fusedwasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
         }
     }
@@ -531,7 +531,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_set_times_at(fus
         fusedwasi_p2_stat st;
         rc = fusedwasi_p2_sys_lstat(w.dir, w.leaf, &st);
         if (rc == FUSEDWASI_P2_OK) {
-            int64_t now = (int64_t)s->wall_ns(s);
+            int64_t now = (int64_t)fusedwasi_p2_clock_ns(s, 0);
             rc = fusedwasi_p2_sys_set_times(w.dir, w.leaf, fusedwasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now),
                                        fusedwasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
         }

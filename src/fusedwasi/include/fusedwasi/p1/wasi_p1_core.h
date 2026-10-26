@@ -57,13 +57,7 @@
 #endif
 #include <stdlib.h>
 #include <time.h>
-#ifdef _WIN32
-#include <windows.h>
-#include <bcrypt.h>
-#ifdef _MSC_VER
-#pragma comment(lib, "bcrypt") /* MSVC links it by this; MinGW (zig cc) is told with -lbcrypt, by wasmext._exe */
-#endif
-#endif
+#include "../p2/wasi_p2_core.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
 #if !FUSEDWASI_P1_DIRS_ARE_PATHS
 #include <dirent.h>
 #include <sys/stat.h>
@@ -74,12 +68,6 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#if defined(__has_include) && !defined(__APPLE__)
-#if __has_include(<sys/random.h>)
-#include <sys/random.h>
-#define FUSEDWASI_P1_HAVE_GETRANDOM 1
-#endif
-#endif
 #define FUSEDWASI_P1_NATIVE_POLL 1
 #else
 #define FUSEDWASI_P1_NATIVE_POLL 0
@@ -198,9 +186,6 @@ typedef struct {
 typedef struct {
     int (*stdin_read)(void *user, uint8_t *buf, size_t cap, size_t *got);
     int (*stdout_write)(void *user, int fd, const uint8_t *buf, size_t n);  /* fd 1 or 2 */
-    int (*clock)(void *user, uint32_t id, uint64_t *ns);
-    int (*random)(void *user, uint8_t *buf, size_t n);
-    int (*sleep)(void *user, uint64_t ns);
     void (*end)(void *user, int how, uint32_t value);  /* proc_exit, proc_raise: told before the program is marked as over */
 } fusedwasi_p1_hooks;
 
@@ -212,26 +197,14 @@ typedef struct {
 } fusedwasi_p1_preopen;
 
 typedef struct {
-    const char *args;  /* each ended by a NUL; NULL: the program's name alone */
-    size_t args_size;
-    uint32_t argc;
-    const char *env;  /* "NAME=value", each ended by a NUL */
-    size_t env_size;
-    uint32_t envc;
     const fusedwasi_p1_preopen *preopens;
     size_t npreopens;
-    const char *program;  /* argv[0] when args is NULL */
     fusedwasi_p1_hooks hooks;
     void *user;  /* the host's own state, given to every hook; never freed by the core */
 } fusedwasi_p1_config;
 
 struct fusedwasi_p1_state {
-    char *args;       /* the arguments, each ended by a NUL */
-    size_t args_size;
-    uint32_t argc;
-    char *env;        /* "NAME=value", each ended by a NUL */
-    size_t env_size;
-    uint32_t envc;
+    fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
     fusedwasi_p1_hooks hooks;
     void *user;           /* the host's own state */
     int finished;         /* the program is over: 0, or how it ended (FUSEDWASI_P1_END_*) */
@@ -489,15 +462,16 @@ static inline int64_t fusedwasi_p1_new_fd(fusedwasi_p1_state *w) {
 
 static inline void fusedwasi_p1_destroy(fusedwasi_p1_state *w);
 
-/* The state from a configuration (which it copies: the host may free it at once). NULL on failure with *err an errno; when it is
+/* The state over `core` from a configuration (which it copies: the host may free it at once; `core` must outlive the state). NULL on failure with *err an errno; when it is
    the directory of a preopen that could not be opened, *bad is its number in the configuration, otherwise (size_t)-1. */
-static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config *cfg, int *err, size_t *bad) {
+static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config *cfg, fusedwasi_p2_state *core, int *err, size_t *bad) {
     *bad = (size_t)-1;
     fusedwasi_p1_state *w = (fusedwasi_p1_state *)FUSEDWASI_P1_CALLOC(1, sizeof(fusedwasi_p1_state));
     if (w == NULL) {
         *err = ENOMEM;
         return NULL;
     }
+    w->core = core;
     w->hooks = cfg->hooks;
     w->user = cfg->user;
     w->nentries = 8;
@@ -506,24 +480,6 @@ static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config 
     for (int i = 0; i < 3; i++) {
         w->entries[i].kind = FUSEDWASI_P1_K_STD;
         w->entries[i].osfd = i;  /* which stream it is, wherever it is renumbered to */
-    }
-    if (cfg->args != NULL) {
-        w->args = fusedwasi_p1_copy(cfg->args, cfg->args_size);
-        if (w->args == NULL) goto nomem;
-        w->args_size = cfg->args_size;
-        w->argc = cfg->argc;
-    } else {
-        size_t len = strlen(cfg->program);  /* no args given: the program's own name */
-        w->args = fusedwasi_p1_copy(cfg->program, len);
-        if (w->args == NULL) goto nomem;
-        w->args_size = len + 1;
-        w->argc = 1;
-    }
-    if (cfg->env != NULL && cfg->env_size > 0) {
-        w->env = fusedwasi_p1_copy(cfg->env, cfg->env_size);
-        if (w->env == NULL) goto nomem;
-        w->env_size = cfg->env_size;
-        w->envc = cfg->envc;
     }
     for (size_t i = 0; i < cfg->npreopens; i++) {
         const fusedwasi_p1_preopen *p = &cfg->preopens[i];
@@ -559,8 +515,6 @@ static inline void fusedwasi_p1_destroy(fusedwasi_p1_state *w) {
     if (w == NULL) return;
     for (uint32_t i = 0; i < w->nentries; i++) fusedwasi_p1_release(&w->entries[i]);
     FUSEDWASI_P1_FREE(w->entries);
-    FUSEDWASI_P1_FREE(w->args);
-    FUSEDWASI_P1_FREE(w->env);
     FUSEDWASI_P1_FREE(w);
 }
 
@@ -629,18 +583,31 @@ static inline int fusedwasi_p1_get_u32(const fusedwasi_p1_state *w, uint32_t ptr
 
 /* ---- arguments and environment --------------------------------------------------------------------------------------- */
 
-static inline uint32_t fusedwasi_p1_strings_sizes(fusedwasi_p1_state *w, uint32_t count, size_t size, uint32_t count_ptr, uint32_t size_ptr) {
+static inline uint32_t fusedwasi_p1_strings_sizes(fusedwasi_p1_state *w, const char *const *items, uint32_t count, uint32_t count_ptr, uint32_t size_ptr) {
+    size_t size = 0;
+    for (uint32_t i = 0; i < count; i++) size += strlen(items[i]) + 1;
     if (!fusedwasi_p1_put_u32(w, count_ptr, count) || !fusedwasi_p1_put_u32(w, size_ptr, (uint32_t)size)) return FUSEDWASI_P1_E_FAULT;
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p1_state *w, const char *buf, size_t size, uint32_t count, uint32_t table, uint32_t out) {
+/* the strings are in memory of the instance as the specification says; the environment is "NAME=value" (`values` is NULL for the arguments) */
+static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p1_state *w, const char *const *items, const char *const *values, uint32_t count, uint32_t table, uint32_t out) {
+    size_t size = 0;
+    for (uint32_t i = 0; i < count; i++) size += strlen(items[i]) + (values != NULL ? 1 + strlen(values[i]) : 0) + 1;
     if (!fusedwasi_p1_in_memory(w, out, size) || !fusedwasi_p1_in_memory(w, table, (uint64_t)count * 4)) return FUSEDWASI_P1_E_FAULT;
-    memcpy(FUSEDWASI_P1_MEM(w) + out, buf, size);
     size_t offset = 0;
     for (uint32_t i = 0; i < count; i++) {
         fusedwasi_p1_put_u32(w, table + 4 * i, out + (uint32_t)offset);
-        offset += strlen(buf + offset) + 1;
+        size_t n = strlen(items[i]);
+        memcpy(FUSEDWASI_P1_MEM(w) + out + offset, items[i], n);
+        offset += n;
+        if (values != NULL) {
+            FUSEDWASI_P1_MEM(w)[out + offset++] = '=';
+            n = strlen(values[i]);
+            memcpy(FUSEDWASI_P1_MEM(w) + out + offset, values[i], n);
+            offset += n;
+        }
+        FUSEDWASI_P1_MEM(w)[out + offset++] = 0;
     }
     return FUSEDWASI_P1_E_SUCCESS;
 }
@@ -648,189 +615,62 @@ static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p1_state *w, const cha
 static inline uint32_t fusedwasi_p1_args_sizes_get(void *s, uint32_t argc, uint32_t size, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)trapped;
-    return fusedwasi_p1_strings_sizes(w, w->argc, w->args_size, argc, size);
+    return fusedwasi_p1_strings_sizes(w, w->core->args, w->core->arg_count, argc, size);
 }
 
 static inline uint32_t fusedwasi_p1_args_get(void *s, uint32_t argv, uint32_t buf, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)trapped;
-    return fusedwasi_p1_strings_get(w, w->args, w->args_size, w->argc, argv, buf);
+    return fusedwasi_p1_strings_get(w, w->core->args, NULL, w->core->arg_count, argv, buf);
 }
 
+/* the sizes of the environment count the "=" */
 static inline uint32_t fusedwasi_p1_environ_sizes_get(void *s, uint32_t count, uint32_t size, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)trapped;
-    return fusedwasi_p1_strings_sizes(w, w->envc, w->env_size, count, size);
+    size_t total = 0;
+    for (uint32_t i = 0; i < w->core->env_count; i++) total += strlen(w->core->env_names[i]) + 1 + strlen(w->core->env_values[i]) + 1;
+    if (!fusedwasi_p1_put_u32(w, count, w->core->env_count) || !fusedwasi_p1_put_u32(w, size, (uint32_t)total)) return FUSEDWASI_P1_E_FAULT;
+    return FUSEDWASI_P1_E_SUCCESS;
 }
 
 static inline uint32_t fusedwasi_p1_environ_get(void *s, uint32_t environ_, uint32_t buf, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)trapped;
-    return fusedwasi_p1_strings_get(w, w->env, w->env_size, w->envc, environ_, buf);
+    return fusedwasi_p1_strings_get(w, w->core->env_names, w->core->env_values, w->core->env_count, environ_, buf);
 }
 
-/* ---- clocks and random bytes (plain C: the system's own; a function given by the caller takes the place of either) ---------- */
-
-/* the clock `id` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread) in nanoseconds; 0 on success */
-#ifdef _WIN32
-static inline uint64_t fusedwasi_p1_filetime_ns(FILETIME t) {
-    return ((((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime)) * 100u;
-}
-
-static inline int fusedwasi_p1_clock_system(uint32_t id, uint64_t *ns) {
-    FILETIME created, exited, kernel, user, now;
-    LARGE_INTEGER counter, frequency;
-    switch (id) {
-    case 0:
-        GetSystemTimePreciseAsFileTime(&now);
-        *ns = fusedwasi_p1_filetime_ns(now) - 11644473600ull * 1000000000ull;  /* from 1601 to 1970 */
-        return 0;
-    case 1:
-        if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&counter)) return -1;
-        *ns = (uint64_t)(counter.QuadPart / frequency.QuadPart) * 1000000000ull +
-              (uint64_t)(counter.QuadPart % frequency.QuadPart) * 1000000000ull / (uint64_t)frequency.QuadPart;
-        return 0;
-    case 2:
-        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return -1;
-        *ns = fusedwasi_p1_filetime_ns(kernel) + fusedwasi_p1_filetime_ns(user);
-        return 0;
-    case 3:
-        if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return -1;
-        *ns = fusedwasi_p1_filetime_ns(kernel) + fusedwasi_p1_filetime_ns(user);
-        return 0;
-    default: return -1;
-    }
-}
-
-static inline int fusedwasi_p1_clock_resolution(uint32_t id, uint64_t *ns) {
-    LARGE_INTEGER frequency;
-    if (id == 1) {
-        if (!QueryPerformanceFrequency(&frequency)) return -1;
-        *ns = (1000000000ull + (uint64_t)frequency.QuadPart - 1) / (uint64_t)frequency.QuadPart;
-        return 0;
-    }
-    *ns = 100;  /* the unit of a FILETIME */
-    return id > 3 ? -1 : 0;
-}
-#else
-static inline clockid_t fusedwasi_p1_clock_id(uint32_t id) {
-    switch (id) {
-    case 0: return CLOCK_REALTIME;
-    case 1: return CLOCK_MONOTONIC;
-    case 2: return CLOCK_PROCESS_CPUTIME_ID;
-    default: return CLOCK_THREAD_CPUTIME_ID;
-    }
-}
-
-static inline int fusedwasi_p1_clock_system(uint32_t id, uint64_t *ns) {
-    struct timespec t;
-    if (id > 3 || clock_gettime(fusedwasi_p1_clock_id(id), &t) != 0) return -1;
-    *ns = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
-    return 0;
-}
-
-static inline int fusedwasi_p1_clock_resolution(uint32_t id, uint64_t *ns) {
-    struct timespec t;
-    if (id > 3 || clock_getres(fusedwasi_p1_clock_id(id), &t) != 0) return -1;
-    *ns = (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
-    if (*ns == 0) *ns = 1;
-    return 0;
-}
-#endif
-
-/* the time of a clock: the hook of the host or the system's */
-static inline uint32_t fusedwasi_p1_clock_ns(fusedwasi_p1_state *w, uint32_t id, uint64_t *ns, int *trapped) {
-    if (id > 3) return FUSEDWASI_P1_E_INVAL;
-    if (w->hooks.clock != NULL) return fusedwasi_p1_hook_status(w->hooks.clock(w->user, id, ns), trapped);
-    return fusedwasi_p1_clock_system(id, ns) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_NOTSUP;
-}
+/* ---- clocks and random bytes (the clocks, the random source and the sleep are those of the state of WASI 0.2: fusedwasi_p2_state) ---------- */
 
 static inline uint32_t fusedwasi_p1_clock_res_get(void *s, uint32_t id, uint32_t ptr, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)trapped;
-    uint64_t ns;
     if (id > 3) return FUSEDWASI_P1_E_INVAL;
-    if (fusedwasi_p1_clock_resolution(id, &ns) != 0) return FUSEDWASI_P1_E_NOTSUP;
-    return fusedwasi_p1_put_u64(w, ptr, ns) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_put_u64(w, ptr, w->core->resolution_ns[id]) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+}
+
+/* the time of a clock; a clock that cannot be read is NOTSUP (a host that traps does it in its function) */
+static inline uint32_t fusedwasi_p1_clock_ns(fusedwasi_p1_state *w, uint32_t id, uint64_t *ns) {
+    if (id > 3) return FUSEDWASI_P1_E_INVAL;
+    return w->core->clock(w->core, id, ns) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_NOTSUP;
 }
 
 static inline uint32_t fusedwasi_p1_clock_time_get(void *s, uint32_t id, uint64_t precision, uint32_t ptr, int *trapped) {
     FUSEDWASI_P1_STATE(s);
     (void)precision;
+    (void)trapped;
     uint64_t ns = 0;
-    uint32_t rc = fusedwasi_p1_clock_ns(w, id, &ns, trapped);
+    uint32_t rc = fusedwasi_p1_clock_ns(w, id, &ns);
     if (rc != FUSEDWASI_P1_E_SUCCESS) return rc;
     return fusedwasi_p1_put_u64(w, ptr, ns) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-/* `size` random bytes from the system; 0 on success */
-static inline int fusedwasi_p1_random_system(unsigned char *buf, size_t size) {
-#if defined(_WIN32)
-    return BCryptGenRandom(NULL, buf, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
-#elif defined(__APPLE__)
-    arc4random_buf(buf, size);
-    return 0;
-#else
-#ifdef FUSEDWASI_P1_HAVE_GETRANDOM
-    {  /* the system call needs no file: /dev/urandom fails in a chroot, without /dev, or when the process has no descriptors left */
-        size_t got = 0;
-        while (got < size) {
-            ssize_t n = getrandom(buf + got, size - got, 0);
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) break;
-            got += (size_t)n;
-        }
-        if (got == size) return 0;
-    }
-#endif
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return -1;
-    size_t done = 0;
-    while (done < size) {
-        ssize_t n = read(fd, buf + done, size - done);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) {
-            close(fd);
-            return -1;
-        }
-        done += (size_t)n;
-    }
-    close(fd);
-    return 0;
-#endif
-}
-
 static inline uint32_t fusedwasi_p1_random_get(void *s, uint32_t buf, uint32_t size, int *trapped) {
     FUSEDWASI_P1_STATE(s);
+    (void)trapped;
     if (!fusedwasi_p1_in_memory(w, buf, size)) return FUSEDWASI_P1_E_FAULT;
     if (size == 0) return FUSEDWASI_P1_E_SUCCESS;
-    if (w->hooks.random != NULL) return fusedwasi_p1_hook_status(w->hooks.random(w->user, FUSEDWASI_P1_MEM(w) + buf, size), trapped);
-    return fusedwasi_p1_random_system(FUSEDWASI_P1_MEM(w) + buf, size) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_IO;
-}
-
-/* waits `ns` nanoseconds on the monotonic clock: the hook of the host (the interpreter released, a signal seen) or, without one, the
-   system's sleep in slices of 100 ms; 0, or an errno / FUSEDWASI_P1_HOOK_TRAP */
-static inline int fusedwasi_p1_sleep_ns(fusedwasi_p1_state *w, uint64_t ns) {
-    if (w->hooks.sleep != NULL) return w->hooks.sleep(w->user, ns);
-    uint64_t start;
-    if (fusedwasi_p1_clock_system(1, &start) != 0) return FUSEDWASI_P1_E_NOTSUP;
-    for (;;) {
-        uint64_t now;
-        if (fusedwasi_p1_clock_system(1, &now) != 0) return 0;
-        uint64_t spent = now - start;
-        if (spent >= ns) return 0;
-        uint64_t left = ns - spent, slice = left < 100000000ull ? left : 100000000ull;
-#ifdef _WIN32
-        Sleep((DWORD)((slice + 999999u) / 1000000u));
-#else
-        {
-            struct timespec t;
-            t.tv_sec = (time_t)(slice / 1000000000ull);
-            t.tv_nsec = (long)(slice % 1000000000ull);
-            nanosleep(&t, NULL);
-        }
-#endif
-    }
+    return w->core->random_bytes(w->core, FUSEDWASI_P1_MEM(w) + buf, size) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_IO;
 }
 
 static inline uint32_t fusedwasi_p1_sched_yield(void *s, int *trapped) {
@@ -2139,8 +1979,8 @@ static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p1_state *w, uin
         return FUSEDWASI_P1_E_SUCCESS;
     }
     if (!have[id]) {
-        uint32_t rc = fusedwasi_p1_clock_ns(w, id, &entry_now[id], trapped);
-        if (rc || *trapped) return rc;
+        uint32_t rc = fusedwasi_p1_clock_ns(w, id, &entry_now[id]);
+        if (rc) return rc;
         have[id] = 1;
     }
     *wait = timeout > entry_now[id] ? timeout - entry_now[id] : 0;
@@ -2245,7 +2085,7 @@ static inline uint32_t fusedwasi_p1_poll(fusedwasi_p1_state *w, uint32_t in, uin
             }
         }
         uint64_t started = 0;
-        int have_start = fusedwasi_p1_clock_system(1, &started) == 0;
+        int have_start = w->core->clock(w->core, 1, &started) == 0;
         int ready = 0;
         for (;;) {
             int timeout = 0;  /* ms; the wait is for the clocks, or for ever when there is none */
@@ -2254,7 +2094,7 @@ static inline uint32_t fusedwasi_p1_poll(fusedwasi_p1_state *w, uint32_t in, uin
                     timeout = -1;
                 } else {
                     uint64_t spent = 0, now;
-                    if (have_start && fusedwasi_p1_clock_system(1, &now) == 0) spent = now - started;
+                    if (have_start && w->core->clock(w->core, 1, &now) == 0) spent = now - started;
                     uint64_t left = shortest > spent ? shortest - spent : 0;
                     timeout = left > 2000000000ull ? 2000000000 : (int)((left + 999999u) / 1000000u);
                 }
@@ -2269,13 +2109,12 @@ static inline uint32_t fusedwasi_p1_poll(fusedwasi_p1_state *w, uint32_t in, uin
             waited = shortest;  /* the wait is over: the clocks are due */
         } else if (ready > 0 && have_start) {
             uint64_t now;
-            if (fusedwasi_p1_clock_system(1, &now) == 0) waited = now - started;
+            if (w->core->clock(w->core, 1, &now) == 0) waited = now - started;
         }
     } else
 #endif
     if (!immediate && timed && shortest > 0) {
-        int slept = fusedwasi_p1_sleep_ns(w, shortest);
-        if (slept) return fusedwasi_p1_hook_status(slept, trapped);
+        if (w->core->sleep(w->core, shortest) != 0) return FUSEDWASI_P1_E_NOTSUP;
         waited = shortest;
     }
     uint32_t made = 0;

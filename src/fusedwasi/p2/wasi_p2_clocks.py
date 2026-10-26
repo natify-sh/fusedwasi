@@ -18,19 +18,19 @@ def _datetime(host: Host, comp: int, retptr: int, ns: int) -> None:
 
 
 def wasi_clocks_wall_clock_now(host: Host, comp: int, retptr: int) -> None:
-    _datetime(host, comp, retptr, host.wall_ns())
+    _datetime(host, comp, retptr, host.clock(0))
 
 
 def wasi_clocks_wall_clock_resolution(host: Host, comp: int, retptr: int) -> None:
-    _datetime(host, comp, retptr, host.wall_resolution_ns)
+    _datetime(host, comp, retptr, host.resolution_ns[0])
 
 
 def wasi_clocks_monotonic_clock_now(host: Host) -> int:
-    return host.monotonic_ns()
+    return host.clock(1)
 
 
 def wasi_clocks_monotonic_clock_resolution(host: Host) -> int:
-    return host.monotonic_resolution_ns
+    return host.resolution_ns[1]
 
 
 class DeadlinePollable(Pollable):
@@ -42,7 +42,7 @@ class DeadlinePollable(Pollable):
         self.deadline = deadline
 
     def ready(self, host: Host) -> bool:
-        return host.monotonic_ns() >= self.deadline
+        return host.clock(1) >= self.deadline
 
 
 def wasi_clocks_monotonic_clock_subscribe_instant(host: Host, when: int) -> int:
@@ -50,4 +50,4 @@ def wasi_clocks_monotonic_clock_subscribe_instant(host: Host, when: int) -> int:
 
 
 def wasi_clocks_monotonic_clock_subscribe_duration(host: Host, when: int) -> int:
-    return table_new(host, KIND_POLLABLE, DeadlinePollable(min(host.monotonic_ns() + when, _MAX_U64)))
+    return table_new(host, KIND_POLLABLE, DeadlinePollable(min(host.clock(1) + when, _MAX_U64)))

@@ -13,7 +13,6 @@ import select
 import stat
 import struct
 import sys
-import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,7 +30,6 @@ from .wasi_p1_core import (
     E_NOTCAPABLE,
     E_NOTDIR,
     E_NOTSOCK,
-    E_NOTSUP,
     E_SPIPE,
     E_SUCCESS,
     END_EXIT,
@@ -99,31 +97,42 @@ def _sizes(s: State, count: int, size: int, count_ptr: int, size_ptr: int) -> in
     return E_SUCCESS
 
 
-def _strings(s: State, buf: bytes, count: int, table: int, out: int) -> int:
-    if not (s.in_memory(out, len(buf)) and s.in_memory(table, count * 4)):
+def _strings(s: State, items: list[bytes], table: int, out: int) -> int:
+    buf = b"".join(item + b"\0" for item in items)
+    if not (s.in_memory(out, len(buf)) and s.in_memory(table, len(items) * 4)):
         return E_FAULT
     s.put_bytes(out, buf)
     offset = 0
-    for i in range(count):
+    for i, item in enumerate(items):
         s.put_u32(table + 4 * i, out + offset)
-        offset += buf.index(b"\0", offset) - offset + 1
+        offset += len(item) + 1
     return E_SUCCESS
 
 
+def _args(s: State) -> list[bytes]:
+    return [os.fsencode(a) for a in s.core.args]
+
+
+def _env(s: State) -> list[bytes]:
+    return [os.fsencode(f"{name}={value}") for name, value in s.core.env]
+
+
 def args_sizes_get(s: State, argc: int, size: int) -> int:
-    return _sizes(s, s.argc, len(s.args), argc, size)
+    items = _args(s)
+    return _sizes(s, len(items), sum(len(a) + 1 for a in items), argc, size)
 
 
 def args_get(s: State, argv: int, buf: int) -> int:
-    return _strings(s, s.args, s.argc, argv, buf)
+    return _strings(s, _args(s), argv, buf)
 
 
 def environ_sizes_get(s: State, count: int, size: int) -> int:
-    return _sizes(s, s.envc, len(s.env), count, size)
+    items = _env(s)
+    return _sizes(s, len(items), sum(len(v) + 1 for v in items), count, size)
 
 
 def environ_get(s: State, environ: int, buf: int) -> int:
-    return _strings(s, s.env, s.envc, environ, buf)
+    return _strings(s, _env(s), environ, buf)
 
 
 # ---- clocks and random bytes --------------------------------------------------------------------------------------------------
@@ -132,10 +141,7 @@ def environ_get(s: State, environ: int, buf: int) -> int:
 def clock_res_get(s: State, ident: int, ptr: int) -> int:
     if ident > 3:
         return E_INVAL
-    resolution = s.clock_resolution(ident)
-    if resolution is None:
-        return E_NOTSUP
-    return E_SUCCESS if s.put_u64(ptr, resolution) else E_FAULT
+    return E_SUCCESS if s.put_u64(ptr, s.core.resolution_ns[ident]) else E_FAULT
 
 
 def clock_time_get(s: State, ident: int, precision: int, ptr: int) -> int:
@@ -150,17 +156,12 @@ def random_get(s: State, buf: int, size: int) -> int:
         return E_FAULT
     if size == 0:
         return E_SUCCESS
-    if s.random is not None:
-        status, data = s.hooked(s.random, size)
-        if status:
-            return status
-        if len(data) != size:
-            return E_IO
-    else:
-        try:
-            data = os.urandom(size)
-        except OSError:
-            return E_IO
+    try:
+        data = s.core.random_bytes(size)
+    except OSError:
+        return E_IO
+    if len(data) != size:
+        return E_IO
     s.put_bytes(buf, data)
     return E_SUCCESS
 
@@ -788,18 +789,6 @@ def _poll_kind(s: State, sub: int, tag: int) -> tuple[int, int | None]:
     return E_SUCCESS, None
 
 
-def _sleep(s: State, ns: int) -> None:
-    if s.sleep is not None:
-        s.sleep(ns)
-        return
-    end = time.monotonic_ns() + ns
-    while True:
-        left = end - time.monotonic_ns()
-        if left <= 0:
-            return
-        time.sleep(min(left, 100_000_000) / 1e9)
-
-
 def _pending(fd: int) -> int:
     if sys.platform == "win32":
         return 0
@@ -850,14 +839,14 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
         for i, fd in watched.items():
             ready[i] = 0
             poller.register(fd, _POLLIN if subs[i * stride + 8] == 1 else _POLLOUT)
-        started = time.monotonic_ns()
+        started = s.core.clock(1)
         timeout: float | None
         if immediate:
             timeout = 0
         elif shortest is None:
             timeout = None
         else:
-            timeout = max(0, shortest - (time.monotonic_ns() - started)) / 1e6
+            timeout = max(0, shortest - (s.core.clock(1) - started)) / 1e6
         while True:
             try:
                 events = poller.poll(timeout)
@@ -872,9 +861,9 @@ def _poll(s: State, in_: int, out: int, count: int, nevents: int, legacy: bool) 
         if not events and not immediate and shortest is not None:
             waited = shortest
         elif events:
-            waited = time.monotonic_ns() - started
+            waited = s.core.clock(1) - started
     elif not immediate and shortest:
-        _sleep(s, shortest)
+        s.core.sleep(shortest)
         waited = shortest
     made = 0
     for i in range(count):

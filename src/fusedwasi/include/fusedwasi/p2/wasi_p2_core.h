@@ -133,10 +133,12 @@ typedef struct fusedwasi_p2_state {
     /* random bytes: returns 0, or nonzero if the source failed (a trap). `insecure_random_bytes` is the same source unless replaced. */
     int (*random_bytes)(struct fusedwasi_p2_state *s, uint8_t *buf, size_t n);
     int (*insecure_random_bytes)(struct fusedwasi_p2_state *s, uint8_t *buf, size_t n);
-    /* the clocks, in nanoseconds; replaced in tests */
-    uint64_t (*wall_ns)(struct fusedwasi_p2_state *s);
-    uint64_t (*monotonic_ns)(struct fusedwasi_p2_state *s);
-    uint64_t wall_resolution_ns, monotonic_resolution_ns;
+    /* the clocks of WASI 0.1 and 0.2, in nanoseconds: `id` is 0 real time, 1 monotonic, 2 CPU time of the process, 3 CPU time of the thread. Returns 0, or nonzero if the clock
+       cannot be read (0.2 traps, 0.1 answers `notsup`). Replaced in tests and by hosts. `resolution_ns` is the resolution of each. */
+    int (*clock)(struct fusedwasi_p2_state *s, uint32_t id, uint64_t *ns);
+    uint64_t resolution_ns[4];
+    /* how a call of 0.1 that sleeps (`poll_oneoff` on a clock) waits `ns` nanoseconds; returns 0, or nonzero if interrupted (a trap) */
+    int (*sleep)(struct fusedwasi_p2_state *s, uint64_t ns);
     void *user;
 } fusedwasi_p2_state;
 
@@ -147,40 +149,78 @@ FUSEDWASI_P2_FN void fusedwasi_p2_default_trap(fusedwasi_p2_state *s, const char
 }
 
 #ifdef _WIN32
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_wall_ns(fusedwasi_p2_state *s) {
-    FILETIME ft;
-    (void)s;
-    GetSystemTimePreciseAsFileTime(&ft);
-    uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime; /* 100 ns since 1601 */
-    return (t - 116444736000000000ULL) * 100;
-}
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_monotonic_ns(fusedwasi_p2_state *s) {
-    LARGE_INTEGER f, c;
-    (void)s;
-    QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&c);
-    return (uint64_t)(c.QuadPart / f.QuadPart) * 1000000000ULL + (uint64_t)(c.QuadPart % f.QuadPart) * 1000000000ULL / (uint64_t)f.QuadPart;
-}
-#else
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_clock_ns(clockid_t id) {
-    struct timespec ts;
-    clock_gettime(id, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
-}
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_wall_ns(fusedwasi_p2_state *s) { (void)s; return fusedwasi_p2_clock_ns(CLOCK_REALTIME); }
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_monotonic_ns(fusedwasi_p2_state *s) { (void)s; return fusedwasi_p2_clock_ns(CLOCK_MONOTONIC); }
-#endif
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_filetime_ns(FILETIME t) { return (((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime) * 100u; }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_resolution_ns(int monotonic) {
-#ifdef _WIN32
-    (void)monotonic;
-    return 100;
+FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+    FILETIME created, exited, kernel, user, now;
+    LARGE_INTEGER counter, frequency;
+    (void)s;
+    switch (id) {
+    case 0:
+        GetSystemTimePreciseAsFileTime(&now);
+        *ns = fusedwasi_p2_filetime_ns(now) - 11644473600ull * 1000000000ull; /* from 1601 to 1970 */
+        return 0;
+    case 1:
+        if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&counter)) return -1;
+        *ns = (uint64_t)(counter.QuadPart / frequency.QuadPart) * 1000000000ull + (uint64_t)(counter.QuadPart % frequency.QuadPart) * 1000000000ull / (uint64_t)frequency.QuadPart;
+        return 0;
+    case 2:
+        if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return -1;
+        *ns = fusedwasi_p2_filetime_ns(kernel) + fusedwasi_p2_filetime_ns(user);
+        return 0;
+    case 3:
+        if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return -1;
+        *ns = fusedwasi_p2_filetime_ns(kernel) + fusedwasi_p2_filetime_ns(user);
+        return 0;
+    default: return -1;
+    }
+}
+
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_resolution_ns(uint32_t id) {
+    LARGE_INTEGER frequency;
+    if (id == 1 && QueryPerformanceFrequency(&frequency)) return (1000000000ull + (uint64_t)frequency.QuadPart - 1) / (uint64_t)frequency.QuadPart;
+    return 100; /* the unit of a FILETIME */
+}
 #else
+FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+    static const clockid_t ids[4] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
     struct timespec ts;
-    if (clock_getres(monotonic ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts) != 0) return 1;
+    (void)s;
+    if (id > 3 || clock_gettime(ids[id], &ts) != 0) return -1;
+    *ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    return 0;
+}
+
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_resolution_ns(uint32_t id) {
+    static const clockid_t ids[4] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
+    struct timespec ts;
+    if (id > 3 || clock_getres(ids[id], &ts) != 0) return 1;
     uint64_t ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
     return ns ? ns : 1;
+}
 #endif
+
+/* the time of clock `id`: a clock of the host that cannot be read is a trap (0.2 has no error for it) */
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_clock_ns(fusedwasi_p2_state *s, uint32_t id) {
+    uint64_t ns = 0;
+    if (s->clock(s, id, &ns) != 0) s->trap(s, "the clock cannot be read");
+    return ns;
+}
+
+/* waits `ns` nanoseconds on the monotonic clock; in slices, so that a host sees an interrupt between them */
+FUSEDWASI_P2_FN int fusedwasi_p2_default_sleep(fusedwasi_p2_state *s, uint64_t ns) {
+    uint64_t start, now;
+    if (s->clock(s, 1, &start) != 0) return -1;
+    for (;;) {
+        if (s->clock(s, 1, &now) != 0 || now - start >= ns) return 0;
+        uint64_t left = ns - (now - start), slice = left < 100000000ull ? left : 100000000ull;
+#ifdef _WIN32
+        Sleep((DWORD)((slice + 999999u) / 1000000u));
+#else
+        struct timespec t = {(time_t)(slice / 1000000000ull), (long)(slice % 1000000000ull)};
+        nanosleep(&t, NULL);
+#endif
+    }
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_default_random_bytes(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {
@@ -227,10 +267,9 @@ FUSEDWASI_P2_FN void fusedwasi_p2_init(fusedwasi_p2_state *s) {
     s->wait = fusedwasi_p2_default_wait;
     s->exit = fusedwasi_p2_default_exit;
     s->random_bytes = s->insecure_random_bytes = fusedwasi_p2_default_random_bytes;
-    s->wall_ns = fusedwasi_p2_default_wall_ns;
-    s->monotonic_ns = fusedwasi_p2_default_monotonic_ns;
-    s->wall_resolution_ns = fusedwasi_p2_default_resolution_ns(0);
-    s->monotonic_resolution_ns = fusedwasi_p2_default_resolution_ns(1);
+    s->clock = fusedwasi_p2_default_clock;
+    s->sleep = fusedwasi_p2_default_sleep;
+    for (uint32_t i = 0; i < 4; i++) s->resolution_ns[i] = fusedwasi_p2_default_resolution_ns(i);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *s) {

@@ -703,7 +703,7 @@ def wasi_filesystem_types_descriptor_set_times(
         d = _descriptor(host, self)
         _need(d, WRITE if not d.is_dir else MUTATE)
         st = _fstat(d)
-        now = host.wall_ns()
+        now = host.clock(0)
         _utime_d(
             d,
             (
@@ -838,7 +838,7 @@ def wasi_filesystem_types_descriptor_set_times_at(
         _need(d, MUTATE)
         with _Walked(_ref(d), _path(host, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
             st = _lstat(parent, name)
-            now = host.wall_ns()
+            now = host.clock(0)
             _utime(
                 parent,
                 name,

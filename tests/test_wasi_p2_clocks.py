@@ -24,10 +24,8 @@ def python_output(scenario: str) -> str:
     memory = bytearray(64)
     host = Host(
         [memory],
-        wall_ns=lambda: 1700000000123456789,
-        monotonic_ns=lambda: 5000,
-        wall_resolution_ns=1000,
-        monotonic_resolution_ns=7,
+        clock=lambda ident: 1700000000123456789 if ident == 0 else 5000,
+        resolution_ns=[1000, 7, 1, 1],
     )
     lines: list[str] = []
     try:

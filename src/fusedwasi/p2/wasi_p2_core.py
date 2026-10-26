@@ -72,6 +72,13 @@ class Slot:
         self.obj: object = None
 
 
+_CLOCKS = (time.time_ns, time.monotonic_ns, time.process_time_ns, time.thread_time_ns)
+_RESOLUTIONS = tuple(
+    max(1, round(time.get_clock_info(name).resolution * 1e9))
+    for name in ("time", "monotonic", "process_time", "thread_time")
+)
+
+
 class Host:
     """The state of one instance: its memories, the table of handles and the clocks."""
 
@@ -79,10 +86,9 @@ class Host:
         self,
         memories: Sequence[object] = (),
         *,
-        wall_ns: Callable[[], int] = time.time_ns,
-        monotonic_ns: Callable[[], int] = time.monotonic_ns,
-        wall_resolution_ns: int | None = None,
-        monotonic_resolution_ns: int | None = None,
+        clock: Callable[[int], int] = lambda ident: _CLOCKS[ident](),
+        resolution_ns: Sequence[int] | None = None,
+        sleep: Callable[[int], None] | None = None,
         realloc: Callable[[int, int, int, int, int], int] | None = None,
         wait: Callable[[], None] = lambda: time.sleep(0.001),
         random_bytes: Callable[[int], bytes] = os.urandom,
@@ -128,12 +134,16 @@ class Host:
         self.insecure_random_bytes = (
             insecure_random_bytes or random_bytes
         )  # `wasi:random/insecure*`: the same source unless replaced
-        self.wall_ns = wall_ns
-        self.monotonic_ns = monotonic_ns
-        self.wall_resolution_ns = wall_resolution_ns or round(time.get_clock_info("time").resolution * 1e9) or 1
-        self.monotonic_resolution_ns = (
-            monotonic_resolution_ns or round(time.get_clock_info("monotonic").resolution * 1e9) or 1
-        )
+        # the clocks of WASI 0.1 and 0.2, in nanoseconds: `clock(ident)` with ident 0 real time, 1 monotonic, 2 CPU time of the process, 3 CPU time of the thread
+        # (an exception is a trap); `resolution_ns` is the resolution of each; `sleep(ns)` is how a call of 0.1 waits
+        self.clock = clock
+        self.resolution_ns = list(resolution_ns) if resolution_ns is not None else list(_RESOLUTIONS)
+        self.sleep = sleep or self._sleep
+
+    def _sleep(self, ns: int) -> None:
+        end = self.clock(1) + ns
+        while (left := end - self.clock(1)) > 0:
+            time.sleep(min(left, 100_000_000) / 1e9)
 
 
 # the table of handles (own and borrow share it; a handle is an i32 for the guest)

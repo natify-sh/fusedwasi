@@ -2,8 +2,11 @@
 #include <inttypes.h>
 #include "wasi_p2_clocks.h"
 
-static uint64_t wall(fusedwasi_p2_state *s) { (void)s; return 1700000000123456789ULL; }
-static uint64_t mono(fusedwasi_p2_state *s) { (void)s; return 5000; }
+static int clock_of(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+    (void)s;
+    *ns = id == 0 ? 1700000000123456789ULL : 5000;
+    return 0;
+}
 static void trap(fusedwasi_p2_state *s, const char *m) { (void)s; printf("TRAP %s\n", m); exit(0); }
 
 static void dump(const uint8_t *m, int n) {
@@ -17,10 +20,9 @@ int main(int argc, char **argv) {
     fusedwasi_p2_state s;
     fusedwasi_p2_init(&s);
     s.trap = trap;
-    s.wall_ns = wall;
-    s.monotonic_ns = mono;
-    s.wall_resolution_ns = 1000;
-    s.monotonic_resolution_ns = 7;
+    s.clock = clock_of;
+    s.resolution_ns[0] = 1000;
+    s.resolution_ns[1] = 7;
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     if (!strcmp(scenario, "main")) {
         fusedwasi_wasi_clocks_wall_clock_now(&s, 0, 0);
