@@ -489,7 +489,10 @@ class SystemFiles(Files):
             except OSError as caught:
                 return failure(caught), b""
             if target.startswith(b"/"):
-                return E_PERM, b""  # an absolute or rooted target is not shown, as readlink-at of 0.2 does (and path_symlink refuses to make one)
+                return (
+                    E_PERM,
+                    b"",
+                )  # an absolute or rooted target is not shown, as readlink-at of 0.2 does (and path_symlink refuses to make one)
             return E_SUCCESS, target[:capacity]  # a buffer of 0 bytes asked with 1 still says whether this is a link
 
     def list(self, entry: Entry) -> tuple[int, list[Listing]]:
