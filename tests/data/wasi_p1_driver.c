@@ -240,9 +240,8 @@ int main(int argc, char **argv) {
                      strncmp(t[1], "$TMP", 4) ? t[1] : t[1] + 4);
             snprintf(preopen_name[npreopens], sizeof preopen_name[0], "%s", t[2]);
             preopens[npreopens].name = preopen_name[npreopens];
-            preopens[npreopens].name_len = l[2];
-            preopens[npreopens].host = preopen_host[npreopens];
-            preopens[npreopens].readonly = n > 3 && !strcmp(t[3], "ro");
+            preopens[npreopens].path = preopen_host[npreopens];
+            preopens[npreopens].writable = !(n > 3 && !strcmp(t[3], "ro"));
             npreopens++;
         } else if (!strcmp(t[0], "mode")) {
             unstable = !strcmp(t[1], "unstable");

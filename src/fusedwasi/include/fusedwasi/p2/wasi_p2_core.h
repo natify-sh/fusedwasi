@@ -46,9 +46,17 @@ struct fusedwasi_p2_http_request;
 struct fusedwasi_p2_http_response;
 struct fusedwasi_p2_http_error;
 
+/* the `use` that `socket_addr_check` is asked about; the numbers are part of the interface (the UDP ones come last), and the Python twin has the same ones (`USE_TCP_BIND`, ...) */
 enum { FUSEDWASI_P2_USE_TCP_BIND, FUSEDWASI_P2_USE_TCP_CONNECT, FUSEDWASI_P2_USE_UDP_BIND, FUSEDWASI_P2_USE_UDP_CONNECT, FUSEDWASI_P2_USE_UDP_OUTGOING };
 
-/* a directory of the host that the guest sees under `name`; `writable` 0: the guest can only read it */
+/* "tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing"; "unknown" for any other number (`use_name` of the Python twin) */
+static inline const char *fusedwasi_p2_use_name(int use) {
+    static const char *const names[] = {"tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing"};
+    return use >= 0 && use < 5 ? names[use] : "unknown";
+}
+
+/* a directory of the host that the guest sees under `name`; `writable` 0: the guest can only read it. The same struct is the preopen of the state of 0.1 (`fusedwasi_p1_preopen`), and the
+   tuple `(path, name, writable)` in Python */
 struct fusedwasi_p2_preopen {
     const char *path, *name;
     int writable;
@@ -140,7 +148,7 @@ typedef struct fusedwasi_p2_state {
     uint64_t resolution_ns[4];
     /* how a call of 0.1 that sleeps (`poll_oneoff` on a clock) waits `ns` nanoseconds; returns 0, or nonzero if interrupted (a trap) */
     int (*sleep)(struct fusedwasi_p2_state *s, uint64_t ns);
-    void *user;
+    void *user; /* the host's own: the library never reads, writes or frees it (`fusedwasi_p2_init` makes it NULL); the Python twin has `Host.user` */
 } fusedwasi_p2_state;
 
 FUSEDWASI_P2_FN void fusedwasi_p2_default_trap(fusedwasi_p2_state *s, const char *message) {

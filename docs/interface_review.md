@@ -260,3 +260,33 @@ Python gets the same contract plus the exceptions `Exit` and `Signal`: the excep
 8. The format of the headers is read by `make_wasi_p2_table.py` with a regular expression; ship a table or document the format.
 9. `release_checklist.md` section 1 has the wrong function-name scheme; correct it.
 10. Section 2 of the checklist says 0.2 was not compared with Wasmtime; `tools/wasi_p2_conformance/` does that for the filesystem and http (its README says 262 and 23 operations; **[unverified] that it still runs**, it needs Rust and `wasm32-wasip2`). Its README refers to `docs/experiments/wasi_p2_conformance/`, a path that does not exist in this tree.
+
+## 6. What was done about the gaps of section 2 (task 4, 2026-10-26)
+
+The owner decided that a difference between the C and the Python twins is to be fixed. The library is not published, so the changes below break the users' code where they say so (see "Changes for the users"). Tests: `tests/test_parity_surface.py` (each test fails on the tree before the change; the pairs build a C program and compare it with the Python), and the existing tests changed with their drivers.
+
+| Gap (section) | Done |
+| --- | --- |
+| `user` (2.2, 2.3) | `Host(user=...)` and `State(user=...)` exist and are never touched by the library, as `fusedwasi_p2_state.user` and `fusedwasi_p1_state.user` (copied from `fusedwasi_p1_config.user`). The C headers say that the library never reads, writes or frees it. Test: both languages. |
+| `socket_addr_check` `use` (2.2) | **Both pass the number.** C: `FUSEDWASI_P2_USE_*` (0 to 4) and the new `fusedwasi_p2_use_name(int)`. Python: `USE_TCP_BIND` ... `USE_UDP_OUTGOING` (the same numbers) and `use_name(int)` in `wasi_p2_core`; the callable of a `Host` is now `f(ip, port, use: int)`. Why this way: the one user of the C policy (wasmext) already gets the number and keeps a private table of the five names (`wasi2_uses[]` in `wasi2_python.h`, `_USES` in `_ctypes_gen.py`), which `fusedwasi_p2_use_name` replaces; the other direction (strings in C) would make every C policy do `strcmp`. The only Python callable of fusedwasi (`Host(socket_addr_check=)`) has no user (wasmhost does not use it; wasmext's `sockets=` callable is its own, fed with names by its own code). `http_check(scheme, authority)` has no `use` and is the same in both. |
+| `terminals` (2.2) | **A mask in both**: `FUSEDWASI_P2_TERMINAL_STDIN/STDOUT/STDERR` (1, 2, 4) in C and `TERMINAL_STDIN/STDOUT/STDERR` with the same values in Python; `Host(terminals=mask)` replaces the set of names. Neither user sets it. |
+| the preopen of 0.1 and 0.2 (2.3, 2.4) | **One struct**: `fusedwasi_p1_preopen` is now `struct fusedwasi_p2_preopen`, `{path, name, writable}` (a typedef of the same type; the Python tuples were already `(path, name, writable)` in `Host` and in `State`). `name_len` is gone: it was never needed (the name is a C string, as in 0.2, and every user computed it with `strlen`; a name with a NUL is not a path). The user can now give `s->preopens` to `fusedwasi_p1_config.preopens` and drop its second array. |
+| the constants of 0.1 (2.3) | The C had no `FUSEDWASI_P1_FT_SOCKET_DGRAM` and lacked the rights `R_PATH_LINK_SOURCE`, `R_PATH_LINK_TARGET`, `R_PATH_READLINK`, `R_PATH_RENAME_SOURCE`, `R_PATH_RENAME_TARGET`, `R_PATH_SYMLINK`, `R_SOCK_SHUTDOWN`: added. A test now compares **every** constant of `wasi_p1_core.py` (errno, file types, rights, oflags, fdflags, times, kinds, ends) with the C macro of the same name: 100+ values. |
+| `trap` and `exit` hooks (2.2) | **Not a gap to close, deliberate**: in C a hook that does not return is the only way out of a function; in Python an exception does the same job, and `Exit` and `Trap` are the exceptions. A Python `Host` that wanted to turn a trap into something else catches the exception. Adding `trap`/`exit` callables to the Python `Host` would only duplicate `try`/`except`. |
+| trap told by `*trapped` (2.1) | Deliberate for the same reason. |
+| the memory of 0.1 by pointer and of 0.2 by value (2.4) | **Not changed**: it is the change of 3.1 (a memory source), which touches every call that reads memory and both users' glue. It is a decision for the owner, not a mismatch between C and Python (the Python takes the memory as a buffer or a function in both states). |
+| a file backend for 0.1 (`files=`), `network=`, `http=` (2.2, 2.3) | Python-only features (a `Files` object, two booleans), deliberate: in C the host writes a function. |
+| `END_EXIT` never set, `FUSEDWASI_P1_HOOK_TRAP` dead (1.2) | The same in both; not a C/Python difference. Left for the owner (section 5, items 1 and 2). |
+| `std[3]` is `void *` (3.5) | Tried and **reverted**: a typed `fusedwasi_p2_stream *std[3]` breaks every assignment of a derived struct (the cli driver does it) for no gain in parity. |
+
+## Changes for the users
+
+One line for each name that a user has to change. `wasmext` is `/home/user/py-wasmext` (C), `wasmhost` is `/home/user/py-wasmhost` (Python). Everything else added (`Host.user`, `State.user`, `fusedwasi_p2_use_name`, `use_name`, the constants) touches nobody.
+
+* `fusedwasi_p1_preopen.host` -> `.path`: wasmext (`c/wasi_python.h` 298, 445, `c/wasi2_python.h` 331 and 380, `_shared.py` 382, `_exe.py` 193).
+* `fusedwasi_p1_preopen.readonly` (set when read-only) -> `.writable` (set when writable, the opposite): wasmext (`c/wasi_python.h` where the item is made, `c/wasi2_python.h` 333, `_shared.py` 385, `_exe.py` 196).
+* `fusedwasi_p1_preopen.name_len` -> removed (use `strlen(name)`; the name has no NUL): wasmext (`c/wasi_python.h` 444, `_shared.py` 384, `_exe.py` 195).
+* The order of the fields of `fusedwasi_p1_preopen` was `{name, name_len, host, readonly}` -> `{path, name, writable}`: wasmext, only where it initialises the struct by position (none found; it assigns by field). Optional simplification: pass `s->preopens` and `s->preopen_count` as `cfg.preopens` / `cfg.npreopens` and delete the second array (`_shared.py` 376-389, `_exe.py` 188-200, `c/wasi2_python.h` `wasmext_wasi_over`).
+* `Host(socket_addr_check=f)`: `f(ip, port, use: str)` -> `f(ip, port, use: int)`, with `fusedwasi.p2.wasi_p2_core.use_name(use)` for the old text: nobody (wasmhost does not set it; wasmext's `sockets=` callable is fed by `wasi2_uses[]` in C and needs no change; it can replace that table, and `_USES` in `_ctypes_gen.py`, with `fusedwasi_p2_use_name`).
+* `Host(terminals=["stdout"])` (names) -> `Host(terminals=TERMINAL_STDOUT)` (mask): nobody (grep of both repositories finds no use).
+* `fusedwasi_p1_unstable_*`, `fusedwasi_p1_<name>`, `fusedwasi_wasi_*`, `wasi_p1.<name>`, `State(...)`, `Exit`, the streams: **unchanged**.

@@ -100,7 +100,7 @@ enum {
     FUSEDWASI_P1_E_STALE = 72, FUSEDWASI_P1_E_TIMEDOUT = 73, FUSEDWASI_P1_E_TXTBSY = 74, FUSEDWASI_P1_E_XDEV = 75, FUSEDWASI_P1_E_NOTCAPABLE = 76
 };
 enum {
-    FUSEDWASI_P1_FT_UNKNOWN = 0, FUSEDWASI_P1_FT_BLOCK = 1, FUSEDWASI_P1_FT_CHAR = 2, FUSEDWASI_P1_FT_DIR = 3, FUSEDWASI_P1_FT_REGULAR = 4, FUSEDWASI_P1_FT_SOCKET_STREAM = 6,
+    FUSEDWASI_P1_FT_UNKNOWN = 0, FUSEDWASI_P1_FT_BLOCK = 1, FUSEDWASI_P1_FT_CHAR = 2, FUSEDWASI_P1_FT_DIR = 3, FUSEDWASI_P1_FT_REGULAR = 4, FUSEDWASI_P1_FT_SOCKET_DGRAM = 5, FUSEDWASI_P1_FT_SOCKET_STREAM = 6,
     FUSEDWASI_P1_FT_SYMLINK = 7
 };
 /* the oflags, fdflags and lookupflags of path_open */
@@ -130,6 +130,13 @@ enum { FUSEDWASI_P1_T_ATIM = 1, FUSEDWASI_P1_T_ATIM_NOW = 2, FUSEDWASI_P1_T_MTIM
 #define FUSEDWASI_P1_R_FD_FILESTAT_SET_TIMES FUSEDWASI_P1_R(23)
 #define FUSEDWASI_P1_R_POLL_FD_READWRITE FUSEDWASI_P1_R(27)
 #define FUSEDWASI_P1_R_FD_ADVISE FUSEDWASI_P1_R(7)
+#define FUSEDWASI_P1_R_PATH_LINK_SOURCE FUSEDWASI_P1_R(11)
+#define FUSEDWASI_P1_R_PATH_LINK_TARGET FUSEDWASI_P1_R(12)
+#define FUSEDWASI_P1_R_PATH_READLINK FUSEDWASI_P1_R(15)
+#define FUSEDWASI_P1_R_PATH_RENAME_SOURCE FUSEDWASI_P1_R(16)
+#define FUSEDWASI_P1_R_PATH_RENAME_TARGET FUSEDWASI_P1_R(17)
+#define FUSEDWASI_P1_R_PATH_SYMLINK FUSEDWASI_P1_R(24)
+#define FUSEDWASI_P1_R_SOCK_SHUTDOWN FUSEDWASI_P1_R(28)
 #define FUSEDWASI_P1_R_PATH_REMOVE_DIRECTORY FUSEDWASI_P1_R(25)
 #define FUSEDWASI_P1_R_PATH_UNLINK_FILE FUSEDWASI_P1_R(26)
 #define FUSEDWASI_P1_R_ALL ((UINT64_C(1) << 30) - 1)
@@ -178,22 +185,19 @@ typedef struct {
    FUSEDWASI_P1_HOOK_TRAP is a trap of the call (the host keeps what it needs to report it: Python keeps its exception). */
 #define FUSEDWASI_P1_HOOK_TRAP 0x10000
 
-typedef struct {
-    const char *name;  /* what the program sees */
-    size_t name_len;
-    const char *host;  /* the real path of the directory */
-    int readonly;
-} fusedwasi_p1_preopen;
+/* A preopened directory is the same thing in 0.1 and in 0.2: `{path, name, writable}` (the real path of the directory, what the program sees, 0 for read-only). There is no
+   name length: the name is a C string (a path has no NUL), as in 0.2. The pointers are the caller's and are copied by `fusedwasi_p1_create`. */
+typedef struct fusedwasi_p2_preopen fusedwasi_p1_preopen;
 
 typedef struct {
     const fusedwasi_p1_preopen *preopens;
     size_t npreopens;
-    void *user;  /* the host's own state; never freed by the core */
+    void *user;  /* the host's own: copied to `fusedwasi_p1_state.user`; the library never reads, writes or frees what it points to */
 } fusedwasi_p1_config;
 
 struct fusedwasi_p1_state {
     fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
-    void *user;           /* the host's own state */
+    void *user;           /* the host's own: the library never reads, writes or frees it (`fusedwasi_p1_config.user` is copied here) */
     int finished;         /* the last call ended by a signal: FUSEDWASI_P1_END_SIGNAL, or 0 (the host clears it before a call; proc_exit is in `core->exited`) */
     uint32_t end_value;   /* ... the signal of proc_raise (the code of proc_exit is `core->exit_code`) */
     uint8_t **memory_data;  /* where the base of the memory is kept (it moves when the memory grows) */
@@ -440,14 +444,14 @@ static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config 
         memset(e, 0, sizeof *e);
         e->kind = FUSEDWASI_P1_K_DIR;
         e->filetype = FUSEDWASI_P1_FT_DIR;
-        e->rights = e->inheriting = p->readonly ? (FUSEDWASI_P1_R_ALL & ~FUSEDWASI_P1_R_MUTATING) : FUSEDWASI_P1_R_ALL;
-        e->preopen = fusedwasi_p1_copy(p->name, p->name_len);
-        e->preopen_len = p->name_len;
+        e->rights = e->inheriting = p->writable ? FUSEDWASI_P1_R_ALL : (FUSEDWASI_P1_R_ALL & ~FUSEDWASI_P1_R_MUTATING);
+        e->preopen_len = strlen(p->name);
+        e->preopen = fusedwasi_p1_copy(p->name, e->preopen_len);
         if (e->preopen == NULL) {
             fusedwasi_p1_release(e);
             goto nomem;
         }
-        int code = fusedwasi_p2_sys_open_directory(p->host, &e->d);
+        int code = fusedwasi_p2_sys_open_directory(p->path, &e->d);
         if (code != FUSEDWASI_P2_OK) {
             *err = fusedwasi_p1_errno_of_code(code);
             *bad = i;

@@ -7,7 +7,7 @@
 - `stdin`, `stdout`, `stderr`: a new handle on every call, to the same stream: the one the caller gave the `Host`, or by default **the Python streams of the moment**
   (`sys.stdin.buffer` and so on, looked at when used, so that a capture of the output sees what the guest writes; as in the WASI 0.1 host of wasmext). `FdInput` and `FdOutput` write
   to a descriptor. A standard stream is not closed when a handle to it is dropped.
-- the terminals: `get-terminal-*` is `some(handle)` for the names in `Host.terminals` and `none` otherwise (the default); the resources have no methods.
+- the terminals: `get-terminal-*` is `some(handle)` for the bits in `Host.terminals` (`TERMINAL_STDIN`, `TERMINAL_STDOUT`, `TERMINAL_STDERR`) and `none` otherwise (the default); the resources have no methods.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ from .wasi_p2_core import (
     KIND_OUTPUT_STREAM,
     KIND_TERMINAL_INPUT,
     KIND_TERMINAL_OUTPUT,
+    TERMINAL_STDERR,
+    TERMINAL_STDIN,
+    TERMINAL_STDOUT,
     Exit,
     Host,
     alloc,
@@ -203,24 +206,24 @@ def wasi_cli_stderr_get_stderr(host: Host) -> int:
 # the terminals
 
 
-def _terminal(host: Host, comp: int, retptr: int, name: str, kind: int) -> None:
-    if name in host.terminals:
+def _terminal(host: Host, comp: int, retptr: int, bit: int, kind: int) -> None:
+    if host.terminals & bit:
         store_u8(host, comp, retptr, 1)
-        store_u32(host, comp, retptr + 4, table_new(host, kind, name))
+        store_u32(host, comp, retptr + 4, table_new(host, kind, bit))
     else:
         store_u8(host, comp, retptr, 0)
 
 
 def wasi_cli_terminal_stdin_get_terminal_stdin(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, "stdin", KIND_TERMINAL_INPUT)
+    _terminal(host, comp, retptr, TERMINAL_STDIN, KIND_TERMINAL_INPUT)
 
 
 def wasi_cli_terminal_stdout_get_terminal_stdout(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, "stdout", KIND_TERMINAL_OUTPUT)
+    _terminal(host, comp, retptr, TERMINAL_STDOUT, KIND_TERMINAL_OUTPUT)
 
 
 def wasi_cli_terminal_stderr_get_terminal_stderr(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, "stderr", KIND_TERMINAL_OUTPUT)
+    _terminal(host, comp, retptr, TERMINAL_STDERR, KIND_TERMINAL_OUTPUT)
 
 
 def wasi_cli_terminal_input_terminal_input_drop(host: Host, handle: int) -> None:

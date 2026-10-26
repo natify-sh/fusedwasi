@@ -14,7 +14,7 @@ import pytest
 
 from fusedwasi.p2 import wasi_p2_cli as cli
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Exit, Host, Trap, load_u32
+from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Host, Trap, load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_cli_driver.c"
@@ -48,7 +48,7 @@ def python_output(scenario: str) -> str:
     try:
         if scenario == "main":
             stdin, stdout = io.MemoryInput(b"in!"), io.BufferOutput(100)
-            host = Host([memory], stdin=stdin, stdout=stdout, terminals=["stdout"], **common)
+            host = Host([memory], stdin=stdin, stdout=stdout, terminals=TERMINAL_STDOUT, **common)
             hi, ho = io.input_stream_new(host, stdin), io.output_stream_new(host, stdout)
             lines.append(f"handles {hi} {ho}")
             cli.wasi_cli_environment_get_arguments(host, 0, 0)

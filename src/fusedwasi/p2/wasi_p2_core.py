@@ -43,6 +43,19 @@ KIND_OUTGOING_BODY = 24
 KIND_FUTURE_INCOMING_RESPONSE = 25
 
 
+# `use` of `Host.socket_addr_check`: the same numbers as FUSEDWASI_P2_USE_* in C (the order is part of the interface: the UDP ones come last)
+USE_TCP_BIND, USE_TCP_CONNECT, USE_UDP_BIND, USE_UDP_CONNECT, USE_UDP_OUTGOING = range(5)
+_USE_NAMES = ("tcp-bind", "tcp-connect", "udp-bind", "udp-connect", "udp-outgoing")
+
+# `Host.terminals` is a mask of these, as `terminals` of the C state with FUSEDWASI_P2_TERMINAL_*
+TERMINAL_STDIN, TERMINAL_STDOUT, TERMINAL_STDERR = 1, 2, 4
+
+
+def use_name(use: int) -> str:
+    """The name of a `use`: "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing" (`fusedwasi_p2_use_name` in C)."""
+    return _USE_NAMES[use] if 0 <= use < len(_USE_NAMES) else "unknown"
+
+
 class Trap(Exception):
     """What the canonical ABI calls a trap: a bad handle, a pointer outside the memory."""
 
@@ -110,14 +123,15 @@ class Host:
         stdin: object = None,
         stdout: object = None,
         stderr: object = None,
-        terminals: Sequence[str] = (),
+        terminals: int = 0,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
         network: bool = False,
-        socket_addr_check: Callable[[str, int, str], bool] | None = None,
+        socket_addr_check: Callable[[str, int, int], bool] | None = None,
         allow_ip_name_lookup: bool | None = None,
         http: bool = False,
         http_check: Callable[[str, str], bool] | None = None,
         http_send: Callable[[Any], Any] | None = None,
+        user: object = None,
     ) -> None:
         self.memories: list[object] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
@@ -133,14 +147,17 @@ class Host:
         # wasi:filesystem/preopens: (path on the host, name for the guest) or (path, name, writable); a directory is writable unless the third item is False
         self.preopens = [(p[0], p[1], p[2] if len(p) > 2 else True) for p in preopens]  # type: ignore[misc]
         # wasi:sockets: nothing is allowed unless the caller says so, as in Wasmtime. `network=True` allows everything; `socket_addr_check(ip, port, use)` decides
-        # for each bind or connect (`use` is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"); `allow_ip_name_lookup` for `resolve-addresses`
-        self.socket_addr_check: Callable[[str, int, str], bool] = socket_addr_check or (lambda ip, port, use: network)
+        # for each bind or connect (`use` is one of `USE_TCP_BIND` ... `USE_UDP_OUTGOING`, the numbers of FUSEDWASI_P2_USE_* in C; `use_name(use)` is its name); `allow_ip_name_lookup` for `resolve-addresses`
+        self.socket_addr_check: Callable[[str, int, int], bool] = socket_addr_check or (lambda ip, port, use: network)
         self.allow_ip_name_lookup = network if allow_ip_name_lookup is None else allow_ip_name_lookup
         # wasi:http: an outgoing request is refused (`HTTP-request-denied`) unless the caller says so. `http=True` allows every request; `http_check(scheme, authority)` decides for each one
         # (`scheme` is "http" or "https"); `http_send(request) -> response` replaces the transport of `wasi_p2_http` (it raises `ErrorCode` for a failure)
         self.http_check: Callable[[str, str], bool] = http_check or (lambda scheme, authority: http)
         self.http_send = http_send
-        self.terminals = set(terminals)  # which of "stdin", "stdout", "stderr" are terminals
+        self.terminals = (
+            terminals  # a mask of TERMINAL_STDIN, TERMINAL_STDOUT, TERMINAL_STDERR: which of the three are terminals
+        )
+        self.user = user  # the host's own: the library never reads or writes it (the twin of `fusedwasi_p2_state.user`)
         self.exited = False  # the guest called wasi:cli/exit (or proc_exit of WASI 0.1): ... with `exit_code`; `Exit` is raised as well
         self.exit_code = 0
         self.random_bytes = random_bytes  # the secure source

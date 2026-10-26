@@ -1,7 +1,7 @@
 """wasi:sockets (58 imports): `network`, `instance-network`, `ip-name-lookup`, `tcp`, `tcp-create-socket`, `udp`, `udp-create-socket` (the twin of `include/fusedwasi/p2/wasi_p2_sockets.h`). POSIX and Windows (Winsock).
 
 **Nothing is allowed unless the caller says so** (as in Wasmtime): `Host(network=True)` allows every address and the lookup of names; `Host(socket_addr_check=f)` decides for each bind or connect
-(`f(ip_text, port, use)`, `use` is "tcp-bind", "tcp-connect", "udp-bind", "udp-connect" or "udp-outgoing"), `Host(allow_ip_name_lookup=...)` for names. A refusal is `access-denied`.
+(`f(ip_text, port, use)`, `use` is a number, `USE_TCP_BIND` ... `USE_UDP_OUTGOING` of `wasi_p2_core`, as FUSEDWASI_P2_USE_* in C; `use_name(use)` gives its name), `Host(allow_ip_name_lookup=...)` for names. A refusal is `access-denied`.
 
 The sockets are non-blocking, and the operations of WASI that are "start" and "finish" are done as the WIT lets a host do them: the system call is made in `start-*` and `finish-*` only
 reports; `finish-connect` is `would-block` until the connection is made. TCP follows the states of the WIT (unbound, bind-in-progress, bound, listen-in-progress, listening,
@@ -36,6 +36,11 @@ from .wasi_p2_core import (
     KIND_RESOLVE_STREAM,
     KIND_TCP_SOCKET,
     KIND_UDP_SOCKET,
+    USE_TCP_BIND,
+    USE_TCP_CONNECT,
+    USE_UDP_BIND,
+    USE_UDP_CONNECT,
+    USE_UDP_OUTGOING,
     Host,
     Pollable,
     Trap,
@@ -365,14 +370,14 @@ def _open(t: TcpSock) -> None:
         raise NetError("invalid-state")
 
 
-def _check_bind(host: Host, family: int, a: Addr, use: str) -> None:
+def _check_bind(host: Host, family: int, a: Addr, use: int) -> None:
     if a[0] != family or not _unicast(a):
         raise NetError("invalid-argument")
     if not host.socket_addr_check(_ip_text(a), a[1], use):
         raise NetError("access-denied")
 
 
-def _check_connect(host: Host, family: int, a: Addr, use: str) -> None:
+def _check_connect(host: Host, family: int, a: Addr, use: int) -> None:
     if a[0] != family or not _remote_ok(a):
         raise NetError("invalid-argument")
     if not host.socket_addr_check(_ip_text(a), a[1], use):
@@ -389,7 +394,7 @@ def wasi_sockets_tcp_tcp_socket_start_bind(
     def action() -> None:
         if t.state != UNBOUND:
             raise NetError("invalid-state")
-        _check_bind(host, t.family, a, "tcp-bind")
+        _check_bind(host, t.family, a, USE_TCP_BIND)
         if sys.platform != "win32":
             t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         t.sock.bind(_sockaddr(a))
@@ -419,7 +424,7 @@ def wasi_sockets_tcp_tcp_socket_start_connect(
     def action() -> None:
         if t.state not in (UNBOUND, BOUND):
             raise NetError("invalid-state")
-        _check_connect(host, t.family, a, "tcp-connect")
+        _check_connect(host, t.family, a, USE_TCP_CONNECT)
         err = t.sock.connect_ex(_sockaddr(a))
         if err not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
             t.state = CLOSED
@@ -779,7 +784,7 @@ def wasi_sockets_udp_udp_socket_start_bind(
     def action() -> None:
         if u.state != UNBOUND:
             raise NetError("invalid-state")
-        _check_bind(host, u.family, a, "udp-bind")
+        _check_bind(host, u.family, a, USE_UDP_BIND)
         u.sock.bind(_sockaddr(a))
         u.state = BIND_IN_PROGRESS
 
@@ -818,7 +823,7 @@ def wasi_sockets_udp_udp_socket_stream(
         if u.state != BOUND:
             raise NetError("invalid-state")
         if a is not None:
-            _check_connect(host, u.family, a, "udp-connect")
+            _check_connect(host, u.family, a, USE_UDP_CONNECT)
         u.remote = a
     except NetError as exc:
         _fail(host, comp, retptr, retptr + 4, exc)
@@ -993,7 +998,7 @@ def wasi_sockets_udp_outgoing_datagram_stream_send(
                     if not has_remote:
                         raise NetError("invalid-argument")
                     target = _read_addr(host, comp, base + 12)
-                    _check_connect(host, u.family, target, "udp-outgoing")
+                    _check_connect(host, u.family, target, USE_UDP_OUTGOING)
                 try:
                     u.sock.sendto(data, _sockaddr(target))
                 except BlockingIOError:

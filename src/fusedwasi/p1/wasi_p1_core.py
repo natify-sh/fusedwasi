@@ -244,7 +244,6 @@ class Entry:
         self.inheriting = 0
         self.preopen: bytes | None = None  # the name the program sees, for a preopen
         self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
-        self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
 
 
 def filetype_of(mode: int) -> int:
@@ -273,8 +272,10 @@ class State:
         core: Host | None = None,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
         files: Files | None = None,
+        user: object = None,
     ) -> None:
         self.memory = memory
+        self.user = user  # the host's own: the library never reads or writes it (the twin of `fusedwasi_p1_state.user`)
         self.core = (
             core if core is not None else Host()
         )  # the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes
