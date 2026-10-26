@@ -32,7 +32,6 @@ from .wasi_p1_core import (
     E_NOTSOCK,
     E_SPIPE,
     E_SUCCESS,
-    END_EXIT,
     END_SIGNAL,
     FD_APPEND,
     FT_CHAR,
@@ -171,9 +170,7 @@ def sched_yield(s: State) -> int:
 
 
 def proc_exit(s: State, code: int) -> None:
-    if not s.finished:  # the program ends once: the first end is the one that stays
-        s.core.exited, s.core.exit_code = True, code
-    s.finish(END_EXIT, code)
+    s.core.exited, s.core.exit_code = True, code
     raise Exit(code)
 
 
@@ -184,7 +181,7 @@ def proc_raise(s: State, sig: int) -> int:
         return E_INVAL
     if sig == 0 or 16 <= sig <= 22 or sig == 27:
         return E_SUCCESS
-    s.finish(END_SIGNAL, sig)
+    s.finished, s.end_value = END_SIGNAL, sig
     raise Signal(sig)
 
 

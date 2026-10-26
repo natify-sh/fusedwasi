@@ -5,7 +5,7 @@
 
    There is no Python in this file. The state of 0.1 is over the state of WASI 0.2 (`fusedwasi_p2_state`, which the host fills: the arguments, the
    environment, the clocks, the random bytes, the sleep, the standard streams). The
-   end of the program is not a hook: `proc_exit` and `proc_raise` mark the state (`finished`, `end_value`), report a trap, and the host reads the state. The
+   end of the program is not a hook and not a state of the instance: it is what the call that ended it leaves, as the error `I32Exit` of Wasmtime is the result of that call. `proc_exit` records the code in the state of 0.2 (`exited`, `exit_code`), `proc_raise` the signal (`finished`, `end_value`), and both report a trap; the host reads them after the call and clears them before the next one. Nothing is closed and no later call is refused. The
    files are those of the system layer of 0.2 (wasi_p2_filesystem.h: the walk of a path confined below a directory and the calls on a name below it, for POSIX
    and for Windows); this file keeps the descriptors with their rights, the positions and the calls of 0.1. The host that has Python is wasi_python.h.
 
@@ -81,7 +81,7 @@
 
 typedef struct fusedwasi_p1_state fusedwasi_p1_state;
 
-enum { FUSEDWASI_P1_END_NONE = 0, FUSEDWASI_P1_END_EXIT, FUSEDWASI_P1_END_SIGNAL, FUSEDWASI_P1_END_TRAP };
+enum { FUSEDWASI_P1_END_NONE = 0, FUSEDWASI_P1_END_EXIT, FUSEDWASI_P1_END_SIGNAL }; /* how the last call ended; only a signal is kept in the state of 0.1 */
 
 
 /* errno of WASI (not the C library's): the whole list of the specification */
@@ -194,7 +194,7 @@ typedef struct {
 struct fusedwasi_p1_state {
     fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
     void *user;           /* the host's own state */
-    int finished;         /* the program is over: 0, or how it ended (FUSEDWASI_P1_END_*) */
+    int finished;         /* the last call ended by a signal: FUSEDWASI_P1_END_SIGNAL, or 0 (the host clears it before a call; proc_exit is in `core->exited`) */
     uint32_t end_value;   /* ... the signal of proc_raise (the code of proc_exit is `core->exit_code`) */
     uint8_t **memory_data;  /* where the base of the memory is kept (it moves when the memory grows) */
     uint64_t *memory_size;  /* ... and its size in bytes: the engine owns both, the core only reads them */
@@ -475,15 +475,6 @@ static inline void fusedwasi_p1_bind(fusedwasi_p1_state *w, uint8_t **data, uint
     w->memory_size = size;
 }
 
-/* The program is over (proc_exit, proc_raise, or a trap of a command): as on an operating system, what it opened is closed at once, and
-   the instance says so to any call afterwards. What the caller gave is not closed: the streams, and the directories of the host. */
-static inline void fusedwasi_p1_finish(fusedwasi_p1_state *w, int how, uint32_t value) {
-    if (w == NULL || w->finished) return;
-    w->finished = how;
-    w->end_value = value;
-    for (uint32_t i = 0; i < w->nentries; i++) fusedwasi_p1_release(&w->entries[i]);
-}
-
 /* ---- the memory of the instance (little-endian, as WebAssembly says) -------------------------------------------------- */
 
 static inline int fusedwasi_p1_in_memory(const fusedwasi_p1_state *w, uint32_t ptr, uint64_t len) {
@@ -624,11 +615,8 @@ static inline uint32_t fusedwasi_p1_sched_yield(void *s, int *trapped) {
 
 static inline void fusedwasi_p1_proc_exit(void *s, uint32_t code, int *trapped) {
     FUSEDWASI_P1_STATE(s);
-    if (!w->finished) {  /* the program ends once: the first end is the one that stays */
-        w->core->exited = 1;  /* the end of 0.2 is this one: the host reads `exited` and `exit_code` of the state of 0.2 for both families */
-        w->core->exit_code = code;
-    }
-    fusedwasi_p1_finish(w, FUSEDWASI_P1_END_EXIT, code);
+    w->core->exited = 1;  /* the end of 0.2 is this one: the host reads `exited` and `exit_code` of the state of 0.2 for both families */
+    w->core->exit_code = code;
     *trapped = 1;
 }
 
@@ -639,7 +627,8 @@ static inline uint32_t fusedwasi_p1_proc_raise(void *s, uint32_t sig, int *trapp
     FUSEDWASI_P1_STATE(s);
     if (sig > 30) return FUSEDWASI_P1_E_INVAL;
     if (sig == 0 || (sig >= 16 && sig <= 22) || sig == 27) return FUSEDWASI_P1_E_SUCCESS;  /* nothing ends */
-    fusedwasi_p1_finish(w, FUSEDWASI_P1_END_SIGNAL, sig);
+    w->finished = FUSEDWASI_P1_END_SIGNAL;
+    w->end_value = sig;
     *trapped = 1;
     return FUSEDWASI_P1_E_SUCCESS;
 }

@@ -87,7 +87,7 @@ T_ATIM, T_ATIM_NOW, T_MTIM, T_MTIM_NOW = 1, 2, 4, 8
 # the rights only a directory has: a program that asks for one of them along with the right to write (wasi-libc asks for all the rights there are) may mean a directory
 R_OF_DIRECTORY = sum(1 << n for n in (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 26))
 
-END_NONE, END_EXIT, END_SIGNAL, END_TRAP = range(4)
+END_NONE, END_EXIT, END_SIGNAL = range(3)
 
 K_NONE, K_STD, K_FILE, K_DIR = range(4)
 
@@ -283,8 +283,8 @@ class State:
 
             files = SystemFiles()
         self.files = files
-        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook: `proc_exit` and `proc_raise` mark the state (`finished`, `end_value`) and raise `Exit` or `Signal`. A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
-        self.finished = END_NONE  # the program is over: 0, or how it ended
+        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook and not a state of the instance: `proc_exit` records the code in `core` (`exited`, `exit_code`), `proc_raise` the signal here (`finished`, `end_value`), and both raise `Exit` or `Signal`; the host reads them after the call and clears them before the next. A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
+        self.finished = END_NONE  # the last call ended by a signal: END_SIGNAL, or 0 (the host clears it before a call; proc_exit is in `core.exited`)
         self.end_value = 0
         self.entries: list[Entry] = []
         for stream in range(3):
@@ -422,14 +422,6 @@ class State:
     def close_all(self) -> None:
         for entry in self.entries:
             self.release(entry)
-
-    def finish(self, how: int, value: int) -> None:
-        """The program is over (`proc_exit`, `proc_raise`, or a trap of a command): what it opened is closed at once, and the instance says so afterwards."""
-        if self.finished:
-            return
-        self.finished = how
-        self.end_value = value
-        self.close_all()
 
     def hooked(self, hook: Callable[..., Any] | None, *args: Any) -> tuple[int, Any]:
         """Calls a hook: (errno of WASI, result)."""
