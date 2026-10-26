@@ -10,7 +10,7 @@ import os
 import struct
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 INDEX_BITS = 20  # a handle is (generation << INDEX_BITS) | index; index 0 is never given out
 INDEX_MASK = (1 << INDEX_BITS) - 1
@@ -80,7 +80,7 @@ def _cpu_time_ns() -> int:
 _CLOCKS = (time.time_ns, time.monotonic_ns, time.process_time_ns, getattr(time, "thread_time_ns", _cpu_time_ns))
 
 
-def _resolution(name: str) -> int:
+def _resolution(name: Literal["time", "monotonic", "process_time", "thread_time"]) -> int:
     try:
         return max(1, round(time.get_clock_info(name).resolution * 1e9))
     except ValueError:
