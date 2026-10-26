@@ -10,6 +10,7 @@
 #include <winioctl.h>
 
 typedef const char *fusedwasi_p2_dirref; /* the path of the directory */
+#define FUSEDWASI_P2_DIRREF_OF(d) ((d)->path)
 
 #define FUSEDWASI_P2_REPARSE_SYMLINK 0xA000000CL
 #define FUSEDWASI_P2_REPARSE_MOUNT_POINT 0xA0000003L
@@ -563,7 +564,8 @@ typedef struct {
 
 FUSEDWASI_P2_FN void fusedwasi_p2_walk_close(fusedwasi_p2_walk *w) { w->depth = 0; }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_walk_path(fusedwasi_p2_walk *w, const fusedwasi_p2_descriptor *base_d, const uint8_t *path, uint32_t len, int follow) {
+/* `link_slash_not_dir`: a link with a slash after it, where links are not followed, is not a directory (WASI 0.1: uvwasi says so); else the walk follows it, below the base (Wasmtime) */
+FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fusedwasi_p2_descriptor *base_d, const uint8_t *path, uint32_t len, int follow, int link_slash_not_dir) {
     char work[FUSEDWASI_P2_PATH_MAX], name[FUSEDWASI_P2_NAME_MAX + 2], target[FUSEDWASI_P2_PATH_MAX];
     int links = 0;
     w->depth = 0;
@@ -617,7 +619,9 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path(fusedwasi_p2_walk *w, const fusedwasi
             if (!follow) {
                 /* a slash after a name makes a link there followed: the walk follows it itself, below the base */
                 /* (the whole target: this readlink says "too long" and not a cut, as readlinkat does) */
-                if (!(slash && fusedwasi_p2_sys_readlink(w->buf, name, target, sizeof target) == FUSEDWASI_P2_OK)) {
+                int is_link = slash && fusedwasi_p2_sys_readlink(w->buf, name, target, sizeof target) == FUSEDWASI_P2_OK;
+                if (is_link && link_slash_not_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
+                if (!is_link) {
                     strcpy(w->leaf, name);
                     if (slash) strcat(w->leaf, "/");
                     break;
@@ -662,6 +666,10 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path(fusedwasi_p2_walk *w, const fusedwasi
         cur = work;
     }
     return FUSEDWASI_P2_OK;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_walk_path(fusedwasi_p2_walk *w, const fusedwasi_p2_descriptor *base_d, const uint8_t *path, uint32_t len, int follow) {
+    return fusedwasi_p2_walk_path_with(w, base_d, path, len, follow, 0);
 }
 
 #endif /* FUSEDWASI_P2_FS_WIN32_H */

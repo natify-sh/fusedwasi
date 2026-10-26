@@ -357,8 +357,10 @@ else:
 # the walk of a path
 
 
-def _walk(base: Ref, path: bytes, follow: bool) -> tuple[Ref, bytes, list[int]]:
-    """(directory, name, descriptors to close): the directory that holds the last name of `path` and that name (`.` for none), the walk confined below `base`."""
+def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> tuple[Ref, bytes, list[int]]:
+    """(directory, name, descriptors to close): the directory that holds the last name of `path` and that name (`.` for none), the walk confined below `base`.
+
+    `link_slash_not_dir`: a link with a slash after it, where links are not followed, is not a directory (WASI 0.1: uvwasi says so); else the walk follows it, below the base (Wasmtime)."""
     if b"\0" in path:
         raise FsError("invalid")
     if not path:
@@ -409,6 +411,8 @@ def _walk(base: Ref, path: bytes, follow: bool) -> tuple[Ref, bytes, list[int]]:
                         except OSError:
                             pass  # not a link
                         else:
+                            if link_slash_not_dir:
+                                raise FsError("not-directory")
                             is_link = True
                     if not is_link:
                         leaf = name + (b"/" if slash else b"")
@@ -452,8 +456,8 @@ def _walk(base: Ref, path: bytes, follow: bool) -> tuple[Ref, bytes, list[int]]:
 class _Walked:
     """`with _Walked(base, path, follow) as (directory, name):` closes what the walk opened."""
 
-    def __init__(self, base: Ref, path: bytes, follow: bool) -> None:
-        self.directory, self.name, self.opened = _walk(base, path, follow)
+    def __init__(self, base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> None:
+        self.directory, self.name, self.opened = _walk(base, path, follow, link_slash_not_dir)
 
     def __enter__(self) -> tuple[Ref, bytes]:
         return self.directory, self.name
@@ -461,6 +465,27 @@ class _Walked:
     def __exit__(self, *exc: object) -> None:
         for fd in self.opened:
             os.close(fd)
+
+
+# The system layer, for the calls of WASI 0.1 (wasi_p1_files): what the walk and the descriptors stand on, and the calls on a name below a directory.
+sys_ref = _ref
+sys_walk = _walk
+SysWalked = _Walked
+sys_lstat = _lstat
+sys_readlink = _readlink
+sys_fstat = _fstat
+sys_mkdir = _mkdir
+sys_rmdir = _rmdir
+sys_unlink = _unlink
+sys_rename = _rename
+sys_link = _link
+sys_symlink = _symlink
+sys_utime = _utime
+sys_utime_fd = _utime_d
+sys_listdir = _listdir
+sys_open_at = _open_at
+sys_open_directory = _open_directory
+sys_error_name = ERROR_CODES
 
 
 # writing results

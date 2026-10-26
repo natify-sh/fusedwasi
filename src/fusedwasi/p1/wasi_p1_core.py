@@ -12,7 +12,6 @@ import errno as _errno
 import os
 import stat as _stat
 import struct
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -232,7 +231,7 @@ class Stat:
 class Entry:
     """An open descriptor: a standard stream, a file (an operating system descriptor) or a directory."""
 
-    __slots__ = ("fd", "filetype", "flags", "inheriting", "kind", "listing", "owns_fd", "preopen", "rights")
+    __slots__ = ("fd", "filetype", "flags", "inheriting", "kind", "listing", "owns_fd", "path", "preopen", "rights")
 
     def __init__(self, kind: int = K_NONE) -> None:
         self.kind = kind
@@ -240,6 +239,7 @@ class Entry:
         self.flags = 0  # fdflags
         self.fd = -1  # a file or a directory; for a standard stream, which one it is (0, 1 or 2)
         self.owns_fd = False
+        self.path: str | None = None  # a directory on Windows (where a directory has no descriptor): where it is
         self.rights = 0
         self.inheriting = 0
         self.preopen: bytes | None = None  # the name the program sees, for a preopen
@@ -280,14 +280,9 @@ class State:
             core if core is not None else Host()
         )  # the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes
         if files is None:  # the backend of the system's files; a host without files gives `Files()`
-            if sys.platform == "win32":
-                from .wasi_p1_files_win32 import Win32Files
+            from .wasi_p1_files import SystemFiles
 
-                files = Win32Files()
-            else:
-                from .wasi_p1_files_posix import PosixFiles
-
-                files = PosixFiles()
+            files = SystemFiles()
         self.files = files
         # the hooks: what the host decides (the standard streams, the end of the program); where one is absent the system's own is used. The clocks, the random bytes and the sleep are those of `core`. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
         self.end = end  # (how: END_EXIT or END_SIGNAL, value), told before the program is marked as over
@@ -301,16 +296,15 @@ class State:
         for index, item in enumerate(preopens):
             host, name = item[0], item[1]
             writable = item[2] if len(item) > 2 else True  # type: ignore[misc]
+            entry = Entry(K_DIR)
             try:
-                fd = self.files.preopen(host)
+                self.files.preopen(host, entry)
             except OSError as caught:
                 self.close_all()
                 failure = PreopenError(caught.errno, caught.strerror, host)
                 failure.index = index
                 raise failure from None
-            entry = Entry(K_DIR)
             entry.filetype = FT_DIR
-            entry.fd = fd
             entry.owns_fd = True
             entry.rights = entry.inheriting = R_ALL if writable else R_ALL & ~R_MUTATING
             entry.preopen = _bytes(name)
