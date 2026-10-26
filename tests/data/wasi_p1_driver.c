@@ -69,11 +69,6 @@ static int errno_of_wasi(int wasi) { return wasi == 28 ? EINVAL : wasi ? EIO : 0
 
 static int unstable;  /* the first snapshot: the calls that differ are those of wasi_p1_unstable.h */
 
-static void hook_end(void *user, int how, uint32_t value) {
-    (void)user;
-    printf("end %d %u\n", how, (unsigned)value);
-}
-
 /* one script line in tokens: words, or "quoted strings" with \n \0 \xHH \\ \" (a token ends with a NUL, and its length is kept: it may hold NULs) */
 static int tokenize(char *line, char *tokens[], size_t lens[]) {
     int n = 0;
@@ -274,7 +269,6 @@ int main(int argc, char **argv) {
                 core.clock = hook_clock;
                 core.random_bytes = hook_random;
                 core.sleep = hook_sleep;
-                cfg.hooks.end = hook_end;
             }
             int err = 0;
             size_t bad = 0;
@@ -338,7 +332,7 @@ int main(int argc, char **argv) {
             for (int k = 0; k < calls[i].nargs; k++) a[k] = strtoull(t[2 + k], NULL, 0);
             int trapped = 0;
             uint32_t rc = calls[i].fn(w, a, &trapped);
-            if (trapped) printf("%s trapped\n", t[1]);
+            if (trapped) printf("%s trapped\nend %d %u\n", t[1], w->finished, (unsigned)w->end_value);
             else printf("%s %u\n", t[1], (unsigned)rc);
         }
     }

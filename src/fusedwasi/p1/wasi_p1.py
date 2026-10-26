@@ -171,8 +171,6 @@ def sched_yield(s: State) -> int:
 
 
 def proc_exit(s: State, code: int) -> None:
-    if s.end is not None:
-        s.end(END_EXIT, code)
     s.finish(END_EXIT, code)
     raise Exit(code)
 
@@ -184,8 +182,6 @@ def proc_raise(s: State, sig: int) -> int:
         return E_INVAL
     if sig == 0 or 16 <= sig <= 22 or sig == 27:
         return E_SUCCESS
-    if s.end is not None:
-        s.end(END_SIGNAL, sig)
     s.finish(END_SIGNAL, sig)
     raise Signal(sig)
 

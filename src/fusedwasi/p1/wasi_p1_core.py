@@ -272,7 +272,6 @@ class State:
         *,
         core: Host | None = None,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
-        end: Callable[[int, int], None] | None = None,
         files: Files | None = None,
     ) -> None:
         self.memory = memory
@@ -284,8 +283,7 @@ class State:
 
             files = SystemFiles()
         self.files = files
-        # the hooks: what the host decides (the standard streams, the end of the program); where one is absent the system's own is used. The clocks, the random bytes and the sleep are those of `core`. A hook that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
-        self.end = end  # (how: END_EXIT or END_SIGNAL, value), told before the program is marked as over
+        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook: `proc_exit` and `proc_raise` mark the state (`finished`, `end_value`) and raise `Exit` or `Signal`. A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
         self.finished = END_NONE  # the program is over: 0, or how it ended
         self.end_value = 0
         self.entries: list[Entry] = []

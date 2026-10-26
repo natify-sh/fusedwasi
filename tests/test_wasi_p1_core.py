@@ -85,8 +85,9 @@ def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     assert "realtime e803000000000000" in lines  # the hook of the clock: 1000
     assert "out 1 68656c6c6f20" in lines and "nwritten 0c000000" in lines
     assert "prestat 0000000005000000" in lines  # a directory, the name "/data" is 5 bytes
-    assert lines[-4:] == ["end 1 7", "proc_exit trapped"] or "end 1 7" in lines
     assert "proc_raise trapped" in lines and "end 2 9" in lines
+    # the program ended by the signal 9; the call of proc_exit that follows traps, and the state keeps how the program ended first
+    assert lines[-2:] == ["proc_exit trapped", "end 2 9"]
 
 
 def test_what_the_second_stage_gives(tmp_path: Path) -> None:

@@ -4,7 +4,8 @@
    when it runs. See "Design: WASI" and "Design: C first, the seams" in DESIGN.md.
 
    There is no Python in this file. The state of 0.1 is over the state of WASI 0.2 (`fusedwasi_p2_state`, which the host fills: the arguments, the
-   environment, the clocks, the random bytes, the sleep, the standard streams); what is left of the hooks of `fusedwasi_p1_config` is the end of the program. The
+   environment, the clocks, the random bytes, the sleep, the standard streams). The
+   end of the program is not a hook: `proc_exit` and `proc_raise` mark the state (`finished`, `end_value`), report a trap, and the host reads the state. The
    files are those of the system layer of 0.2 (wasi_p2_filesystem.h: the walk of a path confined below a directory and the calls on a name below it, for POSIX
    and for Windows); this file keeps the descriptors with their rights, the positions and the calls of 0.1. The host that has Python is wasi_python.h.
 
@@ -171,15 +172,11 @@ typedef struct {
 } fusedwasi_p1_entry;
 
 
-/* ---- what the host gives: the configuration and the hooks ---------------------------------------------------------------- */
+/* ---- what the host gives: the configuration ------------------------------------------------------------------------------ */
 
-/* The return of a hook: 0 is success; a positive number is an errno of WASI (FUSEDWASI_P1_E_*) that the program is given as it is;
+/* The return of a hook of the host (of the state of 0.2): 0 is success; a positive number is an errno of WASI (FUSEDWASI_P1_E_*) that the program is given as it is;
    FUSEDWASI_P1_HOOK_TRAP is a trap of the call (the host keeps what it needs to report it: Python keeps its exception). */
 #define FUSEDWASI_P1_HOOK_TRAP 0x10000
-
-typedef struct {
-    void (*end)(void *user, int how, uint32_t value);  /* proc_exit, proc_raise: told before the program is marked as over */
-} fusedwasi_p1_hooks;
 
 typedef struct {
     const char *name;  /* what the program sees */
@@ -191,13 +188,11 @@ typedef struct {
 typedef struct {
     const fusedwasi_p1_preopen *preopens;
     size_t npreopens;
-    fusedwasi_p1_hooks hooks;
-    void *user;  /* the host's own state, given to every hook; never freed by the core */
+    void *user;  /* the host's own state; never freed by the core */
 } fusedwasi_p1_config;
 
 struct fusedwasi_p1_state {
     fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
-    fusedwasi_p1_hooks hooks;
     void *user;           /* the host's own state */
     int finished;         /* the program is over: 0, or how it ended (FUSEDWASI_P1_END_*) */
     uint32_t end_value;   /* ... the code of proc_exit, or the signal of proc_raise */
@@ -429,7 +424,6 @@ static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config 
         return NULL;
     }
     w->core = core;
-    w->hooks = cfg->hooks;
     w->user = cfg->user;
     w->nentries = 8;
     w->entries = (fusedwasi_p1_entry *)FUSEDWASI_P1_CALLOC(w->nentries, sizeof(fusedwasi_p1_entry));
@@ -488,15 +482,6 @@ static inline void fusedwasi_p1_finish(fusedwasi_p1_state *w, int how, uint32_t 
     w->finished = how;
     w->end_value = value;
     for (uint32_t i = 0; i < w->nentries; i++) fusedwasi_p1_release(&w->entries[i]);
-}
-
-/* the status of a hook as the result of a call: a trap is not an errno */
-static inline uint32_t fusedwasi_p1_hook_status(int rc, int *trapped) {
-    if (rc == FUSEDWASI_P1_HOOK_TRAP) {
-        *trapped = 1;
-        return 0;
-    }
-    return (uint32_t)rc;
 }
 
 /* ---- the memory of the instance (little-endian, as WebAssembly says) -------------------------------------------------- */
@@ -639,7 +624,6 @@ static inline uint32_t fusedwasi_p1_sched_yield(void *s, int *trapped) {
 
 static inline void fusedwasi_p1_proc_exit(void *s, uint32_t code, int *trapped) {
     FUSEDWASI_P1_STATE(s);
-    if (w->hooks.end != NULL) w->hooks.end(w->user, FUSEDWASI_P1_END_EXIT, code);
     fusedwasi_p1_finish(w, FUSEDWASI_P1_END_EXIT, code);
     *trapped = 1;
 }
@@ -651,7 +635,6 @@ static inline uint32_t fusedwasi_p1_proc_raise(void *s, uint32_t sig, int *trapp
     FUSEDWASI_P1_STATE(s);
     if (sig > 30) return FUSEDWASI_P1_E_INVAL;
     if (sig == 0 || (sig >= 16 && sig <= 22) || sig == 27) return FUSEDWASI_P1_E_SUCCESS;  /* nothing ends */
-    if (w->hooks.end != NULL) w->hooks.end(w->user, FUSEDWASI_P1_END_SIGNAL, sig);
     fusedwasi_p1_finish(w, FUSEDWASI_P1_END_SIGNAL, sig);
     *trapped = 1;
     return FUSEDWASI_P1_E_SUCCESS;

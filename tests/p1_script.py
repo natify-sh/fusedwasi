@@ -93,9 +93,6 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
     def hook_sleep(ns: int) -> None:
         out.append(f"sleep {ns}")
 
-    def hook_end(how: int, value: int) -> None:
-        out.append(f"end {how} {value}")
-
     for raw in script.read_text().splitlines():
         t = tokens(raw)
         if not t:
@@ -125,7 +122,6 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
                 Remote(memory) if remote else memory,
                 core=core,
                 preopens=preopens,
-                end=hook_end if hooks_on else None,
             )
         elif word == "stdin":
             stdin_data = t[1]
@@ -169,6 +165,7 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
                 out.append(f"{name} trapped" if name == "proc_exit" else f"{name} {result}")
             except (Exit, Signal):
                 out.append(f"{name} trapped")
+                out.append(f"end {state.finished} {state.end_value}")
     if state is not None:
         state.close_all()
     return out
