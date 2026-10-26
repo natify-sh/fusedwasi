@@ -217,6 +217,23 @@ int main(int argc, char **argv) {
         hs = u32(254);
         IO(input_stream_read, hs, 10, 260), show("read of a directory", 260, 12);
         fusedwasi_wasi_filesystem_types_filesystem_error_code(&s, 0, u32(268), 280), show("error code", 280, 2);
+    } else if (!strcmp(scenario, "child_dir")) {
+        /* a directory opened under a preopen has the permissions of the preopen, whatever flags were asked for */
+        fusedwasi_wasi_filesystem_preopens_get_directories(&s, 0, 0);
+        uint32_t lp = u32(0), hd = u32(lp), ro = u32(lp + 12);
+        uint32_t n = path("sub", 3);
+        FS(descriptor_open_at, hd, 0, 1000, n, 2, 1, 200), show("open sub in the writable preopen", 200, 8);
+        uint32_t d1 = u32(204);
+        FS(descriptor_get_flags, d1, 240), show("flags", 240, 2);
+        n = path("made", 4);
+        FS(descriptor_create_directory_at, d1, 1000, n, 250), show("create in it", 250, 8);
+        FS(descriptor_remove_directory_at, d1, 1000, n, 250), show("remove in it", 250, 8);
+        n = path("sub", 3);
+        FS(descriptor_open_at, ro, 0, 1000, n, 2, 1, 200), show("open sub in the read-only preopen", 200, 8);
+        uint32_t d2 = u32(204);
+        FS(descriptor_get_flags, d2, 240), show("flags", 240, 2);
+        n = path("made", 4);
+        FS(descriptor_create_directory_at, d2, 1000, n, 250), show("create in it", 250, 8);
     } else if (!strcmp(scenario, "bad_handle")) {
         FS(descriptor_get_flags, 12345, 0);
     } else if (!strcmp(scenario, "outside")) {

@@ -20,7 +20,7 @@ DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 LIBS: list[str] = ["-lbcrypt"] if sys.platform == "win32" else []  # the random bytes of the core
 
-SCENARIOS = ["main", "bad_handle", "outside"]
+SCENARIOS = ["main", "child_dir", "bad_handle", "outside"]
 
 
 def make_tree(root: Path) -> None:
@@ -321,6 +321,30 @@ def python_output(scenario: str, root: Path) -> str:
             r.show("read of a directory", 260, 12)
             fs.wasi_filesystem_types_filesystem_error_code(host, 0, r.u32(268), 280)
             r.show("error code", 280, 2)
+        elif scenario == "child_dir":
+            fs.wasi_filesystem_preopens_get_directories(host, 0, 0)
+            lp = r.u32(0)
+            hd, ro = r.u32(lp), r.u32(lp + 12)
+            n = r.path(b"sub")
+            fsc("descriptor_open_at", hd, 0, 1000, n, 2, 1, 200)
+            r.show("open sub in the writable preopen", 200, 8)
+            d1 = r.u32(204)
+            fsc("descriptor_get_flags", d1, 240)
+            r.show("flags", 240, 2)
+            n = r.path(b"made")
+            fsc("descriptor_create_directory_at", d1, 1000, n, 250)
+            r.show("create in it", 250, 8)
+            fsc("descriptor_remove_directory_at", d1, 1000, n, 250)
+            r.show("remove in it", 250, 8)
+            n = r.path(b"sub")
+            fsc("descriptor_open_at", ro, 0, 1000, n, 2, 1, 200)
+            r.show("open sub in the read-only preopen", 200, 8)
+            d2 = r.u32(204)
+            fsc("descriptor_get_flags", d2, 240)
+            r.show("flags", 240, 2)
+            n = r.path(b"made")
+            fsc("descriptor_create_directory_at", d2, 1000, n, 250)
+            r.show("create in it", 250, 8)
         elif scenario == "bad_handle":
             fsc("descriptor_get_flags", 12345, 0)
         elif scenario == "outside":
@@ -432,3 +456,13 @@ def test_walk_stays_below_the_directory(tmp_path: Path) -> None:
     finally:
         if base.fd >= 0:
             os.close(base.fd)
+
+
+def test_a_directory_has_the_permissions_of_the_directory_it_was_opened_under(tmp_path: Path) -> None:
+    """As in Wasmtime: a child directory gets the permissions of the preopen, not the flags that were asked for (the READ only of a program of WASI 0.1)."""
+    make_tree(tmp_path)
+    out = python_output("child_dir", tmp_path).splitlines()
+    assert out[1] == "flags 240:0021"  # READ and MUTATE, though READ only was asked for
+    assert out[2].endswith("0000000000000000") and out[3].endswith("0000000000000000")  # created and removed in it
+    assert out[4].startswith("open sub in the read-only") and out[5] == "flags 240:0001"
+    assert out[6].startswith("create in it 250:01")  # an error under the read-only preopen

@@ -577,7 +577,9 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_open_at(fusedwas
         if (rc == FUSEDWASI_P2_OK) {
             fusedwasi_p2_descriptor made;
             rc = fusedwasi_p2_sys_open_at(w.dir, w.leaf, open_flags, flags, &made);
-            if (rc == FUSEDWASI_P2_OK) handle = fusedwasi_p2_descriptor_new(s, &made, flags);
+            /* what a directory may do is what the directory it was opened under may do (as in Wasmtime, where a child directory gets the permissions of the preopen), and not
+               what was asked for: a program of WASI 0.1 opens a directory with the rights it needs to read it and then creates files in it */
+            if (rc == FUSEDWASI_P2_OK) handle = fusedwasi_p2_descriptor_new(s, &made, made.is_dir ? (d->flags & (FUSEDWASI_P2_READ | FUSEDWASI_P2_MUTATE)) : flags);
             fusedwasi_p2_walk_close(&w);
         }
     }

@@ -890,7 +890,10 @@ def wasi_filesystem_types_descriptor_open_at(
         if open_flags & (CREATE | TRUNCATE):
             _need(d, MUTATE)
         with _Walked(_ref(d), _path(host, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
-            handle = table_new(host, KIND_DESCRIPTOR, _open_at(parent, name, open_flags, flags))
+            made = _open_at(parent, name, open_flags, flags)
+            if made.is_dir:  # what a directory may do is what the directory it was opened under may do (as in Wasmtime), and not what was asked for
+                made.flags = d.flags & (READ | MUTATE)
+            handle = table_new(host, KIND_DESCRIPTOR, made)
     except FsError as exc:
         _fail(host, comp, retptr, retptr + 4, exc)
         return
