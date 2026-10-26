@@ -19,6 +19,10 @@ typedef const char *fusedwasi_p2_dirref; /* the path of the directory */
 #define FUSEDWASI_P2_SHARE (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
 #define FUSEDWASI_P2_EPOCH 116444736000000000ULL /* FILETIME (100 ns since 1601) of 1970 */
 
+/* copy a string that is known to fit (the callers check the size first), and add one: without the functions the CRT of Microsoft warns about (C4996) */
+FUSEDWASI_P2_FN void fusedwasi_p2_str_set(char *dst, const char *src) { memcpy(dst, src, strlen(src) + 1); }
+FUSEDWASI_P2_FN void fusedwasi_p2_str_add(char *dst, const char *src) { memcpy(dst + strlen(dst), src, strlen(src) + 1); }
+
 /* UTF-8 and UTF-16 */
 
 FUSEDWASI_P2_FN wchar_t *fusedwasi_p2_wide(const char *text) {
@@ -93,7 +97,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_target(const char *dir, const char *leaf, char 
     while (n && leaf[n - 1] == '/') n--, slash = 1;
     if (n == 0 || (n == 1 && leaf[0] == '.')) {
         if (strlen(dir) >= cap) return FUSEDWASI_P2_E_NAME_TOO_LONG;
-        strcpy(out, dir);
+        fusedwasi_p2_str_set(out, dir);
     } else {
         char bare[FUSEDWASI_P2_NAME_MAX + 2];
         if (n > FUSEDWASI_P2_NAME_MAX) return FUSEDWASI_P2_E_NAME_TOO_LONG;
@@ -353,7 +357,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_symlink(const char *target, fusedwasi_p2_di
     int rc = fusedwasi_p2_target(dir, leaf, full, sizeof full);
     if (rc != FUSEDWASI_P2_OK) return rc;
     if (strlen(target) >= sizeof text) return FUSEDWASI_P2_E_NAME_TOO_LONG;
-    strcpy(text, target);
+    fusedwasi_p2_str_set(text, target);
     for (char *p = text; *p; p++)
         if (*p == '/') *p = '\\';
     wchar_t *wf = fusedwasi_p2_wide(full), *wt = fusedwasi_p2_wide(text);
@@ -405,7 +409,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_open_at(fusedwasi_p2_dirref dir, const char
         out->fd = -1, out->is_dir = 1;
         out->path = (char *)malloc(strlen(full) + 1);
         if (!out->path) return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
-        strcpy(out->path, full);
+        fusedwasi_p2_str_set(out->path, full);
         return FUSEDWASI_P2_OK;
     }
     if ((open_flags & FUSEDWASI_P2_DIRECTORY) || (leaf_len && leaf[leaf_len - 1] == '/')) return exists ? FUSEDWASI_P2_E_NOT_DIRECTORY : FUSEDWASI_P2_E_NO_ENTRY;
@@ -425,7 +429,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_open_at(fusedwasi_p2_dirref dir, const char
         _close(fd);
         return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
     }
-    strcpy(out->path, full);
+    fusedwasi_p2_str_set(out->path, full);
     return FUSEDWASI_P2_OK;
 }
 
@@ -443,7 +447,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_open_directory(const char *path, fusedwasi_
     if (!fusedwasi_p2_utf8(wide, (int)n, text, sizeof text)) return FUSEDWASI_P2_E_NAME_TOO_LONG;
     out->path = (char *)malloc(strlen(text) + 1);
     if (!out->path) return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
-    strcpy(out->path, text);
+    fusedwasi_p2_str_set(out->path, text);
     out->fd = -1, out->is_dir = 1;
     return FUSEDWASI_P2_OK;
 }
@@ -533,7 +537,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
         }
         names[count] = (char *)malloc(strlen(text) + 1);
         if (!names[count]) s->trap(s, "out of memory");
-        strcpy(names[count++], text);
+        fusedwasi_p2_str_set(names[count++], text);
     } while (FindNextFileW(h, &fd));
     FindClose(h);
     qsort(names, count, sizeof *names, fusedwasi_p2_name_cmp);
@@ -571,7 +575,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
     w->depth = 0;
     w->dir = w->buf;
     if (strlen(base_d->path) >= sizeof w->buf) return FUSEDWASI_P2_E_NAME_TOO_LONG;
-    strcpy(w->buf, base_d->path);
+    fusedwasi_p2_str_set(w->buf, base_d->path);
     w->lens[0] = strlen(w->buf);
     if (memchr(path, 0, len)) return FUSEDWASI_P2_E_INVALID;
     if (len == 0) return FUSEDWASI_P2_E_NO_ENTRY; /* an empty name is no name (POSIX; Wasmtime says the same) */
@@ -583,7 +587,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
     for (;;) {
         while (*cur == '/') cur++;
         if (*cur == '\0') {
-            strcpy(w->leaf, ".");
+            fusedwasi_p2_str_set(w->leaf, ".");
             break;
         }
         char *end = strchr(cur, '/');
@@ -597,7 +601,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
         name[clen] = '\0';
         if (clen == 1 && name[0] == '.') {
             if (last) {
-                strcpy(w->leaf, ".");
+                fusedwasi_p2_str_set(w->leaf, ".");
                 break;
             }
             cur = rest;
@@ -608,7 +612,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
             w->depth--;
             w->buf[w->lens[w->depth]] = '\0';
             if (last) {
-                strcpy(w->leaf, ".");
+                fusedwasi_p2_str_set(w->leaf, ".");
                 break;
             }
             cur = rest;
@@ -622,8 +626,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
                 int is_link = slash && fusedwasi_p2_sys_readlink(w->buf, name, target, sizeof target) == FUSEDWASI_P2_OK;
                 if (is_link && link_slash_not_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
                 if (!is_link) {
-                    strcpy(w->leaf, name);
-                    if (slash) strcat(w->leaf, "/");
+                    fusedwasi_p2_str_set(w->leaf, name);
+                    if (slash) fusedwasi_p2_str_add(w->leaf, "/");
                     break;
                 }
             }
@@ -648,8 +652,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_walk_path_with(fusedwasi_p2_walk *w, const fuse
         int rc = fusedwasi_p2_sys_readlink(w->buf, name, target, sizeof target);
         if (rc != FUSEDWASI_P2_OK) {
             if (last) { /* not a link: this is the last name */
-                strcpy(w->leaf, name);
-                if (slash) strcat(w->leaf, "/");
+                fusedwasi_p2_str_set(w->leaf, name);
+                if (slash) fusedwasi_p2_str_add(w->leaf, "/");
                 break;
             }
             return FUSEDWASI_P2_E_NOT_DIRECTORY;
