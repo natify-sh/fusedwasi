@@ -583,7 +583,7 @@ class SystemFiles(Files):
             return failure(caught)
 
     def allocate(self, entry: Entry, offset: int, length: int) -> int:
-        if sys.platform != "darwin" and hasattr(os, "posix_fallocate"):
+        if sys.platform != "win32" and sys.platform != "darwin" and hasattr(os, "posix_fallocate"):
             try:  # space is really reserved (and can run out: NOSPC), and a descriptor that is not a file says so (SPIPE)
                 os.posix_fallocate(entry.fd, offset, length)
                 return E_SUCCESS
