@@ -1345,6 +1345,7 @@ static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_state *w, fusedwasi
     int code = itself ? FUSEDWASI_P2_E_INVALID : fusedwasi_p2_sys_readlink(walk.dir, walk.leaf, text, sizeof text);
     fusedwasi_p2_walk_close(&walk);
     if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
+    if (text[0] == '/') return FUSEDWASI_P1_E_PERM;  /* an absolute or rooted target is not shown, as readlink-at of 0.2 does (and path_symlink refuses to make one) */
     size_t n = strlen(text), room = cap < FUSEDWASI_P1_LINK_MAX ? cap : FUSEDWASI_P1_LINK_MAX;
     *used = cap ? (n < room ? n : room) : 0;  /* a buffer of 0 bytes still says whether this is a link */
     memcpy(out, text, *used);

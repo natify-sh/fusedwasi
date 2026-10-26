@@ -42,7 +42,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def make_tree(root: Path) -> None:
-    """The tree the scripts work on: a.txt, sub/b.txt, link, loop, dirlink, esc (out of the root), ro/ro.txt."""
+    """The tree the scripts work on: a.txt, sub/b.txt, link, loop, dirlink, abslink, esc (out of the root), ro/ro.txt."""
     root.mkdir()
     (root.parent / f"{root.name}-outside").mkdir()
     (root / "a.txt").write_bytes(b"hello file\n")
@@ -53,6 +53,7 @@ def make_tree(root: Path) -> None:
     (root / "link").symlink_to("a.txt")
     (root / "loop").symlink_to("loop")
     (root / "dirlink").symlink_to("sub", target_is_directory=True)
+    (root / "abslink").symlink_to("/etc")  # an absolute target: path_readlink does not show it
     (root / "esc").symlink_to(f"../{root.name}-outside", target_is_directory=True)
 
 
@@ -109,6 +110,10 @@ def test_what_the_second_stage_gives(tmp_path: Path) -> None:
     assert "size_after_set_size 0400000000000000" in lines and "size_after_trunc 0000000000000000" in lines
     assert "nlink 0200000000000000" in lines  # a hard link
     assert "readlink_data 68617264" in lines  # "hard"
+    assert (
+        lines.count("path_readlink 63") == 1
+    )  # PERM: the link to "/etc" is not shown (readlink-at of 0.2 says not-permitted, and Wasmtime PERM)
+    assert lines[lines.index("path_readlink 63") + 1] == "path_readlink 0"  # a relative one after it is read
     assert "fdstat_append 0400040000000000ffffff1f00000000ffffff1f00000000" in lines
 
 

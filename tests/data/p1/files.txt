@@ -244,6 +244,9 @@ mem dump 3400 4 readlink_cut_data
 call path_readlink 3 1000 4 3400 100 3500
 mem put 1000 "missing"
 call path_readlink 3 1000 7 3400 100 3500
+mem put 1000 "abslink"
+call path_readlink 3 1000 7 3400 100 3500
+call path_readlink 3 1100 3 3400 100 3500
 mem put 1000 "/abs"
 mem put 1100 "abs"
 call path_symlink 1000 4 3 1100 3
