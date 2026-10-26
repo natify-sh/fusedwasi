@@ -45,5 +45,5 @@ jobs:
           for %%v in (p1\wasi_p1_core.h p1\wasi_p1.h p1\wasi_p1_unstable.h) do (
             echo #include "%%~nxv"> check.c
             echo int main^(void^) { return 0; }>> check.c
-            cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 check.c || exit /b 1
+            cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 /I%INC%\p2 check.c || exit /b 1
           )

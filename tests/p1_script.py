@@ -104,13 +104,15 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             hooks_on = t[1] == b"on"
         elif word == "start":
             memory = bytearray(int(t[1]))
+            core = Host(
+                args=[a.decode() for a in args] or ["program"],
+                env=[(k.decode(), v.decode()) for k, _, v in (e.partition(b"=") for e in env)],
+            )
+            if hooks_on:
+                core.clock, core.random_bytes, core.sleep = hook_clock, hook_random, hook_sleep
             state = State(
                 Remote(memory) if remote else memory,
-                core=Host(
-                    args=args or ["program"],
-                    env=[tuple(v.decode().split("=", 1)) for v in env],  # type: ignore[misc]
-                    **({"clock": hook_clock, "random_bytes": hook_random, "sleep": hook_sleep} if hooks_on else {}),
-                ),
+                core=core,
                 preopens=preopens,
                 stdin_read=hook_stdin if hooks_on else None,
                 stdout_write=hook_stdout if hooks_on else None,
