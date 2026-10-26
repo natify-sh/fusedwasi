@@ -29,6 +29,8 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "-Werror",
             "-I",
             str(P1),
+            "-I",
+            str(P1.parent / "p2"),
             str(DATA / "wasi_p1_driver.c"),
             "-o",
             str(binary),

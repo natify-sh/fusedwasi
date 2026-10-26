@@ -39,6 +39,8 @@ def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> 
             "-Wall",
             "-I",
             str(C_P1),
+            "-I",
+            str(C_P1.parent / "p2"),
             str(CHECK),
             "-o",
             str(binary),

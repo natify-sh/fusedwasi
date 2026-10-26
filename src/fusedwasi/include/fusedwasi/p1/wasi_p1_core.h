@@ -57,7 +57,7 @@
 #endif
 #include <stdlib.h>
 #include <time.h>
-#include "../p2/wasi_p2_core.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
+#include "wasi_p2_core.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
 #if !FUSEDWASI_P1_DIRS_ARE_PATHS
 #include <dirent.h>
 #include <sys/stat.h>

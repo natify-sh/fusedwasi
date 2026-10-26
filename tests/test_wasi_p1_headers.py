@@ -30,6 +30,7 @@ def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path:
             "-Werror",
             "-fsyntax-only",
             f"-I{P1}",
+            f"-I{P1.parent / 'p2'}",
             str(source),
         ],
         check=True,
