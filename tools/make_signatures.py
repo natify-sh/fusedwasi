@@ -888,6 +888,59 @@ def attach_implementations(funcs: list[Func], key: str) -> None:
         f.extra.update(c_name=c_name, python_module=module, python_name=name, takes_comp=comp)
 
 
+def unstable_section(funcs: list[Func]) -> dict[str, Any]:
+    """The rows of `wasi_unstable` (the first snapshot), which have the signature of the same function of `wasi_snapshot_preview1` and differ only in what the function reads or writes in the memory.
+
+    Each row says which function of fusedwasi is the import: the five that differ are `fusedwasi_p1_unstable_<name>` in `wasi_p1_unstable`, the others are the functions of `wasi_p1` (`sock_accept` is not a
+    call of this snapshot: the Python module leaves it out). Every claim is checked against the headers and the Python files, as for the rest of the table."""
+    c_core = c_prototypes("p1")
+    c_unstable: dict[str, int] = {}
+    text = read_text(INCLUDE / "p1" / "wasi_p1_unstable.h")
+    for m in re.finditer(
+        r"FUSEDWASI_P1_FN\s+(?:uint32_t|void)\s+(fusedwasi_p1_unstable_\w+)\(\s*fusedwasi_p2_guest\s*\*g\s*(?:,([^)]*?))?\)",
+        text,
+        re.DOTALL,
+    ):
+        c_unstable[m.group(1)] = len([x for x in (m.group(2) or "").split(",") if x.strip()])
+    tree = ast.parse(read_text(PYTHON / "p1" / "wasi_p1_unstable.py"))
+    py_own = {
+        n.name: len(n.args.posonlyargs) + len(n.args.args) - 1
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+    }
+    py_all = set(py_own)
+    for n in tree.body:
+        if isinstance(n, ast.ImportFrom) and n.module == "wasi_p1" and n.level == 1:
+            py_all.update(x for x in (a.asname or a.name for a in n.names) if not x.startswith("_"))
+    table = {f.name: f for f in funcs}
+    if set(py_all) - set(table) or set(table) - py_all != {"sock_accept"}:
+        raise ValueError(
+            f"wasi_unstable: Python has {sorted(py_all)}, the table has {sorted(table)} (less sock_accept)"
+        )
+    if {k.removeprefix("fusedwasi_p1_unstable_") for k in c_unstable} != set(py_own):
+        raise ValueError(f"wasi_unstable: the headers have {sorted(c_unstable)}, Python defines {sorted(py_own)}")
+    rows: list[dict[str, Any]] = []
+    for f in funcs:
+        if f.name not in py_all:
+            continue
+        wire = len(f.params)
+        if f.name in py_own:
+            c_name, module = "fusedwasi_p1_unstable_" + f.name, "fusedwasi.p1.wasi_p1_unstable"
+            if c_unstable[c_name] != wire or py_own[f.name] != wire:
+                raise ValueError(f"wasi_unstable {f.name}: {wire} parameters in the table, {c_unstable[c_name]} in C")
+        else:
+            c_name, module = f.extra["c_name"], f.extra["python_module"]
+            if c_name not in c_core:
+                raise ValueError(f"wasi_unstable {f.name}: {c_name} is not in the headers")
+        rows.append({"name": f.name, "c_name": c_name, "python_module": module, "python_name": f.name})
+    return {
+        "module": "wasi_unstable",
+        "count": len(rows),
+        "differs": sorted(py_own),
+        "functions": rows,
+    }
+
+
 # ---- output -----------------------------------------------------------------------------------------------------------------
 
 
@@ -1001,6 +1054,7 @@ def generate() -> dict[str, bytes]:
             api = "wasi:*@" + sources["p2"]["version"]
             title = f"Protocols for the functions that a core module imports from WASI {sources['p2']['version']} (the lowered imports of `wasi:*@0.2.x`)."
             ref = f"the WIT of {sources['repository']} at {sources['p2']['tag']}"
+        unstable = unstable_section(funcs) if key == "p1" else None
         head: dict[str, Any] = {
             "schema": SCHEMA,
             "snapshot": key,
@@ -1010,6 +1064,8 @@ def generate() -> dict[str, bytes]:
             "count": len(funcs),
             "functions": [f.as_dict() for f in funcs],
         }
+        if unstable is not None:
+            head["unstable"] = unstable
         result[f"wasi_{key}.json"] = (dumps(head) + "\n").encode("utf-8")
         result[f"wasi_{key}_protocols.pyi"] = protocols(key, title, funcs, ref).encode("utf-8")
     return result

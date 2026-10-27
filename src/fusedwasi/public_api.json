@@ -379,7 +379,7 @@
           "Snapshot": "the type of the argument of `load` (\"p1\" or \"p2\")",
           "Param": "a flat parameter or result: name, type, role, source_type",
           "Function": "a row of the table (module, name, params, results, c_name, python_module, python_name, takes_comp; `python_function()`)",
-          "Signatures": "a table (`get`, `functions`)",
+          "Signatures": "a table (`get`, `functions`, `unstable`: the rows of `wasi_unstable`)",
           "load": "loads the table of a snapshot",
           "find_import": "the row for an import of a core module (0.1, or any `0.2.N`), or None",
           "get_signatures_path": "the directory with the tables"

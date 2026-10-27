@@ -12,7 +12,7 @@ import importlib
 import json
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -87,12 +87,15 @@ class Signatures:
     api: str
     source: dict[str, Any]
     functions: tuple[Function, ...]
+    unstable: tuple[
+        Function, ...
+    ] = ()  # "p1" only: the imports of `wasi_unstable` (the first snapshot), 45 of the 46 (not `sock_accept`); `functions` stays the table of `wasi_snapshot_preview1`
     _index: dict[tuple[str, str], Function] = field(
         default_factory=dict[tuple[str, str], Function], repr=False, compare=False
     )
 
     def get(self, module: str, name: str) -> Function | None:
-        """The function a core module imports as `(module, name)`, or None."""
+        """The function a core module imports as `(module, name)`, or None. Of "p1", `wasi_unstable` is found too."""
         return self._index.get((module, name))
 
     def __len__(self) -> int:
@@ -133,10 +136,29 @@ def load(snapshot: Snapshot) -> Signatures:
         )
         for f in data["functions"]
     )
-    return Signatures(data["snapshot"], data["api"], data["source"], functions, {f.key: f for f in functions})
+    by_name = {f.name: f for f in functions}
+    unstable = tuple(
+        replace(
+            by_name[u["name"]],
+            module=data["unstable"]["module"],
+            c_name=u["c_name"],
+            python_module=u["python_module"],
+            python_name=u["python_name"],
+        )
+        for u in data.get("unstable", {}).get("functions", ())
+    )
+    return Signatures(
+        data["snapshot"],
+        data["api"],
+        data["source"],
+        functions,
+        unstable,
+        {f.key: f for f in (*functions, *unstable)},
+    )
 
 
 _P1_MODULE = "wasi_snapshot_preview1"
+_UNSTABLE_MODULE = "wasi_unstable"
 _P2_IMPORT = re.compile(r"^(?P<interface>wasi:[a-z0-9-]+/[a-z0-9-]+)@(?P<major>\d+)\.(?P<minor>\d+)\.\d+$")
 
 
@@ -144,10 +166,13 @@ def find_import(module: str, name: str) -> Function | None:
     """The function for an import of a core module, as the module names it: `("wasi_snapshot_preview1", "fd_write")` or `("wasi:io/streams@0.2.6", "[method]output-stream.write")`.
 
     A package of WASI 0.2 is matched whatever its patch version is: `@0.2.N` finds the function of the table (which is of one version, `load("p2").api`) for any N, because
-    the versions of one major.minor are compatible; `@0.3.x` or `@1.x.y` find nothing. A name that is not in the table, a module that is neither of 0.1 nor of 0.2, and
-    `wasi_unstable` (the first snapshot, whose functions are `fusedwasi_p1_unstable_*` where they differ) give None.
+    the versions of one major.minor are compatible; `@0.3.x` or `@1.x.y` find nothing. `wasi_unstable` (the first
+    snapshot) is found too: the row has the signature of the same call of `wasi_snapshot_preview1` (they differ in what the call reads or writes in memory, not in the parameters) and its own
+    `module`, and `c_name` / `python_module` / `python_name` name the function to bind: `fusedwasi_p1_unstable_<name>` in `fusedwasi.p1.wasi_p1_unstable` for the five that differ (`fd_seek`,
+    `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`), `fusedwasi_p1_<name>` in `fusedwasi.p1.wasi_p1` for the others; `sock_accept` is not a call of that snapshot (None).
+    A name that is not in the table and a module that is neither of 0.1 nor of 0.2 give None.
     """
-    if module == _P1_MODULE:
+    if module in (_P1_MODULE, _UNSTABLE_MODULE):
         return load("p1").get(module, name)
     m = _P2_IMPORT.match(module)
     if m is None:

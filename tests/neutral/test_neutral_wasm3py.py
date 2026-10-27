@@ -96,3 +96,13 @@ def test_a_memory_that_is_not_a_buffer_gives_the_same_bytes(wat: str, tmp_path: 
     assert remote_instance is not None and remote_instance.remote is not None
     remote = remote_instance.remote
     assert 0 < remote.bytes_read + remote.bytes_written < len(remote_instance.memory()) // 4
+
+
+def test_a_module_of_the_first_snapshot_is_bound_by_the_public_table(tmp_path: Path) -> None:
+    """`find_import("wasi_unstable", ...)` answers: `fd_seek` of this snapshot orders `whence` as cur, end, set; the other calls are the ones of `wasi_snapshot_preview1`."""
+    root = tmp_path / "root"
+    root.mkdir()
+    state, out = world_p1(root)
+    assert user.Instance(module(program("p1_unstable.wat")), state).start() == (3, None)
+    expected = b"\0\0\0\0" + bytes(8) + b"abc12" + b"\0\0\0\0" + (3).to_bytes(8, "little")
+    assert bytes(out.data) == expected and (root / "u.txt").read_bytes() == b"abc12"

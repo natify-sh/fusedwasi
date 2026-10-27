@@ -900,5 +900,63 @@
         {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
       ]
     }
-  ]
+  ],
+  "unstable": {
+    "module": "wasi_unstable",
+    "count": 45,
+    "differs": [
+      "fd_fdstat_get",
+      "fd_filestat_get",
+      "fd_seek",
+      "path_filestat_get",
+      "poll_oneoff"
+    ],
+    "functions": [
+      {"name": "args_get", "c_name": "fusedwasi_p1_args_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "args_get"},
+      {"name": "args_sizes_get", "c_name": "fusedwasi_p1_args_sizes_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "args_sizes_get"},
+      {"name": "environ_get", "c_name": "fusedwasi_p1_environ_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "environ_get"},
+      {"name": "environ_sizes_get", "c_name": "fusedwasi_p1_environ_sizes_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "environ_sizes_get"},
+      {"name": "clock_res_get", "c_name": "fusedwasi_p1_clock_res_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "clock_res_get"},
+      {"name": "clock_time_get", "c_name": "fusedwasi_p1_clock_time_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "clock_time_get"},
+      {"name": "fd_advise", "c_name": "fusedwasi_p1_fd_advise", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_advise"},
+      {"name": "fd_allocate", "c_name": "fusedwasi_p1_fd_allocate", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_allocate"},
+      {"name": "fd_close", "c_name": "fusedwasi_p1_fd_close", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_close"},
+      {"name": "fd_datasync", "c_name": "fusedwasi_p1_fd_datasync", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_datasync"},
+      {"name": "fd_fdstat_get", "c_name": "fusedwasi_p1_unstable_fd_fdstat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_fdstat_get"},
+      {"name": "fd_fdstat_set_flags", "c_name": "fusedwasi_p1_fd_fdstat_set_flags", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_fdstat_set_flags"},
+      {"name": "fd_fdstat_set_rights", "c_name": "fusedwasi_p1_fd_fdstat_set_rights", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_fdstat_set_rights"},
+      {"name": "fd_filestat_get", "c_name": "fusedwasi_p1_unstable_fd_filestat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_filestat_get"},
+      {"name": "fd_filestat_set_size", "c_name": "fusedwasi_p1_fd_filestat_set_size", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_filestat_set_size"},
+      {"name": "fd_filestat_set_times", "c_name": "fusedwasi_p1_fd_filestat_set_times", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_filestat_set_times"},
+      {"name": "fd_pread", "c_name": "fusedwasi_p1_fd_pread", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_pread"},
+      {"name": "fd_prestat_get", "c_name": "fusedwasi_p1_fd_prestat_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_prestat_get"},
+      {"name": "fd_prestat_dir_name", "c_name": "fusedwasi_p1_fd_prestat_dir_name", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_prestat_dir_name"},
+      {"name": "fd_pwrite", "c_name": "fusedwasi_p1_fd_pwrite", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_pwrite"},
+      {"name": "fd_read", "c_name": "fusedwasi_p1_fd_read", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_read"},
+      {"name": "fd_readdir", "c_name": "fusedwasi_p1_fd_readdir", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_readdir"},
+      {"name": "fd_renumber", "c_name": "fusedwasi_p1_fd_renumber", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_renumber"},
+      {"name": "fd_seek", "c_name": "fusedwasi_p1_unstable_fd_seek", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_seek"},
+      {"name": "fd_sync", "c_name": "fusedwasi_p1_fd_sync", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_sync"},
+      {"name": "fd_tell", "c_name": "fusedwasi_p1_fd_tell", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_tell"},
+      {"name": "fd_write", "c_name": "fusedwasi_p1_fd_write", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_write"},
+      {"name": "path_create_directory", "c_name": "fusedwasi_p1_path_create_directory", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_create_directory"},
+      {"name": "path_filestat_get", "c_name": "fusedwasi_p1_unstable_path_filestat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "path_filestat_get"},
+      {"name": "path_filestat_set_times", "c_name": "fusedwasi_p1_path_filestat_set_times", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_filestat_set_times"},
+      {"name": "path_link", "c_name": "fusedwasi_p1_path_link", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_link"},
+      {"name": "path_open", "c_name": "fusedwasi_p1_path_open", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_open"},
+      {"name": "path_readlink", "c_name": "fusedwasi_p1_path_readlink", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_readlink"},
+      {"name": "path_remove_directory", "c_name": "fusedwasi_p1_path_remove_directory", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_remove_directory"},
+      {"name": "path_rename", "c_name": "fusedwasi_p1_path_rename", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_rename"},
+      {"name": "path_symlink", "c_name": "fusedwasi_p1_path_symlink", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_symlink"},
+      {"name": "path_unlink_file", "c_name": "fusedwasi_p1_path_unlink_file", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_unlink_file"},
+      {"name": "poll_oneoff", "c_name": "fusedwasi_p1_unstable_poll_oneoff", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "poll_oneoff"},
+      {"name": "proc_exit", "c_name": "fusedwasi_p1_proc_exit", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "proc_exit"},
+      {"name": "proc_raise", "c_name": "fusedwasi_p1_proc_raise", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "proc_raise"},
+      {"name": "sched_yield", "c_name": "fusedwasi_p1_sched_yield", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sched_yield"},
+      {"name": "random_get", "c_name": "fusedwasi_p1_random_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "random_get"},
+      {"name": "sock_recv", "c_name": "fusedwasi_p1_sock_recv", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_recv"},
+      {"name": "sock_send", "c_name": "fusedwasi_p1_sock_send", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_send"},
+      {"name": "sock_shutdown", "c_name": "fusedwasi_p1_sock_shutdown", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_shutdown"}
+    ]
+  }
 }

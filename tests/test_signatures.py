@@ -331,13 +331,13 @@ def test_find_import_matches_any_patch_version_of_0_2() -> None:
         "wasi:io/streams@0.2",
         "wasi:nothing/here@0.2.6",
         "env",
-        "wasi_unstable",
     ):
         assert find(module, "[method]input-stream.read") is None, module
     assert find("wasi:io/streams@0.2.6", "no-such-function") is None
     assert find("wasi_snapshot_preview1", "fd_write") is signatures.load("p1").get("wasi_snapshot_preview1", "fd_write")
     assert find("wasi_snapshot_preview1", "no_such") is None
-    assert find("wasi_unstable", "fd_write") is None
+    assert find("wasi_unstable", "no_such") is None
+    assert find("wasi_unstable", "sock_accept") is None  # not a call of the first snapshot
 
 
 def test_every_import_of_the_table_is_found_and_bound() -> None:
@@ -346,6 +346,56 @@ def test_every_import_of_the_table_is_found_and_bound() -> None:
             assert signatures.find_import(f.module, f.name) is f
             if f.c_name is not None:
                 assert callable(f.python_function())
+
+
+FIVE = {
+    "fd_seek",
+    "fd_fdstat_get",
+    "fd_filestat_get",
+    "path_filestat_get",
+    "poll_oneoff",
+}  # what `wasi_unstable` reads or writes differently
+
+
+def test_every_import_of_wasi_unstable_is_found_and_bound() -> None:
+    """The first snapshot has its own rows: 45 of the 46 calls; the five that differ are bound to `fusedwasi_p1_unstable_*` and `wasi_p1_unstable`, the others to the functions of `wasi_p1`."""
+    table = signatures.load("p1")
+    assert {f.name for f in table.unstable} == {f.name for f in table.functions} - {"sock_accept"} and len(
+        table.unstable
+    ) == 45
+    assert len(table) == 46 and all(
+        f.module == "wasi_snapshot_preview1" for f in table.functions
+    )  # the table of the current snapshot is as it was
+    current, unstable = p1_c_functions()
+    for row in table.unstable:
+        assert signatures.find_import("wasi_unstable", row.name) is row and table.get("wasi_unstable", row.name) is row
+        base = table.get("wasi_snapshot_preview1", row.name)
+        assert base is not None and row.module == "wasi_unstable"
+        # the signature is the same: they differ in what the call reads or writes in memory, not in the parameters
+        assert (row.params, row.results, row.protocol, row.doc) == (base.params, base.results, base.protocol, base.doc)
+        assert row.takes_comp is False and row.python_name == row.name
+        if row.name in FIVE:
+            assert row.c_name == "fusedwasi_p1_unstable_" + row.name and row.name in unstable
+            assert row.python_module == "fusedwasi.p1.wasi_p1_unstable"
+            assert row.python_function() is getattr(wasi_p1_unstable, row.name)
+            assert row.python_function() is not getattr(wasi_p1, row.name)
+            assert row.c_name != base.c_name and row.python_function() is not base.python_function()
+        else:
+            assert row.c_name == "fusedwasi_p1_" + row.name == base.c_name and row.name in current
+            assert row.python_module == "fusedwasi.p1.wasi_p1"
+            assert row.python_function() is getattr(wasi_p1, row.name) is getattr(wasi_p1_unstable, row.name)
+            assert (row.c_name, row.python_module) == (base.c_name, base.python_module)
+    assert {f.name for f in table.unstable if f.name in FIVE} == FIVE
+
+
+def test_the_json_of_the_unstable_rows_is_additive() -> None:
+    """Schema 1 stays and no field of the table moved: the rows of `wasi_unstable` are a key beside `functions`."""
+    data = json.loads((SIGS / "wasi_p1.json").read_text(encoding="utf-8"))
+    assert data["schema"] == 1 and data["count"] == len(data["functions"]) == 46
+    assert data["unstable"]["module"] == "wasi_unstable" and data["unstable"]["count"] == 45
+    assert set(data["unstable"]["differs"]) == FIVE
+    assert all(set(row) == {"name", "c_name", "python_module", "python_name"} for row in data["unstable"]["functions"])
+    assert "unstable" not in json.loads((SIGS / "wasi_p2.json").read_text(encoding="utf-8"))
 
 
 C_WASM_TYPE = {"uint32_t": "i32", "uint64_t": "i64", "float": "f32", "double": "f64"}

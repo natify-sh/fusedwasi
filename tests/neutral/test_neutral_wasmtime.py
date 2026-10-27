@@ -71,6 +71,15 @@ def test_two_instances_over_one_state_share_the_descriptors_and_nothing_else(eng
     assert first.memory()[5000:5004] == b"AAAA" and second.memory()[5000:5004] == b"\0\0\0\0"  # two memories
 
 
+def test_a_module_of_the_first_snapshot_is_bound_by_the_public_table(engine: wt.Engine, tmp_path: Path) -> None:
+    """`find_import("wasi_unstable", ...)` answers: `fd_seek` of this snapshot orders `whence` as cur, end, set; the other calls are the ones of `wasi_snapshot_preview1`."""
+    (tmp_path / "root").mkdir()
+    state, out = world_p1(tmp_path / "root")
+    assert user.Instance(engine, program("p1_unstable.wat"), state).start() == user.Outcome(exit_code=3)
+    expected = b"\0\0\0\0" + bytes(8) + b"abc12" + b"\0\0\0\0" + (3).to_bytes(8, "little")
+    assert bytes(out.data) == expected and (tmp_path / "root" / "u.txt").read_bytes() == b"abc12"
+
+
 def test_the_end_of_a_call_is_cleared_by_the_caller(engine: wt.Engine, tmp_path: Path) -> None:
     (tmp_path / "root").mkdir()
     state, _ = world_p1(tmp_path / "root")
