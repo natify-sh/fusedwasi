@@ -62,12 +62,22 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     objects: list[str] = []
     for name in WASM3_SOURCES:  # the engine as it is, with its own warnings
         subprocess.run(
-            [CC, "-O1", "-w", "-c", f"-I{source}", str(source / f"{name}.c"), "-o", str(work / f"{name}.o")], check=True
+            [
+                CC,
+                "-O1",
+                "-w",
+                "-fno-sanitize=all",
+                "-c",
+                f"-I{source}",
+                str(source / f"{name}.c"),
+                "-o",
+                str(work / f"{name}.o"),
+            ],
+            check=True,
         )
         objects.append(str(work / f"{name}.o"))
-    # the user, with the warnings on and as errors. `-Wno-unused-parameter`: the header of 0.1 does not pass -Wextra without it (see docs/design_model.md, section 11)
-    # no optimisation: with -O1 GCC 13 gives about forty -Wmaybe-uninitialized from the headers (`fusedwasi_p2_stat` after a call that fills it); see docs/design_model.md, section 11
-    flags = ["-std=gnu11", "-O0", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Werror"]
+    # the user, with the warnings on and as errors, optimised (a warning of the headers can appear only when the compiler optimises)
+    flags = ["-std=gnu11", "-O2", "-g", "-Wall", "-Wextra", "-Werror"]
     paths = [f"-I{source}", f"-I{include}", f"-I{work}"]
     out = work / "neutral_wasm3"
     subprocess.run([CC, *flags, *paths, str(HERE / "neutral_wasm3.c"), *objects, "-lm", "-o", str(out)], check=True)

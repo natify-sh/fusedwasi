@@ -43,24 +43,32 @@ def raw_function(
 ) -> str:
     """The text of one raw function of wasm3. The arguments are copied out of the stack of wasm3 first: a call back into the module (the `cabi_realloc` of a result) reuses it."""
     results = len(row.results)
-    lines = [
+    params = [WIDTH[p.type][0] for p in row.params]
+    # the call into fusedwasi is in a function of its own that is not inlined, so that the setjmp of the raw function has nothing of the library in its frame (-Wclobbered)
+    inner_parameters = ", ".join(
+        ["neutral_inst *in", *[f"{t} a{i}" for i, t in enumerate(params)], *(["int *trapped"] if trapped else [])]
+    )
+    inner_arguments = ", ".join(
+        [guest, *([extra] if extra else []), *[f"a{i}" for i in range(len(params))], *(["trapped"] if trapped else [])]
+    )
+    lines: list[str] = [
+        f"static NEUTRAL_NOINLINE {returns} {name}_call({inner_parameters}) {{",
+        f"    {'return ' if returns != 'void' else ''}{c_function}({inner_arguments});",
+        "}",
         f"static const void *{name}(IM3Runtime rt, IM3ImportContext ctx, uint64_t *sp, void *mem) {{",
         "    neutral_inst *in = (neutral_inst *)ctx->userdata;",
         "    (void)mem;",
     ]
-    arguments: list[str] = []
-    for i, param in enumerate(row.params):
-        ctype = WIDTH[param.type][0]
+    for i, ctype in enumerate(params):
         lines.append(f"    {ctype} a{i};")
         lines.append(f"    memcpy(&a{i}, &sp[{results + i}], sizeof a{i});")
-        arguments.append(f"a{i}")
-    call_arguments = ", ".join([guest, *([extra] if extra else []), *arguments, *(["&trapped"] if trapped else [])])
+    call_arguments = ", ".join(["in", *[f"a{i}" for i in range(len(params))], *(["&trapped"] if trapped else [])])
     if trapped:
         lines.append("    int trapped = 0;")
     if returns != "void":
         lines.append(f"    {returns} r = 0;")
     assignment = "r = " if returns != "void" else ""
-    lines.append(f"    NEUTRAL_RUN(in, rt, {assignment}{c_function}({call_arguments}));")
+    lines.append(f"    NEUTRAL_RUN(in, rt, {assignment}{name}_call({call_arguments}));")
     if trapped:
         lines.append("    if (trapped) return neutral_trapped(in);")
     if returns != "void":

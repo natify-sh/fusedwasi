@@ -34,6 +34,12 @@
 
 #include "wasm3.h"
 
+#if defined(__GNUC__)
+#define NEUTRAL_NOINLINE __attribute__((noinline))
+#else
+#define NEUTRAL_NOINLINE
+#endif
+
 /* ---- one instance ---------------------------------------------------------------------------------------------------------- */
 
 typedef struct neutral_inst {

@@ -25,7 +25,6 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "-std=gnu11",
             "-Wall",
             "-Wextra",
-            "-Wno-unused-parameter",
             "-Werror",
             "-I",
             str(P1),

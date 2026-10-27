@@ -180,11 +180,13 @@ FUSEDWASI_P2_FN int fusedwasi_p2_win_is_link(const char *path) {
 
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_lstat(fusedwasi_p2_dirref dir, const char *leaf, fusedwasi_p2_stat *out) {
     char full[FUSEDWASI_P2_PATH_MAX];
+    memset(out, 0, sizeof *out); /* as the POSIX one: the struct is whole whatever happens */
     int rc = fusedwasi_p2_target(dir, leaf, full, sizeof full);
     return rc != FUSEDWASI_P2_OK ? rc : fusedwasi_p2_win_stat_path(full, 0, out);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_fstat(const fusedwasi_p2_descriptor *d, fusedwasi_p2_stat *out) {
+    memset(out, 0, sizeof *out);
     if (d->fd >= 0) {
         HANDLE h = (HANDLE)_get_osfhandle(d->fd);
         return h == INVALID_HANDLE_VALUE ? FUSEDWASI_P2_E_BAD_DESCRIPTOR : fusedwasi_p2_win_stat_handle(h, out);

@@ -86,9 +86,6 @@ def p1_c_functions() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
             re.DOTALL,
         ):
             found[m.group(1)] = c_params(m.group(2))
-        # the four calls on sockets are made by a macro: `fd` and the parameters it is given
-        for m in re.finditer(r"^FUSEDWASI_P1_SOCKET\((\w+),([^)]*)\)", text, re.MULTILINE):
-            found[m.group(1)] = ["uint32_t fd", *c_params(m.group(2))]
     unstable = {k.removeprefix("unstable_"): v for k, v in found.items() if k.startswith("unstable_")}
     return {k: v for k, v in found.items() if not k.startswith("unstable_")}, unstable
 

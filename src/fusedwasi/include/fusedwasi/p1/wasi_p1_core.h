@@ -1225,7 +1225,7 @@ static inline int fusedwasi_p1_leaf_slash(fusedwasi_p2_dirref parent, const char
 static inline uint32_t fusedwasi_p1_be_mkdir(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int *trapped) {
     (void)trapped;
     fusedwasi_p2_walk walk;
-    int itself;
+    int itself = 0;
     uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
     if (rc) return rc;
     int code = itself ? FUSEDWASI_P2_E_EXIST : fusedwasi_p2_sys_mkdir(walk.dir, walk.leaf);
@@ -1236,7 +1236,7 @@ static inline uint32_t fusedwasi_p1_be_mkdir(fusedwasi_p1_guest *g, fusedwasi_p1
 static inline uint32_t fusedwasi_p1_be_remove(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped) {
     (void)trapped;
     fusedwasi_p2_walk walk;
-    int itself;
+    int itself = 0;
     uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
     if (rc) return rc;
     int code = itself ? FUSEDWASI_P2_E_INVALID : isdir ? fusedwasi_p2_sys_rmdir(walk.dir, walk.leaf) : fusedwasi_p2_sys_unlink(walk.dir, walk.leaf);
@@ -1291,7 +1291,7 @@ static inline uint32_t fusedwasi_p1_be_times_path(fusedwasi_p1_guest *g, fusedwa
 /* the two directories and names of rename and link; both walks have to be closed by the caller */
 static inline uint32_t fusedwasi_p1_be_pair(fusedwasi_p1_guest *g, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow, fusedwasi_p1_entry *d2,
                                     uint32_t p2, uint32_t l2, fusedwasi_p2_walk *walk1, fusedwasi_p2_walk *walk2) {
-    int itself1, itself2;
+    int itself1 = 0, itself2 = 0;
     uint32_t rc = fusedwasi_p1_be_walk(g, d1, p1, l1, follow, walk1, &itself1);
     if (rc) return rc;
     rc = fusedwasi_p1_be_walk(g, d2, p2, l2, 0, walk2, &itself2);
@@ -1340,7 +1340,7 @@ static inline uint32_t fusedwasi_p1_be_symlink(fusedwasi_p1_guest *g, const unsi
     memcpy(text, target, tlen);
     text[tlen] = '\0';
     fusedwasi_p2_walk walk;
-    int itself;
+    int itself = 0;
     uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
     if (rc) return rc;
     int code = itself ? FUSEDWASI_P2_E_EXIST : fusedwasi_p1_leaf_slash(walk.dir, walk.leaf);
@@ -1353,7 +1353,7 @@ static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_guest *g, fusedwasi
                                         size_t *used, int *trapped) {
     (void)trapped;
     fusedwasi_p2_walk walk;
-    int itself;
+    int itself = 0;
     uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
     if (rc) return rc;
     char text[FUSEDWASI_P1_LINK_MAX + 2];  /* the whole target: the layer says "too long" for a buffer that is too small (Windows), and 0.1 cuts it to the room it has */
@@ -1368,6 +1368,7 @@ static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_guest *g, fusedwasi
 }
 
 static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e, fusedwasi_p1_dirlist *list, int *trapped) {
+    (void)g;
     (void)trapped;
     char **names;
     uint8_t *types;
@@ -1801,6 +1802,7 @@ static inline uint32_t fusedwasi_p1_path_readlink(void *vg, uint32_t fd, uint32_
 /* how long a clock subscription still has to wait (0: it is due), or an errno of WASI */
 static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p1_guest *g, uint32_t sub, int legacy, uint64_t entry_now[2], int have[2],
                                               uint64_t *wait, int *trapped) {
+    (void)trapped;
     uint32_t shift = legacy ? 8 : 0;
     uint32_t id = 0, flags16 = 0;
     uint64_t timeout = 0;
@@ -2021,16 +2023,26 @@ static inline uint32_t fusedwasi_p1_poll_oneoff(void *vg, uint32_t in, uint32_t 
 /* ---- sockets: a program cannot make one, so there is none to speak of --------------------------------------------------------- */
 
 /* a descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor */
-#define FUSEDWASI_P1_SOCKET(name, ...) \
-    static inline uint32_t fusedwasi_p1_##name(void *vg, uint32_t fd, __VA_ARGS__, int *trapped) { \
-        FUSEDWASI_P1_GUEST(vg); \
-        (void)trapped; \
-        return fusedwasi_p1_entry_of(g, fd) == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_NOTSOCK; \
-    }
+#define FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped) \
+    FUSEDWASI_P1_GUEST(vg); \
+    (void)trapped; \
+    return fusedwasi_p1_entry_of(g, fd) == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_NOTSOCK
 
-FUSEDWASI_P1_SOCKET(sock_accept, uint32_t b, uint32_t c)
-FUSEDWASI_P1_SOCKET(sock_recv, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)
-FUSEDWASI_P1_SOCKET(sock_send, uint32_t b, uint32_t c, uint32_t d, uint32_t e)
-FUSEDWASI_P1_SOCKET(sock_shutdown, uint32_t b)
+static inline uint32_t fusedwasi_p1_sock_accept(void *vg, uint32_t fd, uint32_t flags, uint32_t result, int *trapped) {
+    (void)flags, (void)result;
+    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+}
+static inline uint32_t fusedwasi_p1_sock_recv(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nread, uint32_t roflags, int *trapped) {
+    (void)iovs, (void)count, (void)flags, (void)nread, (void)roflags;
+    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+}
+static inline uint32_t fusedwasi_p1_sock_send(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nsent, int *trapped) {
+    (void)iovs, (void)count, (void)flags, (void)nsent;
+    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+}
+static inline uint32_t fusedwasi_p1_sock_shutdown(void *vg, uint32_t fd, uint32_t how, int *trapped) {
+    (void)how;
+    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+}
 
 #endif

@@ -84,7 +84,7 @@ Not compared: the byte text of the three versions function by function (their sy
 
 ## What the tests compare (`tests/test_signatures.py`)
 
-- The twins and the table have the same functions. Python of 0.1: the 46, plus three helpers that are not imports (`errno_of`, `filestat_of_fd`, `filestat_of_path`). C of 0.1: the 46 (the four on sockets are made by a macro) and the five `fusedwasi_p1_unstable_*`. 0.2: Python and C have the same 201 functions; the table has three more, all `@unstable` in the WIT and left out on purpose (`wasi:clocks/timezone` `display` and `utc-offset`, `[method]response-outparam.send-informational`); `network-error-code`, the fourth unstable one, is implemented. The three are listed with their reasons in `P2_NOT_IMPLEMENTED` in the test.
+- The twins and the table have the same functions. Python of 0.1: the 46, plus three helpers that are not imports (`errno_of`, `filestat_of_fd`, `filestat_of_path`). C of 0.1: the 46 and the five `fusedwasi_p1_unstable_*`. 0.2: Python and C have the same 201 functions; the table has three more, all `@unstable` in the WIT and left out on purpose (`wasi:clocks/timezone` `display` and `utc-offset`, `[method]response-outparam.send-informational`); `network-error-code`, the fourth unstable one, is implemented. The three are listed with their reasons in `P2_NOT_IMPLEMENTED` in the test.
 - The number of parameters of each Python and each C function equals the table's (for 0.2 without the `comp` of the call; for 0.1 without the state `s` and the C `trapped`). All 46 and all 201 agree.
 - A Python function of 0.2 returns a value exactly when the table has a flat result.
 
@@ -100,7 +100,6 @@ The implementations were **not** renamed. Positions agree everywhere, and so do 
 - A variant, option or result is flattened to `name_tag`, `name_val0`, ...; the implementations use short names of their own (`a_tag`, `a_seconds`, `opt_tag`, `tag`).
 - Names of the witx that the implementations shorten or replace: `id` (`ident` in Python), `rval` (`code`), `len` (`length`), `buf_len` (`size`), `fs_rights_base`/`fs_rights_inheriting` (`base`/`inheriting`), `fst_flags` (`flags`), `ri_data` (`iovs`), `iovs_len` (`count`), `to` (`target`), `old_path` (`old`), `old_fd` (`fd`).
 - Reserved words: Python writes `in_`; C writes `in`, `environ_` and `new_`. The table keeps `in`, `environ`; the stubs write `in_`.
-- The C `sock_*` functions, made by a macro, take placeholders `b`, `c`, ...
 
 Of the 46 functions of 0.1, 39 have at least one name that differs (in Python or in C); of the 201 functions of 0.2 that the twins have, 66. In the tables the columns are the table, the Python and, when it is not the same as the Python, the C.
 
@@ -143,10 +142,10 @@ Of the 46 functions of 0.1, 39 have at least one name that differs (in Python or
 | `poll_oneoff` | in, out, nsubscriptions, retptr | in_, out, count, nevents | in, out, count, nevents |
 | `proc_exit` | rval | code | same |
 | `random_get` | buf, buf_len | buf, size | same |
-| `sock_accept` | fd, flags, retptr | fd, flags, result | fd, b, c |
-| `sock_recv` | fd, ri_data, ri_data_len, ri_flags, retptr0, retptr1 | fd, iovs, count, flags, nread, roflags | fd, b, c, d, e, f |
-| `sock_send` | fd, si_data, si_data_len, si_flags, retptr | fd, iovs, count, flags, nsent | fd, b, c, d, e |
-| `sock_shutdown` | fd, how | fd, how | fd, b |
+| `sock_accept` | fd, flags, retptr | fd, flags, result | same |
+| `sock_recv` | fd, ri_data, ri_data_len, ri_flags, retptr0, retptr1 | fd, iovs, count, flags, nread, roflags | same |
+| `sock_send` | fd, si_data, si_data_len, si_flags, retptr | fd, iovs, count, flags, nsent | same |
+| `sock_shutdown` | fd, how | fd, how | same |
 
 ### 0.2 (`wasi:*@0.2.12`)
 

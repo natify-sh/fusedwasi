@@ -40,7 +40,6 @@ def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:
             "-std=gnu11",
             "-Wall",
             "-Wextra",
-            "-Wno-unused-parameter",
             "-Werror",
             "-I",
             str(C_P2),

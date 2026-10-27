@@ -48,6 +48,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_stat_from(const struct stat *st, fusedwasi_p2_
 
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_lstat(fusedwasi_p2_dirref dir, const char *leaf, fusedwasi_p2_stat *out) {
     struct stat st;
+    memset(out, 0, sizeof *out); /* whatever the caller's struct held; the compilers cannot see that the code of failure is never the code of success */
     if (fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) < 0) return fusedwasi_p2_fail();
     fusedwasi_p2_stat_from(&st, out);
     return FUSEDWASI_P2_OK;
@@ -55,6 +56,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_lstat(fusedwasi_p2_dirref dir, const char *
 
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_fstat(const fusedwasi_p2_descriptor *d, fusedwasi_p2_stat *out) {
     struct stat st;
+    memset(out, 0, sizeof *out); /* whatever the caller's struct held; the compilers cannot see that the code of failure is never the code of success */
     if (fstat(d->fd, &st) < 0) return fusedwasi_p2_fail();
     fusedwasi_p2_stat_from(&st, out);
     return FUSEDWASI_P2_OK;
