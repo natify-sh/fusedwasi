@@ -4,6 +4,8 @@ Status: a draft for the owner, 2026-10-27. Nothing here is built. It is written 
 
 ## 1. What fusedwasi is, and what it is not
 
+**Why it exists.** The WASI of the existing runtimes is not usable outside them: in Wasmtime it is built on its own types (`WasiCtx` lives in the `Store<T>`, `ResourceTable` is `wasmtime::component`'s, the functions are generated for its `Linker`); uvwasi has WASI 0.1 only, takes host pointers, and carries a libuv loop (`uv_loop_t *loop`) in its state. fusedwasi was started because none of them could be taken by another engine. That is the test of every decision here: *could an engine that nobody here has heard of use this?* Section 11 is how it is checked.
+
 fusedwasi is **a set of ready, cross-platform functions of WASI 0.1 and 0.2**, in C (headers) and in Python (the twin), with the state those functions need. It is not a host and it is not an engine. It knows nothing of the runtime that calls it (`wasm2c`, Wasmtime, a browser) and nothing of the user that wraps it (`wasmext`, `wasmhost`, a new one). A user depends on fusedwasi; fusedwasi never depends on a user, in code, in names, or in comments that describe how a user works.
 
 The rule for a change: it is made when it is right for **any** user. "It is convenient for wasmext" is not a reason; "two users would otherwise write the same workaround" is.
