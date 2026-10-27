@@ -58,3 +58,27 @@ def test_every_name_has_the_prefix_of_the_library() -> None:
             )
         }
         assert not loose, (header.name, sorted(loose))
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not COMPILERS, reason="POSIX with a C compiler")
+@pytest.mark.parametrize("compiler", sorted(set(COMPILERS)))
+def test_the_headers_are_found_by_the_published_include_path_alone(compiler: str, tmp_path: Path) -> None:
+    """`get_include()` and the CMake target `fusedwasi::headers` give one directory, the one that holds `fusedwasi/`: `#include <fusedwasi/p1/wasi_p1.h>` has to work with just that."""
+    source = tmp_path / "check.c"
+    source.write_text(
+        "#include <fusedwasi/p1/wasi_p1.h>\n#include <fusedwasi/p1/wasi_p1_unstable.h>\nint main(void) { return 0; }\n"
+    )
+    subprocess.run(
+        [
+            compiler,
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-parameter",
+            "-Werror",
+            "-fsyntax-only",
+            f"-I{P1.parent.parent}",
+            str(source),
+        ],
+        check=True,
+    )
