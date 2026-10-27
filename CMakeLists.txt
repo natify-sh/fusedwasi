@@ -61,6 +61,12 @@ if(FUSEDWASI_INSTALL)
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fusedwasi/version.h"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fusedwasi)
 
+    # Tables of the signatures of the WASI imports and the Protocol stubs (data, as the Python package carries them)
+    install(DIRECTORY src/fusedwasi/signatures/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fusedwasi/signatures
+        PATTERN "__pycache__" EXCLUDE
+        FILES_MATCHING PATTERN "*.json" PATTERN "*.pyi")
+
     install(TARGETS fusedwasi_headers
         EXPORT fusedwasi-targets
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

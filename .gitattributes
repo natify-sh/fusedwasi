@@ -1,0 +1,4 @@
+# keep the bytes of the committed specs and of the generated tables exactly (the sha256 and the drift test depend on it)
+tools/spec_sources/** -text
+src/fusedwasi/signatures/*.json text eol=lf
+src/fusedwasi/signatures/*.pyi text eol=lf

@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/WebAssembly/WASI",
+  "license": "LICENSE.md",
+  "fetched_with": "git clone of the repository over HTTPS; each file is a byte-for-byte copy of the file at the commit named here, read only as text, never executed",
+  "p1": {
+    "snapshot": "wasi_snapshot_preview1",
+    "tag": "v0.2.9",
+    "commit": "34c0258951fbd31b2e7591c5d4cdc5ebc760bcfc",
+    "upstream_dir": "legacy/preview1/witx",
+    "dir": "wasi_p1",
+    "files": ["typenames.witx", "wasi_snapshot_preview1.witx"],
+    "note": "v0.2.9 is the last tag of the repository that still carries the witx files (they were moved to the wasi-0.1 branch afterwards, in v0.2.10); the text of 0.1 is frozen"
+  },
+  "p2": {
+    "version": "0.2.12",
+    "tag": "v0.2.12",
+    "commit": "281ba75fafcd50961ef55f9e52747afcc9b71ede",
+    "upstream_dir": "proposals/<package>/wit",
+    "dir": "wasi_p2",
+    "packages": ["cli", "clocks", "filesystem", "http", "io", "random", "sockets"],
+    "export_only": ["wasi:cli/run", "wasi:http/incoming-handler"]
+  }
+}
