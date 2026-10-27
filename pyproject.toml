@@ -37,3 +37,6 @@ neutral = [
     "colorama>=0.4.6",
     "requests>=2.34.2",
 ]
+neutral-wasm3 = [
+    "pywasm3>=0.5.0",
+]

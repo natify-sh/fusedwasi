@@ -211,6 +211,9 @@ neutral = [
     { name = "colorama" },
     { name = "requests" },
 ]
+neutral-wasm3 = [
+    { name = "pywasm3" },
+]
 
 [package.metadata]
 
@@ -225,6 +228,7 @@ neutral = [
     { name = "colorama", specifier = ">=0.4.6" },
     { name = "requests", specifier = ">=2.34.2" },
 ]
+neutral-wasm3 = [{ name = "pywasm3", specifier = ">=0.5.0" }]
 
 [[package]]
 name = "idna"
@@ -310,6 +314,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
+
+[[package]]
+name = "pywasm3"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/40/d9/5c4d0f09aa47e19f192feafba535f947ea547d24f1f5aaffdfa7bfe9fa78/pywasm3-0.5.0.tar.gz", hash = "sha256:5a47c8a39f7f6ae71b3316b2e5d86c9d0db6e771a65f09a86e4d4aa3a19aefcc", size = 75386, upload-time = "2021-06-02T11:23:03.675Z" }
 
 [[package]]
 name = "requests"

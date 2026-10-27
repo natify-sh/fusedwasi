@@ -70,3 +70,19 @@ jobs:
         run: uv run --no-sync pytest tests/neutral/test_neutral_wasm3.py -q
         env:
           WASM3_SRC: ${{ github.workspace }}/wasm3
+
+  python-wasm3:
+    name: Python over pywasm3 (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # pywasm3 0.5.0 has only a source distribution (2021): it is built here, which needs a C compiler and the headers of Python
+      - run: uv sync --group neutral --group neutral-wasm3
+      - name: The programs, against Wasmtime's own WASI
+        run: |
+          uv run --no-sync python -c "import wasm3; print('pywasm3 with wasm3', wasm3.M3_VERSION)"
+          uv run --no-sync pytest tests/neutral/test_neutral_wasm3py.py -q -rs

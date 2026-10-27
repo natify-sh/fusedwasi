@@ -14,6 +14,7 @@ from pathlib import Path
 import neutral_wasmtime as user
 import pytest
 import wasmtime as wt
+from neutral_binding import p2_implementation, wants_component
 from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
 from fusedwasi.p1 import wasi_p1_core
@@ -149,12 +150,12 @@ def test_a_command_of_0_2_does_what_it_does_under_wasmtime(engine: wt.Engine, tm
 
 
 def test_the_imports_are_found_by_name_whatever_the_version_of_the_module(engine: wt.Engine) -> None:
-    function, row = user.p2_implementation("wasi:io/streams@0.2.0", "[method]output-stream.blocking-write-and-flush")
-    assert function.__name__ == "wasi_io_streams_output_stream_blocking_write_and_flush" and user.wants_component(
+    function, row = p2_implementation("wasi:io/streams@0.2.0", "[method]output-stream.blocking-write-and-flush")
+    assert function.__name__ == "wasi_io_streams_output_stream_blocking_write_and_flush" and wants_component(
         function, row
     )
-    function, row = user.p2_implementation("wasi:io/streams@0.2.6", "[resource-drop]output-stream")
-    assert function.__name__ == "wasi_io_streams_output_stream_drop" and not user.wants_component(function, row)
+    function, row = p2_implementation("wasi:io/streams@0.2.6", "[resource-drop]output-stream")
+    assert function.__name__ == "wasi_io_streams_output_stream_drop" and not wants_component(function, row)
 
 
 def test_two_commands_over_one_state_and_a_trap_in_a_third(engine: wt.Engine) -> None:

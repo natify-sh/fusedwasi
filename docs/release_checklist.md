@@ -49,7 +49,7 @@ The name `fusedwasi` is already taken on PyPI by the owner (2026-10-26) and is r
 1. The state and the guest (done, `3c3924b`, `b4aa2db`): the model of `design_model.md`.
 2. The official wasi-testsuite (0.1) and the neutral user in Python (the twin over `wasmtime-py`) in the CI of fusedwasi. This is the net under step 3 and the first half of the proof of neutrality. **Written** (`tests/neutral/`, job `python-wasmtime` of `neutral.yml`; 72 tests of the wasi-testsuite pass locally; see `design_model.md`, section 11).
 3. 0.1 over 0.2 (`design_model.md`, section 4).
-4. The C user over an engine that is not `wasm2c` (`wasm3` first; a hand-made guest memory as the fallback), the second half of the proof of neutrality (`design_model.md`, section 11). **Written** (`tests/neutral/c_wasm3/`, job `c-wasm3` of `neutral.yml`; passes locally on Linux).
+4. The C user over an engine that is not `wasm2c` (`wasm3` first; a hand-made guest memory as the fallback), the second half of the proof of neutrality (`design_model.md`, section 11). **Written** (`tests/neutral/c_wasm3/`, job `c-wasm3` of `neutral.yml`; passes locally on Linux). A third, small Python user over `pywasm3` is in `tests/neutral/` (job `python-wasm3`).
 5. Public/private marks, the dead names, the gaps of section 3 closed or deferred in writing; the public documents (`README.md`, the headers, the docstrings) say nothing about how a particular user works.
 6. The remaining checks: Windows and macOS runs, the package test (section 4).
 7. Tag and publish `0.1.0a1`. A stable `0.1.0` waits for use, not for a feature of a user: the states are opaque across artifacts (the layout does not cross), so no user's versioned record is a condition.
