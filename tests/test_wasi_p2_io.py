@@ -13,7 +13,7 @@ from cbuild import build
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Trap, load_u32, store_u32
+from fusedwasi.p2.wasi_p2_core import Trap, _load_u32, _store_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_io_driver.c"
@@ -54,10 +54,10 @@ def python_output(scenario: str) -> str:
     def dump(what: str) -> None:
         lines.append(f"{what} {bytes(memory).hex()}")
 
-    i = io.input_stream_new(host, io.MemoryInput(b"abcdefghij"))
-    j = io.input_stream_new(host, io.MemoryInput(b"xyz"))
+    i = io._input_stream_new(host, io.MemoryInput(b"abcdefghij"))
+    j = io._input_stream_new(host, io.MemoryInput(b"xyz"))
     out, out2 = io.BufferOutput(8), io.BufferOutput(100)
-    o, o2 = io.output_stream_new(host, out), io.output_stream_new(host, out2)
+    o, o2 = io._output_stream_new(host, out), io._output_stream_new(host, out2)
     lines.append(f"handles {i} {j} {o} {o2}")
     try:
         if scenario == "streams":
@@ -87,11 +87,11 @@ def python_output(scenario: str) -> str:
             dump("read")
             p = io.wasi_io_streams_input_stream_subscribe(host, i)
             lines.append(f"pollable {p} ready {io.wasi_io_poll_pollable_ready(host, p)}")
-            store_u32(host, 0, 90, p)
+            _store_u32(host, 0, 90, p)
             io.wasi_io_poll_poll(host, 0, 90, 1, 32)
             dump("poll")
             io.wasi_io_poll_pollable_block(host, p)
-            e = io.error_new(host, "boom")
+            e = io._error_new(host, "boom")
             io.wasi_io_error_error_to_debug_string(host, 0, e, 48)
             dump("to_debug_string")
             io.wasi_io_error_error_drop(host, e)
@@ -108,7 +108,7 @@ def python_output(scenario: str) -> str:
             io.wasi_io_streams_input_stream_drop(host, i)
             io.wasi_io_streams_output_stream_drop(host, o)
         elif scenario == "failure":
-            hfi, hfo = io.input_stream_new(host, FailingInput()), io.output_stream_new(host, FailingOutput())
+            hfi, hfo = io._input_stream_new(host, FailingInput()), io._output_stream_new(host, FailingOutput())
             lines.append(f"failing {hfi} {hfo}")
             io.wasi_io_streams_input_stream_read(host, 0, hfi, 4, 0)
             dump("read fails")
@@ -116,7 +116,7 @@ def python_output(scenario: str) -> str:
             dump("read after the failure")
             p = io.wasi_io_streams_input_stream_subscribe(host, hfi)
             lines.append(f"pollable of a closed stream: ready {io.wasi_io_poll_pollable_ready(host, p)}")
-            io.wasi_io_error_error_to_debug_string(host, 0, load_u32(host, 0, 8), 80)
+            io.wasi_io_error_error_to_debug_string(host, 0, _load_u32(host, 0, 8), 80)
             dump("message")
             io.wasi_io_streams_output_stream_check_write(host, 0, hfo, 96)
             dump("check_write fails")

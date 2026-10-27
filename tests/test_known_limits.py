@@ -85,7 +85,7 @@ def test_ipv6_sockets_follow_the_system() -> None:
         assert memory[100] == 0
         assert sk.wasi_sockets_tcp_tcp_socket_address_family(host, int.from_bytes(memory[104:108], "little")) == 1
     else:
-        assert memory[100] == 1 and sk.NETWORK_ERRORS[memory[104]] == "not-supported"
+        assert memory[100] == 1 and sk._NETWORK_ERRORS[memory[104]] == "not-supported"
 
 
 # ---- http ----------------------------------------------------------------------------------------------------------------------
@@ -196,5 +196,5 @@ int main(void) {
     )
     out = subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.strip()
     rc, tag, message = out.split(" ", 2)
-    assert rc != "0" and int(tag) == H.CASES.index(next(c for c in H.CASES if c[0] == "internal-error"))
+    assert rc != "0" and int(tag) == H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))
     assert "http_send" in message

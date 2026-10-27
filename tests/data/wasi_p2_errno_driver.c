@@ -5,6 +5,6 @@
 #include "wasi_p2_sockets.h"
 
 int main(void) {
-    for (int e = 0; e < 200; e++) printf("%d %d %d\n", e, fusedwasi_p2_errno_code(e), fusedwasi_p2_net_errno(e));
+    for (int e = 0; e < 200; e++) printf("%d %d %d\n", e, fusedwasi_p2__errno_code(e), fusedwasi_p2__net_errno(e));
     return 0;
 }

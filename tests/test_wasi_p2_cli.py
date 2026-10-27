@@ -16,7 +16,7 @@ from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_cli as cli
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Trap, load_u32
+from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Trap, _load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_cli_driver.c"
@@ -51,7 +51,7 @@ def python_output(scenario: str) -> str:
         if scenario == "main":
             stdin, stdout = io.MemoryInput(b"in!"), io.BufferOutput(100)
             host = guest_of([memory], stdin=stdin, stdout=stdout, terminals=TERMINAL_STDOUT, **common)
-            hi, ho = io.input_stream_new(host, stdin), io.output_stream_new(host, stdout)
+            hi, ho = io._input_stream_new(host, stdin), io._output_stream_new(host, stdout)
             lines.append(f"handles {hi} {ho}")
             cli.wasi_cli_environment_get_arguments(host, 0, 0)
             dump("arguments")
@@ -63,7 +63,7 @@ def python_output(scenario: str) -> str:
             dump("terminal stdin")
             cli.wasi_cli_terminal_stdout_get_terminal_stdout(host, 0, 64)
             dump("terminal stdout")
-            cli.wasi_cli_terminal_output_terminal_output_drop(host, load_u32(host, 0, 68))
+            cli.wasi_cli_terminal_output_terminal_output_drop(host, _load_u32(host, 0, 68))
             a, b, c = (
                 cli.wasi_cli_stdin_get_stdin(host),
                 cli.wasi_cli_stdout_get_stdout(host),
@@ -86,7 +86,7 @@ def python_output(scenario: str) -> str:
             out_r, out_w = os.pipe()
             os.write(in_w, b"pipe!")
             os.close(in_w)
-            host = guest_of([memory], stdin=cli.FdInput(in_r), stdout=cli.FdOutput(out_w), **common)
+            host = guest_of([memory], stdin=cli._FdInput(in_r), stdout=cli._FdOutput(out_w), **common)
             a, b = cli.wasi_cli_stdin_get_stdin(host), cli.wasi_cli_stdout_get_stdout(host)
             lines.append(f"std handles {a} {b}")
             io.wasi_io_streams_input_stream_read(host, 0, a, 16, 0)

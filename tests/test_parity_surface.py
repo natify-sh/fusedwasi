@@ -132,7 +132,7 @@ def test_the_policy_of_sockets_is_asked_with_the_number_in_python() -> None:
     tcp = int.from_bytes(memory[104:108], "little")
     sk.wasi_sockets_tcp_tcp_socket_start_bind(guest, 0, tcp, net, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 120)
     assert asked == [("127.0.0.1", 0, core.USE_TCP_BIND)] and isinstance(asked[0][2], int)
-    assert memory[120] == 1 and sk.NETWORK_ERRORS[memory[121]] == "access-denied"
+    assert memory[120] == 1 and sk._NETWORK_ERRORS[memory[121]] == "access-denied"
 
 
 # ---- terminals -----------------------------------------------------------------------------------------------------------------
@@ -226,9 +226,11 @@ def test_the_preopens_of_python_are_path_name_writable(tmp_path: Path) -> None:
 
 
 def test_every_constant_of_0_1_in_python_is_in_c_with_the_same_value(tmp_path: Path) -> None:
-    pattern = re.compile(r"^(E|FT|R|O|T|FD|K)_[A-Z0-9_]+$|^(LOOKUP_FOLLOW|RIGHTS_STDIN|RIGHTS_STDOUT)$")
+    # the public constants have the name of the specification in both languages; the kinds of the entries are private in both (`_K_FILE`, `FUSEDWASI_P1__K_FILE`)
+    pattern = re.compile(r"^(E|FT|R|O|T|FD)_[A-Z0-9_]+$|^(LOOKUP_FOLLOW|RIGHTS_STDIN|RIGHTS_STDOUT)$|^_K_[A-Z0-9_]+$")
     names = sorted(n for n in vars(wasi_p1_core) if pattern.match(n))
     assert len(names) > 100
+    assert any(n.startswith("_K_") for n in names)
     body = "".join(f'    printf("{n} %llu\\n", (unsigned long long)FUSEDWASI_P1_{n});\n' for n in names)
     out = build_and_run(
         tmp_path, '#include <stdio.h>\n#include "wasi_p1_core.h"\nint main(void) {\n' + body + "    return 0;\n}\n"
@@ -548,7 +550,7 @@ def test_the_hooks_of_the_guest_in_python() -> None:
     told: list[str] = []
     guest = Guest(State(), [bytearray(16)], trap=told.append)
     with pytest.raises(core.Trap, match="outside"):
-        core.store_u32(guest, 0, 100, 1)
+        core._store_u32(guest, 0, 100, 1)
     assert len(told) == 1 and "outside" in told[0]
 
     class Mine(Exception):
@@ -558,7 +560,7 @@ def test_the_hooks_of_the_guest_in_python() -> None:
         raise Mine(message)
 
     with pytest.raises(Mine):
-        core.store_u32(Guest(State(), [bytearray(16)], trap=own), 0, 100, 1)
+        core._store_u32(Guest(State(), [bytearray(16)], trap=own), 0, 100, 1)
     plain = Guest(State(), [bytearray(16)])
     with pytest.raises(core.Exit) as caught:
         cli.wasi_cli_exit_exit(plain, 1)
@@ -583,7 +585,7 @@ int main(void) {
     /* no guest yet: the streams are made and given to the state while it is configured */
     fusedwasi_p2_memory_input mi; /* the owner of a stream has its pointer; the public *_add puts it in the table of the state */
     memset(&mi, 0, sizeof mi);
-    mi.base.read = fusedwasi_p2_memory_input_read, mi.base.ready = fusedwasi_p2_always_ready;
+    mi.base.read = fusedwasi_p2__memory_input_read, mi.base.ready = fusedwasi_p2__always_ready;
     mi.data = (const uint8_t *)"in!", mi.len = 3;
     uint32_t hin = fusedwasi_p2_input_stream_add(&world, &mi.base), hout;
     fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 100, &hout);
@@ -601,7 +603,7 @@ int main(void) {
     uint32_t in = fusedwasi_wasi_cli_stdin_get_stdin(&g), out = fusedwasi_wasi_cli_stdout_get_stdout(&g);
     fusedwasi_wasi_io_streams_output_stream_write(&g, 0, out, 0, 2, 16);
     fusedwasi_wasi_io_streams_input_stream_read(&g, 0, in, 10, 32);
-    printf("tag %d len %u data %.3s\\n", memory[32], (unsigned)fusedwasi_p2_load_u32(&g, 0, 40), (const char *)memory + 44);
+    printf("tag %d len %u data %.3s\\n", memory[32], (unsigned)fusedwasi_p2__load_u32(&g, 0, 40), (const char *)memory + 44);
     printf("stdout %.*s\\n", (int)bo->len, bo->buf);
     fusedwasi_p2_free(&world);
     fusedwasi_p2_buffer_output_release(bo);

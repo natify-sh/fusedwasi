@@ -17,7 +17,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
-__all__ = ["Function", "Param", "Signatures", "find_import", "get_signatures_path", "load"]
+__all__ = ["Function", "Param", "Signatures", "Snapshot", "find_import", "get_signatures_path", "load"]
 
 Snapshot = Literal["p1", "p2"]
 
@@ -136,7 +136,7 @@ def load(snapshot: Snapshot) -> Signatures:
     return Signatures(data["snapshot"], data["api"], data["source"], functions, {f.key: f for f in functions})
 
 
-P1_MODULE = "wasi_snapshot_preview1"
+_P1_MODULE = "wasi_snapshot_preview1"
 _P2_IMPORT = re.compile(r"^(?P<interface>wasi:[a-z0-9-]+/[a-z0-9-]+)@(?P<major>\d+)\.(?P<minor>\d+)\.\d+$")
 
 
@@ -147,7 +147,7 @@ def find_import(module: str, name: str) -> Function | None:
     the versions of one major.minor are compatible; `@0.3.x` or `@1.x.y` find nothing. A name that is not in the table, a module that is neither of 0.1 nor of 0.2, and
     `wasi_unstable` (the first snapshot, whose functions are `fusedwasi_p1_unstable_*` where they differ) give None.
     """
-    if module == P1_MODULE:
+    if module == _P1_MODULE:
         return load("p1").get(module, name)
     m = _P2_IMPORT.match(module)
     if m is None:

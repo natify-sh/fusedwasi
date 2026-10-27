@@ -35,10 +35,10 @@ def python_scenario(root: Path) -> list[str]:
     memory[300:306] = b"hello\n"
     memory[400:408] = (300).to_bytes(4, "little") + (6).to_bytes(4, "little")
     lines.append(f"fd_write {wasi_p1.fd_write(g, fd, 400, 1, 500)} {int.from_bytes(memory[500:504], 'little')}")
-    live = [i for i, slot in enumerate(state.slots) if slot.live and slot.kind == KIND_DESCRIPTOR]
+    live = [i for i, slot in enumerate(state._slots) if slot.live and slot.kind == KIND_DESCRIPTOR]
     lines.append(f"descriptors in the table {len(live)}")  # the preopen and the file
     index = live[-1]
-    handle = (state.slots[index].generation << wasi_p2_core.INDEX_BITS) | index
+    handle = (state._slots[index].generation << wasi_p2_core._INDEX_BITS) | index
     fs.wasi_filesystem_types_descriptor_stat(g, 0, handle, 600)  # 0.2 asks about the file 0.1 wrote
     lines.append(f"0.2 sees size {int.from_bytes(memory[624:632], 'little')}")
     memory[700:705] = b"WORLD"
@@ -51,7 +51,7 @@ def python_scenario(root: Path) -> list[str]:
     )
     lines.append(f"fd_close {wasi_p1.fd_close(g, fd)}")
     lines.append(
-        f"descriptors after close {sum(1 for slot in state.slots if slot.live and slot.kind == KIND_DESCRIPTOR)}"
+        f"descriptors after close {sum(1 for slot in state._slots if slot.live and slot.kind == KIND_DESCRIPTOR)}"
     )
     try:
         fs.wasi_filesystem_types_descriptor_stat(g, 0, handle, 600)
@@ -59,7 +59,7 @@ def python_scenario(root: Path) -> list[str]:
         lines.append("handle spent")
     state.close_all()
     lines.append(
-        f"descriptors after close_all {sum(1 for slot in state.slots if slot.live and slot.kind == KIND_DESCRIPTOR)}"
+        f"descriptors after close_all {sum(1 for slot in state._slots if slot.live and slot.kind == KIND_DESCRIPTOR)}"
     )
     return lines
 
@@ -73,7 +73,7 @@ static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | 
 static void wr32(uint8_t *p, uint32_t v) { for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i)); }
 static unsigned live_descriptors(fusedwasi_p2_state *s) {
     unsigned n = 0;
-    for (uint32_t i = 1; i < s->slot_count; i++) n += s->slots[i].live && s->slots[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR;
+    for (uint32_t i = 1; i < s->slot_count__; i++) n += s->slots__[i].live && s->slots__[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR;
     return n;
 }
 int main(int argc, char **argv) {
@@ -99,9 +99,9 @@ int main(int argc, char **argv) {
     printf("fd_write %u %u\n", rc, (unsigned)rd32(memory + 500));
     printf("descriptors in the table %u\n", live_descriptors(&state));
     uint32_t index = 0;
-    for (uint32_t i = 1; i < state.slot_count; i++)
-        if (state.slots[i].live && state.slots[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR) index = i;
-    uint32_t handle = (state.slots[index].generation << FUSEDWASI_P2_INDEX_BITS) | index;
+    for (uint32_t i = 1; i < state.slot_count__; i++)
+        if (state.slots__[i].live && state.slots__[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR) index = i;
+    uint32_t handle = (state.slots__[index].generation << FUSEDWASI_P2__INDEX_BITS) | index;
     fusedwasi_wasi_filesystem_types_descriptor_stat(&g, 0, handle, 600);
     printf("0.2 sees size %u\n", (unsigned)rd32(memory + 624));
     memcpy(memory + 700, "WORLD", 5);
@@ -176,7 +176,7 @@ def test_a_preopen_that_cannot_be_opened_is_told(tmp_path: Path) -> None:
     with pytest.raises(PreopenError) as caught:
         open_descriptors(state)
     assert caught.value.index == 1 and caught.value.errno == errno.ENOENT
-    assert not any(slot.live and slot.kind == KIND_DESCRIPTOR for slot in state.slots)  # nothing was left open
+    assert not any(slot.live and slot.kind == KIND_DESCRIPTOR for slot in state._slots)  # nothing was left open
     # the first call of a function of 0.1 on that state answers the errno instead
     guest = Guest(state, bytearray(64))
     assert wasi_p1.fd_prestat_get(guest, 3, 0) == E_NOENT
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
     size_t bad = 0;
     int rc = fusedwasi_p1_open_descriptors(&s, &err, &bad);
     unsigned live = 0;
-    for (uint32_t i = 1; i < s.slot_count; i++) live += s.slots[i].live && s.slots[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR;
+    for (uint32_t i = 1; i < s.slot_count__; i++) live += s.slots__[i].live && s.slots__[i].kind == FUSEDWASI_P2_KIND_DESCRIPTOR;
     printf("%d %d %d %u\n", rc, err == ENOENT, (int)bad, live);
     (void)argc;
     fusedwasi_p2_free(&s);

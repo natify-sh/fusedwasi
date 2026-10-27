@@ -25,6 +25,10 @@ extend-exclude = ["tools"]  # reference scripts of the audits and of the compari
 include = ["src", "tests"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
+# the library and its white-box tests reach each other's private names (a leading underscore); that the neutral users do not is checked by tests/test_public_api.py
+reportPrivateUsage = false
+reportUnusedFunction = false  # a private helper (a leading underscore) is used by the other modules of the package
+reportUnusedClass = false
 
 [dependency-groups]
 dev = [

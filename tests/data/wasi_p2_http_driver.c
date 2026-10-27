@@ -33,7 +33,7 @@ static uint32_t bump(fusedwasi_p2_guest *st, uint32_t comp, uint32_t old_ptr, ui
     return ptr;
 }
 
-static uint32_t u32(uint32_t off) { return fusedwasi_p2_load_u32(&s, 0, off); }
+static uint32_t u32(uint32_t off) { return fusedwasi_p2__load_u32(&s, 0, off); }
 static void clear(void) { memset(memory + R, 0, 64); }
 static void hex(const uint8_t *p, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) printf("%02x", p[i]);
@@ -66,7 +66,7 @@ static uint32_t pairs(const struct kv *items) {
     memset(zeros, 0, sizeof zeros);
     uint32_t arr = put(zeros, 16 * n);
     for (uint32_t i = 0; i < n; i++)
-        for (uint32_t k = 0; k < 4; k++) fusedwasi_p2_store_u32(&s, 0, arr + 16 * i + 4 * k, spans[i][k]);
+        for (uint32_t k = 0; k < 4; k++) fusedwasi_p2__store_u32(&s, 0, arr + 16 * i + 4 * k, spans[i][k]);
     return arr;
 }
 static uint32_t pairs_count(const struct kv *items) {
@@ -82,7 +82,7 @@ static uint32_t blobs(const char *const *items, uint32_t n) {
     uint8_t zeros[64];
     memset(zeros, 0, sizeof zeros);
     uint32_t arr = put(zeros, 8 * n);
-    for (uint32_t i = 0; i < n; i++) fusedwasi_p2_store_u32(&s, 0, arr + 8 * i, spans[i][0]), fusedwasi_p2_store_u32(&s, 0, arr + 8 * i + 4, spans[i][1]);
+    for (uint32_t i = 0; i < n; i++) fusedwasi_p2__store_u32(&s, 0, arr + 8 * i, spans[i][0]), fusedwasi_p2__store_u32(&s, 0, arr + 8 * i + 4, spans[i][1]);
     return arr;
 }
 
@@ -287,7 +287,7 @@ static void set_fail(fusedwasi_p2_http_error *e, int i) {
 }
 #define FAILS 16
 
-static void add_text(char **buf, size_t *len, size_t *cap, const char *t) { fusedwasi_p2_http_append((uint8_t **)buf, len, cap, (const uint8_t *)t, strlen(t)); }
+static void add_text(char **buf, size_t *len, size_t *cap, const char *t) { fusedwasi_p2__http_append((uint8_t **)buf, len, cap, (const uint8_t *)t, strlen(t)); }
 
 static int hook(fusedwasi_p2_state *st, const fusedwasi_p2_http_request *req, fusedwasi_p2_http_response *out, fusedwasi_p2_http_error *err) {
     (void)st;
@@ -301,14 +301,14 @@ static int hook(fusedwasi_p2_state *st, const fusedwasi_p2_http_request *req, fu
     add_text(&buf, &len, &cap, req->authority), add_text(&buf, &len, &cap, " "), add_text(&buf, &len, &cap, req->path);
     for (uint32_t i = 0; i < req->headers->count; i++) {
         add_text(&buf, &len, &cap, "\n"), add_text(&buf, &len, &cap, req->headers->e[i].name), add_text(&buf, &len, &cap, ": ");
-        fusedwasi_p2_http_append((uint8_t **)&buf, &len, &cap, req->headers->e[i].value, req->headers->e[i].len);
+        fusedwasi_p2__http_append((uint8_t **)&buf, &len, &cap, req->headers->e[i].value, req->headers->e[i].len);
     }
     add_text(&buf, &len, &cap, "\nbody=");
-    fusedwasi_p2_http_append((uint8_t **)&buf, &len, &cap, req->body, (size_t)req->body_len);
+    fusedwasi_p2__http_append((uint8_t **)&buf, &len, &cap, req->body, (size_t)req->body_len);
     if (req->trailers) {
         for (uint32_t i = 0; i < req->trailers->count; i++) {
             add_text(&buf, &len, &cap, "\ntrailer "), add_text(&buf, &len, &cap, req->trailers->e[i].name), add_text(&buf, &len, &cap, ": ");
-            fusedwasi_p2_http_append((uint8_t **)&buf, &len, &cap, req->trailers->e[i].value, req->trailers->e[i].len);
+            fusedwasi_p2__http_append((uint8_t **)&buf, &len, &cap, req->trailers->e[i].value, req->trailers->e[i].len);
         }
     }
     out->status = 201;
@@ -324,12 +324,12 @@ static int hook(fusedwasi_p2_state *st, const fusedwasi_p2_http_request *req, fu
 }
 
 static void describe(const fusedwasi_p2_http_error *e) {
-    const fusedwasi_p2_http_case *c = fusedwasi_p2_http_case_of(e->tag);
+    const fusedwasi_p2__http_case *c = fusedwasi_p2__http_case_of(e->tag);
     printf("%u/%d/", e->tag, e->present);
     for (int i = 0; i < c->leaves; i++) {
         if (i) printf("/");
         if (!e->has[i]) printf("-");
-        else if (c->kind[i] == FUSEDWASI_P2_HK_STR) printf("%s", e->str[i]);
+        else if (c->kind[i] == FUSEDWASI_P2__HK_STR) printf("%s", e->str[i]);
         else printf("%" PRIu64, e->num[i]);
     }
 }
@@ -604,16 +604,16 @@ int main(int argc, char **argv) {
         printf("before finish: done %d finished %d\n", out->done, out->response ? out->response->body->finished : -1);
         clear();
         fusedwasi_wasi_http_types_outgoing_body_finish(&s, 0, body_h, 0, 0, R);
-        fusedwasi_p2_http_oresponse *r = out->response;
+        fusedwasi_p2__http_oresponse *r = out->response;
         printf("embedder sees status %u body ", r->status), hex(r->body->buf, (uint32_t)r->body->len);
         printf(" finished %d trailers %s\n", r->body->finished, r->body->trailers ? "fields" : "None");
         for (uint32_t i = 0; i < r->headers->count; i++) printf("  %s: %.*s\n", r->headers->e[i].name, (int)r->headers->e[i].len, r->headers->e[i].value);
-        fusedwasi_p2_http_outparam_release(out);
+        fusedwasi_p2__http_outparam_release(out);
         uint32_t param2;
         fusedwasi_p2_http_outparam *out2 = fusedwasi_p2_http_outparam_new(&world, &param2);
         fusedwasi_wasi_http_types_response_outparam_drop(&s, param2);
         printf("dropped without a response: "), describe(&out2->error), printf("\n");
-        fusedwasi_p2_http_outparam_release(out2);
+        fusedwasi_p2__http_outparam_release(out2);
     } else if (!strcmp(scenario, "flat_errors")) {
         uint64_t cases[][8] = {
             {6},
@@ -637,10 +637,10 @@ int main(int argc, char **argv) {
             printf("%u: ", (unsigned)c[0]), describe(&o->error), printf("\n");
             clear();
             if (o->failed) {
-                fusedwasi_p2_http_store_error(&s, 0, R, &o->error);
+                fusedwasi_p2__http_store_error(&s, 0, R, &o->error);
                 printf("  stored "), hex(memory + R, 32), printf("\n");
             }
-            fusedwasi_p2_http_outparam_release(o);
+            fusedwasi_p2__http_outparam_release(o);
         }
     } else if (!strcmp(scenario, "finish_alive")) {
         uint32_t req = fusedwasi_wasi_http_types_outgoing_request_new(&s, fields((struct kv[]){{NULL, NULL}}));
@@ -654,8 +654,8 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "bad_handle")) {
         fusedwasi_wasi_http_types_fields_entries(&s, 0, 4242, R);
     } else if (!strcmp(scenario, "cases")) {
-        for (uint32_t i = 0; i < FUSEDWASI_P2_HTTP_CASES; i++) {
-            const fusedwasi_p2_http_case *c = fusedwasi_p2_http_case_of(i);
+        for (uint32_t i = 0; i < FUSEDWASI_P2__HTTP_CASES; i++) {
+            const fusedwasi_p2__http_case *c = fusedwasi_p2__http_case_of(i);
             printf("%u %d %d %d %d\n", i, c->outer, c->leaves, c->kind[0], c->kind[1]);
         }
     }

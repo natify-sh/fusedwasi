@@ -21,7 +21,7 @@ from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Trap, load_u32, store_u32
+from fusedwasi.p2.wasi_p2_core import Trap, _load_u32, _store_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_http_driver.c"
@@ -122,7 +122,7 @@ def python_output(scenario: str, port: int, dead: int) -> str:
         out.append(text)
 
     def u32(off: int) -> int:
-        return load_u32(host, 0, off)
+        return _load_u32(host, 0, off)
 
     def clear() -> None:
         memory[R : R + 64] = bytes(64)
@@ -141,7 +141,7 @@ def python_output(scenario: str, port: int, dead: int) -> str:
         arr = put(bytes(16 * len(items)))
         for i, span in enumerate(spans):
             for k, x in enumerate(span):
-                store_u32(host, 0, arr + 16 * i + 4 * k, x)
+                _store_u32(host, 0, arr + 16 * i + 4 * k, x)
         return arr
 
     def blobs(items: list[str]) -> int:
@@ -149,8 +149,8 @@ def python_output(scenario: str, port: int, dead: int) -> str:
         spans = [(put(x.encode()), len(x)) for x in items]
         arr = put(bytes(8 * len(items)))
         for i, (ptr, n) in enumerate(spans):
-            store_u32(host, 0, arr + 8 * i, ptr)
-            store_u32(host, 0, arr + 8 * i + 4, n)
+            _store_u32(host, 0, arr + 8 * i, ptr)
+            _store_u32(host, 0, arr + 8 * i + 4, n)
         return arr
 
     def fields(items: list[tuple[str, str]]) -> int:
@@ -570,7 +570,7 @@ def python_output(scenario: str, port: int, dead: int) -> str:
                 pr(f"{c[0]}: {describe(o.error)}\n")
                 clear()
                 if o.error is not None:
-                    H.store_error_code(host, 0, R, o.error)
+                    H._store_error_code(host, 0, R, o.error)
                     pr(f"  stored {bytes(memory[R : R + 32]).hex()}\n")
         elif scenario == "finish_alive":
             req = H.wasi_http_types_outgoing_request_new(host, fields([]))
@@ -767,7 +767,7 @@ def tag_of(output: str, label: str) -> int:
 
 def test_error_codes(server: int, dead_port: int) -> None:
     out = python_output("main", server, dead_port)
-    names = [c[0] for c in H.CASES]
+    names = [c[0] for c in H._CASES]
     assert names[tag_of(out, "truncated")] == "HTTP-response-incomplete"
     assert names[tag_of(out, "silent server")] == "connection-read-timeout"
     assert names[tag_of(out, "bad status")] == "HTTP-protocol-error"
@@ -788,7 +788,7 @@ def test_denied_by_default(server: int, dead_port: int) -> None:
 
 
 def names_tag(out: str, label: str) -> str:
-    return H.CASES[tag_of(out, label)][0]
+    return H._CASES[tag_of(out, label)][0]
 
 
 def test_the_transport_of_the_embedder(server: int, dead_port: int) -> None:
@@ -855,14 +855,14 @@ def test_the_table_of_error_codes_is_the_same_in_c(driver: Path) -> None:
             [str(driver), "cases"], capture_output=True, text=True, check=True
         ).stdout.splitlines()
     ]
-    for i, (_, outer, leaves) in enumerate(H.CASES):
+    for i, (_, outer, leaves) in enumerate(H._CASES):
         padded = [*leaves, ""][:2] if len(leaves) < 2 else list(leaves)
         padded = list(leaves) + [""] * (2 - len(leaves))
-        assert c_table[i] == (i, int(outer), len(leaves), kinds[padded[0]], kinds[padded[1]]), H.CASES[i]
+        assert c_table[i] == (i, int(outer), len(leaves), kinds[padded[0]], kinds[padded[1]]), H._CASES[i]
 
 
 def test_the_table_of_error_codes_is_the_wit() -> None:
-    assert len(H.CASES) == 39
-    assert [c[0] for c in H.CASES][:3] == ["DNS-timeout", "DNS-error", "destination-not-found"]
-    assert H.CASES[22] == ("HTTP-request-header-size", True, ("str", "n32"))
-    assert H.CASES[-1] == ("internal-error", False, ("str",))
+    assert len(H._CASES) == 39
+    assert [c[0] for c in H._CASES][:3] == ["DNS-timeout", "DNS-error", "destination-not-found"]
+    assert H._CASES[22] == ("HTTP-request-header-size", True, ("str", "n32"))
+    assert H._CASES[-1] == ("internal-error", False, ("str",))

@@ -36,35 +36,35 @@ from .wasi_p2_core import (
     KIND_DIRECTORY_ENTRY_STREAM,
     KIND_ERROR,
     Guest,
-    alloc,
-    load_bytes,
-    store_bytes,
-    store_u8,
-    store_u32,
-    store_u64,
-    table_drop,
-    table_get,
-    table_new,
-    trap,
+    _alloc,
+    _load_bytes,
+    _store_bytes,
+    _store_u8,
+    _store_u32,
+    _store_u64,
+    _table_drop,
+    _table_get,
+    _table_new,
+    _trap,
 )
 from .wasi_p2_io import (
-    READ_CAP,
-    Error,
+    _READ_CAP,
     InputStream,
     OutputStream,
     StreamClosed,
     StreamFailed,
-    input_stream_new,
-    output_stream_new,
+    _Error,
+    _input_stream_new,
+    _output_stream_new,
 )
 
-ERROR_CODES = [
+_ERROR_CODES = [
     "access", "would-block", "already", "bad-descriptor", "busy", "deadlock", "quota", "exist", "file-too-large", "illegal-byte-sequence", "in-progress",
     "interrupted", "invalid", "io", "is-directory", "loop", "too-many-links", "message-size", "name-too-long", "no-device", "no-entry", "no-lock",
     "insufficient-memory", "insufficient-space", "not-directory", "not-empty", "not-recoverable", "unsupported", "no-tty", "no-such-device", "overflow",
     "not-permitted", "pipe", "read-only", "invalid-seek", "text-file-busy", "cross-device",
 ]  # fmt: skip
-_CODE = {name: i for i, name in enumerate(ERROR_CODES)}
+_CODE = {name: i for i, name in enumerate(_ERROR_CODES)}
 
 _ERRNO_NAMES = {
     "EACCES": "access", "EAGAIN": "would-block", "EALREADY": "already", "EBADF": "bad-descriptor", "EBUSY": "busy", "EDEADLK": "deadlock", "EDQUOT": "quota",
@@ -96,10 +96,10 @@ _TYPE = {
     "socket": 7,
 }
 
-NAME_MAX = 255
-MAX_DEPTH = 128
-MAX_LINKS = 40
-STREAM_CHUNK = 65536
+_NAME_MAX = 255
+_MAX_DEPTH = 128
+_MAX_LINKS = 40
+_STREAM_CHUNK = 65536
 
 
 class FsError(Exception):
@@ -113,7 +113,7 @@ class FsError(Exception):
         self.done = 0
 
 
-_WINERROR = {  # the error-code of a Win32 error (`fusedwasi_p2_win_code` in C)
+_WINERROR = {  # the error-code of a Win32 error (`fusedwasi_p2__win_code` in C)
     2: "no-entry", 3: "no-entry", 15: "no-entry", 53: "no-entry", 67: "no-entry", 5: "access", 32: "access", 33: "access", 65: "access", 80: "exist", 183: "exist",
     145: "not-empty", 267: "not-directory", 17: "cross-device", 1314: "not-permitted", 1142: "too-many-links", 112: "insufficient-space", 39: "insufficient-space",
     206: "name-too-long", 8: "insufficient-memory", 14: "insufficient-memory", 6: "bad-descriptor", 19: "read-only", 1921: "loop", 4390: "invalid", 123: "invalid",
@@ -136,7 +136,7 @@ class Descriptor:
         self.path = path  # Windows: where it is (a directory has no fd there)
 
 
-class DirectoryEntries:
+class _DirectoryEntries:
     __slots__ = ("entries", "pos")
 
     def __init__(self, entries: list[tuple[int, bytes]]) -> None:
@@ -144,7 +144,7 @@ class DirectoryEntries:
 
 
 def _descriptor(guest: Guest, handle: int) -> Descriptor:
-    return table_get(guest, handle, KIND_DESCRIPTOR)  # type: ignore[return-value]
+    return _table_get(guest, handle, KIND_DESCRIPTOR)  # type: ignore[return-value]
 
 
 def _need(descriptor: Descriptor, flag: int) -> None:
@@ -166,7 +166,7 @@ def _type_of(mode: int) -> int:
 
 # What differs between POSIX and Windows. A `Ref` is what the walk stands on: the descriptor of a directory (POSIX) or its path (Windows); `name` is a name below it.
 
-Ref = int | str
+_Ref = int | str
 
 if sys.platform == "win32":
     _REPARSE_MOUNT_POINT = 0xA0000003
@@ -174,7 +174,7 @@ if sys.platform == "win32":
     def _is_link(st: os.stat_result) -> bool:
         return stat_module.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) == _REPARSE_MOUNT_POINT
 
-    def _join(parent: Ref, name: bytes) -> str:
+    def _join(parent: _Ref, name: bytes) -> str:
         try:
             text = os.fsdecode(name)
         except UnicodeDecodeError:  # Windows wants text
@@ -183,7 +183,7 @@ if sys.platform == "win32":
             raise FsError("invalid")
         return f"{parent}\\{text}"
 
-    def _target(parent: Ref, name: bytes) -> str:
+    def _target(parent: _Ref, name: bytes) -> str:
         """The place a name stands for: the directory itself for `.`, with no trailing slash (a slash after the name of something that is not a directory is `not-directory`, as in POSIX)."""
         bare = name.rstrip(b"/")
         full = str(parent) if bare in (b".", b"") else _join(parent, bare)
@@ -196,13 +196,13 @@ if sys.platform == "win32":
                 raise NotADirectoryError(errno.ENOTDIR, "not a directory")
         return full
 
-    def _ref(d: Descriptor) -> Ref:
+    def _ref(d: Descriptor) -> _Ref:
         return d.path
 
-    def _lstat(parent: Ref, name: bytes) -> os.stat_result:
+    def _lstat(parent: _Ref, name: bytes) -> os.stat_result:
         return os.lstat(_target(parent, name))
 
-    def _readlink(parent: Ref, name: bytes) -> bytes:
+    def _readlink(parent: _Ref, name: bytes) -> bytes:
         target = os.readlink(_target(parent, name))
         if target.startswith(("\\\\?\\", "\\??\\")):
             target = target[4:]
@@ -211,7 +211,7 @@ if sys.platform == "win32":
             target = "/" + target  # a drive: absolute, so it is refused like a rooted target
         return os.fsencode(target)
 
-    def _enter(parent: Ref, name: bytes) -> tuple[Ref, int | None]:
+    def _enter(parent: _Ref, name: bytes) -> tuple[_Ref, int | None]:
         full = _join(parent, name)
         st = os.lstat(full)
         if _is_link(st):
@@ -233,29 +233,29 @@ if sys.platform == "win32":
         os.lseek(fd, offset, os.SEEK_SET)
         return os.write(fd, data)
 
-    def _mkdir(parent: Ref, name: bytes) -> None:
+    def _mkdir(parent: _Ref, name: bytes) -> None:
         os.mkdir(_target(parent, name))
 
-    def _rmdir(parent: Ref, name: bytes) -> None:
+    def _rmdir(parent: _Ref, name: bytes) -> None:
         os.rmdir(_target(parent, name))
 
-    def _unlink(parent: Ref, name: bytes) -> None:
+    def _unlink(parent: _Ref, name: bytes) -> None:
         os.unlink(_target(parent, name))
 
     def _is_plain_dir(path: str) -> bool:
         return os.path.isdir(path) and not os.path.islink(path)
 
-    def _rename(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
+    def _rename(p1: _Ref, name1: bytes, p2: _Ref, name2: bytes) -> None:
         a, b = _target(p1, name1), _target(p2, name2)
         # POSIX replaces an empty directory by a directory; Windows does not, so it is taken away first (it says not-empty if it is not)
         if _is_plain_dir(a) and _is_plain_dir(b) and os.path.normcase(a) != os.path.normcase(b):
             os.rmdir(b)
         os.replace(a, b)
 
-    def _link(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
+    def _link(p1: _Ref, name1: bytes, p2: _Ref, name2: bytes) -> None:
         os.link(_target(p1, name1), _target(p2, name2))
 
-    def _symlink(target: bytes, parent: Ref, name: bytes) -> None:
+    def _symlink(target: bytes, parent: _Ref, name: bytes) -> None:
         text = os.fsdecode(target).replace("/", "\\")
         beside = os.path.normpath(os.path.join(str(parent).removeprefix("\\\\?\\"), text))
         full = _target(parent, name)
@@ -267,7 +267,7 @@ if sys.platform == "win32":
             raise
 
     def _utime_reparse_point(full: str, ns: tuple[int, int]) -> None:
-        """The times of a link itself, for a Python that cannot (before 3.13 on Windows): what `fusedwasi_p2_win_set_times_path` does in C, a handle opened on the
+        """The times of a link itself, for a Python that cannot (before 3.13 on Windows): what `fusedwasi_p2__win_set_times_path` does in C, a handle opened on the
         reparse point (`FILE_FLAG_OPEN_REPARSE_POINT`) and `SetFileTime`. `ctypes` is imported here, so nothing else pays for it."""
         import ctypes
         from ctypes import wintypes
@@ -293,7 +293,7 @@ if sys.platform == "win32":
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
         def filetime(value: int) -> wintypes.FILETIME:
-            ticks = max(value, 0) // 100 + 116444736000000000  # 100 ns since 1601, as `fusedwasi_p2_ns_ft`
+            ticks = max(value, 0) // 100 + 116444736000000000  # 100 ns since 1601, as `fusedwasi_p2__ns_ft`
             return wintypes.FILETIME(ticks & 0xFFFFFFFF, ticks >> 32)
 
         file_write_attributes, share_all, open_existing = 0x100, 0x7, 3
@@ -310,7 +310,7 @@ if sys.platform == "win32":
         finally:
             kernel32.CloseHandle(handle)
 
-    def _utime(parent: Ref, name: bytes, ns: tuple[int, int]) -> None:
+    def _utime(parent: _Ref, name: bytes, ns: tuple[int, int]) -> None:
         full = _target(parent, name)
         try:
             os.utime(full, ns=ns, follow_symlinks=False)  # a link at the end is the one that is touched
@@ -323,7 +323,7 @@ if sys.platform == "win32":
     def _listdir(d: Descriptor) -> list[bytes]:
         return [os.fsencode(n) for n in os.listdir(d.path)]
 
-    def _open_at(parent: Ref, name: bytes, open_flags: int, flags: int) -> Descriptor:
+    def _open_at(parent: _Ref, name: bytes, open_flags: int, flags: int) -> Descriptor:
         full = _target(parent, name)
         try:
             st = os.lstat(full)
@@ -355,16 +355,16 @@ if sys.platform == "win32":
 
 else:
 
-    def _ref(d: Descriptor) -> Ref:
+    def _ref(d: Descriptor) -> _Ref:
         return d.fd
 
-    def _lstat(parent: Ref, name: bytes) -> os.stat_result:
+    def _lstat(parent: _Ref, name: bytes) -> os.stat_result:
         return os.stat(name, dir_fd=int(parent), follow_symlinks=False)
 
-    def _readlink(parent: Ref, name: bytes) -> bytes:
+    def _readlink(parent: _Ref, name: bytes) -> bytes:
         return os.fsencode(os.readlink(name, dir_fd=int(parent)))
 
-    def _enter(parent: Ref, name: bytes) -> tuple[Ref, int | None]:
+    def _enter(parent: _Ref, name: bytes) -> tuple[_Ref, int | None]:
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=int(parent))
         return fd, fd
 
@@ -377,25 +377,25 @@ else:
     def _pwrite(fd: int, data: bytes | memoryview, offset: int) -> int:
         return os.pwrite(fd, data, offset)
 
-    def _mkdir(parent: Ref, name: bytes) -> None:
+    def _mkdir(parent: _Ref, name: bytes) -> None:
         os.mkdir(name, 0o777, dir_fd=int(parent))
 
-    def _rmdir(parent: Ref, name: bytes) -> None:
+    def _rmdir(parent: _Ref, name: bytes) -> None:
         os.rmdir(name, dir_fd=int(parent))
 
-    def _unlink(parent: Ref, name: bytes) -> None:
+    def _unlink(parent: _Ref, name: bytes) -> None:
         os.unlink(name, dir_fd=int(parent))
 
-    def _rename(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
+    def _rename(p1: _Ref, name1: bytes, p2: _Ref, name2: bytes) -> None:
         os.rename(name1, name2, src_dir_fd=int(p1), dst_dir_fd=int(p2))
 
-    def _link(p1: Ref, name1: bytes, p2: Ref, name2: bytes) -> None:
+    def _link(p1: _Ref, name1: bytes, p2: _Ref, name2: bytes) -> None:
         os.link(name1, name2, src_dir_fd=int(p1), dst_dir_fd=int(p2), follow_symlinks=False)
 
-    def _symlink(target: bytes, parent: Ref, name: bytes) -> None:
+    def _symlink(target: bytes, parent: _Ref, name: bytes) -> None:
         os.symlink(target, name, dir_fd=int(parent))
 
-    def _utime(parent: Ref, name: bytes, ns: tuple[int, int]) -> None:
+    def _utime(parent: _Ref, name: bytes, ns: tuple[int, int]) -> None:
         os.utime(name, ns=ns, dir_fd=int(parent), follow_symlinks=False)
 
     def _utime_d(d: Descriptor, ns: tuple[int, int]) -> None:
@@ -404,7 +404,7 @@ else:
     def _listdir(d: Descriptor) -> list[bytes]:
         return [os.fsencode(n) for n in os.listdir(d.fd)]
 
-    def _open_at(parent: Ref, name: bytes, open_flags: int, flags: int) -> Descriptor:
+    def _open_at(parent: _Ref, name: bytes, open_flags: int, flags: int) -> Descriptor:
         oflags = os.O_NOFOLLOW | os.O_CLOEXEC
         oflags |= os.O_RDWR if flags & READ and flags & WRITE else os.O_WRONLY if flags & WRITE else os.O_RDONLY
         if open_flags & CREATE:
@@ -439,7 +439,7 @@ else:
 # the walk of a path
 
 
-def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> tuple[Ref, bytes, list[int]]:
+def _walk(base: _Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> tuple[_Ref, bytes, list[int]]:
     """(directory, name, descriptors to close): the directory that holds the last name of `path` and that name (`.` for none), the walk confined below `base`.
 
     `link_slash_not_dir`: a link with a slash after it, where links are not followed, is not a directory (WASI 0.1: uvwasi says so); else the walk follows it, below the base (Wasmtime)."""
@@ -449,7 +449,7 @@ def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False
         raise FsError("no-entry")  # an empty name is no name (POSIX; Wasmtime says the same)
     if path.startswith(b"/"):
         raise FsError("not-permitted")
-    stack: list[Ref] = [base]
+    stack: list[_Ref] = [base]
     opened: list[int] = []
     links = 0
     pending = path
@@ -463,7 +463,7 @@ def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False
             rest = rest.lstrip(b"/")
             last = not rest
             slash = last and bool(sep)
-            if len(name) > NAME_MAX:
+            if len(name) > _NAME_MAX:
                 raise FsError("name-too-long")
             if name == b".":
                 if last:
@@ -501,7 +501,7 @@ def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False
                         break
                 # a link at the end is read before it is used (below)
             else:
-                if len(stack) > MAX_DEPTH:
+                if len(stack) > _MAX_DEPTH:
                     raise FsError("name-too-long")
                 try:
                     nxt, entered = _enter(stack[-1], name)
@@ -523,7 +523,7 @@ def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False
                     break
                 raise FsError("not-directory") from exc
             links += 1
-            if links > MAX_LINKS:
+            if links > _MAX_LINKS:
                 raise FsError("loop")
             if target.startswith(b"/"):
                 raise FsError("not-permitted")
@@ -538,10 +538,10 @@ def _walk(base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False
 class _Walked:
     """`with _Walked(base, path, follow) as (directory, name):` closes what the walk opened."""
 
-    def __init__(self, base: Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> None:
+    def __init__(self, base: _Ref, path: bytes, follow: bool, link_slash_not_dir: bool = False) -> None:
         self.directory, self.name, self.opened = _walk(base, path, follow, link_slash_not_dir)
 
-    def __enter__(self) -> tuple[Ref, bytes]:
+    def __enter__(self) -> tuple[_Ref, bytes]:
         return self.directory, self.name
 
     def __exit__(self, *exc: object) -> None:
@@ -553,40 +553,40 @@ class _Walked:
 
 
 def _ok(guest: Guest, comp: int, retptr: int) -> None:
-    store_u8(guest, comp, retptr, 0)
+    _store_u8(guest, comp, retptr, 0)
 
 
 def _fail(guest: Guest, comp: int, retptr: int, at: int, exc: FsError) -> None:
-    store_u8(guest, comp, retptr, 1)
-    store_u8(guest, comp, at, exc.code)
+    _store_u8(guest, comp, retptr, 1)
+    _store_u8(guest, comp, at, exc.code)
 
 
 def _datetime(guest: Guest, comp: int, ptr: int, ns: int) -> None:
-    store_u8(guest, comp, ptr, 1)  # some
-    store_u64(guest, comp, ptr + 8, ns // 1_000_000_000)
-    store_u32(guest, comp, ptr + 16, ns % 1_000_000_000)
+    _store_u8(guest, comp, ptr, 1)  # some
+    _store_u64(guest, comp, ptr + 8, ns // 1_000_000_000)
+    _store_u32(guest, comp, ptr + 16, ns % 1_000_000_000)
 
 
 def _write_stat(guest: Guest, comp: int, ptr: int, st: os.stat_result) -> None:
-    store_u8(guest, comp, ptr, _type_of(st.st_mode))
-    store_u64(guest, comp, ptr + 8, st.st_nlink)
-    store_u64(guest, comp, ptr + 16, st.st_size)
+    _store_u8(guest, comp, ptr, _type_of(st.st_mode))
+    _store_u64(guest, comp, ptr + 8, st.st_nlink)
+    _store_u64(guest, comp, ptr + 16, st.st_size)
     _datetime(guest, comp, ptr + 24, st.st_atime_ns)
     _datetime(guest, comp, ptr + 48, st.st_mtime_ns)
     _datetime(guest, comp, ptr + 72, st.st_ctime_ns)
 
 
 def _string(guest: Guest, comp: int, data: bytes, at: int) -> None:
-    ptr = alloc(guest, comp, 1, len(data))
-    store_bytes(guest, comp, ptr, data)
-    store_u32(guest, comp, at, ptr)
-    store_u32(guest, comp, at + 4, len(data))
+    ptr = _alloc(guest, comp, 1, len(data))
+    _store_bytes(guest, comp, ptr, data)
+    _store_u32(guest, comp, at, ptr)
+    _store_u32(guest, comp, at + 4, len(data))
 
 
 # streams over a file
 
 
-class FileInput(InputStream):
+class _FileInput(InputStream):
     def __init__(self, fd: int, offset: int) -> None:
         self.fd, self.pos = (os.dup(fd) if fd >= 0 else -1), offset  # (-1: a directory on Windows)
 
@@ -607,12 +607,12 @@ class FileInput(InputStream):
             os.close(self.fd)
 
 
-class FileOutput(OutputStream):
+class _FileOutput(OutputStream):
     def __init__(self, fd: int, offset: int | None) -> None:
         self.fd, self.pos = (os.dup(fd) if fd >= 0 else -1), offset  # offset None: append
 
     def check_write(self) -> int:
-        return STREAM_CHUNK
+        return _STREAM_CHUNK
 
     def write(self, data: bytes) -> None:
         try:
@@ -769,7 +769,7 @@ def _walk_below(d: Descriptor, path: bytes, follow: bool, p1: bool) -> _Walked:
         raise _oserror(exc) from exc
 
 
-def _leaf_slash(parent: Ref, leaf: bytes) -> None:
+def _leaf_slash(parent: _Ref, leaf: bytes) -> None:
     """A name to be made that has a slash after it (a link): the error it can only be; nothing when it has none."""
     if not leaf.endswith(b"/"):
         return
@@ -1035,14 +1035,14 @@ class SystemFilesystem(Filesystem):
     def input_stream(self, d: Descriptor, offset: int) -> InputStream:
         _need(d, READ)
         try:
-            return FileInput(d.fd, offset)
+            return _FileInput(d.fd, offset)
         except OSError as exc:
             raise _oserror(exc) from exc
 
     def output_stream(self, d: Descriptor, offset: int | None) -> OutputStream:
         _need(d, WRITE)
         try:
-            return FileOutput(d.fd, offset)
+            return _FileOutput(d.fd, offset)
         except OSError as exc:
             raise _oserror(exc) from exc
 
@@ -1066,17 +1066,17 @@ def _fs(guest: Guest) -> Filesystem:
 
 def wasi_filesystem_preopens_get_directories(guest: Guest, comp: int, retptr: int) -> None:
     items = guest.state.preopens
-    ptr = alloc(guest, comp, 4, 12 * len(items))
+    ptr = _alloc(guest, comp, 4, 12 * len(items))
     for i, (path, name, writable) in enumerate(items):
         try:
             made = _fs(guest).open_directory(path, READ | (MUTATE if writable else 0))
         except FsError:
-            trap(guest, "cannot open a preopened directory")
-        handle = table_new(guest, KIND_DESCRIPTOR, made)
-        store_u32(guest, comp, ptr + 12 * i, handle)
+            _trap(guest, "cannot open a preopened directory")
+        handle = _table_new(guest, KIND_DESCRIPTOR, made)
+        _store_u32(guest, comp, ptr + 12 * i, handle)
         _string(guest, comp, name.encode(), ptr + 12 * i + 4)
-    store_u32(guest, comp, retptr, ptr)
-    store_u32(guest, comp, retptr + 4, len(items))
+    _store_u32(guest, comp, retptr, ptr)
+    _store_u32(guest, comp, retptr + 4, len(items))
 
 
 # the descriptor
@@ -1084,12 +1084,12 @@ def wasi_filesystem_preopens_get_directories(guest: Guest, comp: int, retptr: in
 
 def wasi_filesystem_types_descriptor_drop(guest: Guest, handle: int) -> None:
     descriptor = _descriptor(guest, handle)
-    table_drop(guest, handle, KIND_DESCRIPTOR)
+    _table_drop(guest, handle, KIND_DESCRIPTOR)
     _fs(guest).close(descriptor)
 
 
 def wasi_filesystem_types_directory_entry_stream_drop(guest: Guest, handle: int) -> None:
-    table_drop(guest, handle, KIND_DIRECTORY_ENTRY_STREAM)
+    _table_drop(guest, handle, KIND_DIRECTORY_ENTRY_STREAM)
 
 
 def _stream_result(guest: Guest, comp: int, retptr: int, make: Callable[[], int]) -> None:
@@ -1099,7 +1099,7 @@ def _stream_result(guest: Guest, comp: int, retptr: int, make: Callable[[], int]
         _fail(guest, comp, retptr, retptr + 4, exc)
         return
     _ok(guest, comp, retptr)
-    store_u32(guest, comp, retptr + 4, stream)
+    _store_u32(guest, comp, retptr + 4, stream)
 
 
 def wasi_filesystem_types_descriptor_read_via_stream(
@@ -1107,7 +1107,7 @@ def wasi_filesystem_types_descriptor_read_via_stream(
 ) -> None:
     def make() -> int:
         d = _descriptor(guest, self)
-        return input_stream_new(guest, _fs(guest).input_stream(d, offset))
+        return _input_stream_new(guest, _fs(guest).input_stream(d, offset))
 
     _stream_result(guest, comp, retptr, make)
 
@@ -1117,7 +1117,7 @@ def wasi_filesystem_types_descriptor_write_via_stream(
 ) -> None:
     def make() -> int:
         d = _descriptor(guest, self)
-        return output_stream_new(guest, _fs(guest).output_stream(d, offset))
+        return _output_stream_new(guest, _fs(guest).output_stream(d, offset))
 
     _stream_result(guest, comp, retptr, make)
 
@@ -1125,7 +1125,7 @@ def wasi_filesystem_types_descriptor_write_via_stream(
 def wasi_filesystem_types_descriptor_append_via_stream(guest: Guest, comp: int, self: int, retptr: int) -> None:
     def make() -> int:
         d = _descriptor(guest, self)
-        return output_stream_new(guest, _fs(guest).output_stream(d, None))
+        return _output_stream_new(guest, _fs(guest).output_stream(d, None))
 
     _stream_result(guest, comp, retptr, make)
 
@@ -1156,7 +1156,7 @@ def wasi_filesystem_types_descriptor_sync(guest: Guest, comp: int, self: int, re
 
 def wasi_filesystem_types_descriptor_get_flags(guest: Guest, comp: int, self: int, retptr: int) -> None:
     _ok(guest, comp, retptr)
-    store_u8(guest, comp, retptr + 1, _descriptor(guest, self).flags)
+    _store_u8(guest, comp, retptr + 1, _descriptor(guest, self).flags)
 
 
 def wasi_filesystem_types_descriptor_get_type(guest: Guest, comp: int, self: int, retptr: int) -> None:
@@ -1167,7 +1167,7 @@ def wasi_filesystem_types_descriptor_get_type(guest: Guest, comp: int, self: int
         _fail(guest, comp, retptr, retptr + 1, exc)
         return
     _ok(guest, comp, retptr)
-    store_u8(guest, comp, retptr + 1, kind)
+    _store_u8(guest, comp, retptr + 1, kind)
 
 
 def wasi_filesystem_types_descriptor_set_size(guest: Guest, comp: int, self: int, size: int, retptr: int) -> None:
@@ -1201,16 +1201,16 @@ def wasi_filesystem_types_descriptor_read(
 ) -> None:
     try:
         d = _descriptor(guest, self)
-        data = _fs(guest).read(d, min(length, READ_CAP), offset)
+        data = _fs(guest).read(d, min(length, _READ_CAP), offset)
     except FsError as exc:
         _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    ptr = alloc(guest, comp, 1, len(data))
-    store_bytes(guest, comp, ptr, data)
+    ptr = _alloc(guest, comp, 1, len(data))
+    _store_bytes(guest, comp, ptr, data)
     _ok(guest, comp, retptr)
-    store_u32(guest, comp, retptr + 4, ptr)
-    store_u32(guest, comp, retptr + 8, len(data))
-    store_u8(guest, comp, retptr + 12, int(not data))  # end of file is when nothing was read (as in Wasmtime)
+    _store_u32(guest, comp, retptr + 4, ptr)
+    _store_u32(guest, comp, retptr + 8, len(data))
+    _store_u8(guest, comp, retptr + 12, int(not data))  # end of file is when nothing was read (as in Wasmtime)
 
 
 def wasi_filesystem_types_descriptor_write(
@@ -1218,18 +1218,18 @@ def wasi_filesystem_types_descriptor_write(
 ) -> None:
     try:
         d = _descriptor(guest, self)
-        _fs(guest).write(d, load_bytes(guest, comp, ptr, length), offset)
+        _fs(guest).write(d, _load_bytes(guest, comp, ptr, length), offset)
     except FsError as exc:
         _fail(guest, comp, retptr, retptr + 8, exc)
         return
     _ok(guest, comp, retptr)
-    store_u64(guest, comp, retptr + 8, length)
+    _store_u64(guest, comp, retptr + 8, length)
 
 
 def wasi_filesystem_types_descriptor_read_directory(guest: Guest, comp: int, self: int, retptr: int) -> None:
     def make() -> int:
         d = _descriptor(guest, self)
-        return table_new(guest, KIND_DIRECTORY_ENTRY_STREAM, DirectoryEntries(_fs(guest).read_directory(d)))
+        return _table_new(guest, KIND_DIRECTORY_ENTRY_STREAM, _DirectoryEntries(_fs(guest).read_directory(d)))
 
     _stream_result(guest, comp, retptr, make)
 
@@ -1237,15 +1237,15 @@ def wasi_filesystem_types_descriptor_read_directory(guest: Guest, comp: int, sel
 def wasi_filesystem_types_directory_entry_stream_read_directory_entry(
     guest: Guest, comp: int, self: int, retptr: int
 ) -> None:
-    stream: DirectoryEntries = table_get(guest, self, KIND_DIRECTORY_ENTRY_STREAM)  # type: ignore[assignment]
+    stream: _DirectoryEntries = _table_get(guest, self, KIND_DIRECTORY_ENTRY_STREAM)  # type: ignore[assignment]
     _ok(guest, comp, retptr)
     if stream.pos >= len(stream.entries):
-        store_u8(guest, comp, retptr + 4, 0)  # none
+        _store_u8(guest, comp, retptr + 4, 0)  # none
         return
     kind, name = stream.entries[stream.pos]
     stream.pos += 1
-    store_u8(guest, comp, retptr + 4, 1)
-    store_u8(guest, comp, retptr + 8, kind)
+    _store_u8(guest, comp, retptr + 4, 1)
+    _store_u8(guest, comp, retptr + 8, kind)
     _string(guest, comp, name, retptr + 12)
 
 
@@ -1261,7 +1261,7 @@ def wasi_filesystem_types_descriptor_stat(guest: Guest, comp: int, self: int, re
 
 
 def _path(guest: Guest, comp: int, ptr: int, length: int) -> bytes:
-    return load_bytes(guest, comp, ptr, length)
+    return _load_bytes(guest, comp, ptr, length)
 
 
 def _stat_at(guest: Guest, comp: int, self: int, flags: int, ptr: int, length: int) -> os.stat_result:
@@ -1320,12 +1320,12 @@ def wasi_filesystem_types_descriptor_open_at(
     try:
         d = _descriptor(guest, self)
         made = _fs(guest).open_at(d, _path(guest, comp, ptr, length), path_flags, open_flags, flags)
-        handle = table_new(guest, KIND_DESCRIPTOR, made)
+        handle = _table_new(guest, KIND_DESCRIPTOR, made)
     except FsError as exc:
         _fail(guest, comp, retptr, retptr + 4, exc)
         return
     _ok(guest, comp, retptr)
-    store_u32(guest, comp, retptr + 4, handle)
+    _store_u32(guest, comp, retptr + 4, handle)
 
 
 def wasi_filesystem_types_descriptor_readlink_at(
@@ -1395,7 +1395,7 @@ def wasi_filesystem_types_descriptor_rename_at(
 def wasi_filesystem_types_descriptor_symlink_at(
     guest: Guest, comp: int, self: int, old_ptr: int, old_len: int, new_ptr: int, new_len: int, retptr: int
 ) -> None:
-    target = load_bytes(guest, comp, old_ptr, old_len)
+    target = _load_bytes(guest, comp, old_ptr, old_len)
     if b"\0" in target or target.startswith(b"/"):
         error = FsError("invalid" if b"\0" in target else "not-permitted")
 
@@ -1429,8 +1429,8 @@ def _fnv(*values: int) -> int:
 def _hash(guest: Guest, comp: int, retptr: int, st: os.stat_result) -> None:
     """`upper` names the object (device, inode); `lower` also takes in what changes when the object is modified (size, modification time)."""
     _ok(guest, comp, retptr)
-    store_u64(guest, comp, retptr + 8, _fnv(st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino))
-    store_u64(guest, comp, retptr + 16, _fnv(st.st_dev, st.st_ino))
+    _store_u64(guest, comp, retptr + 8, _fnv(st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino))
+    _store_u64(guest, comp, retptr + 16, _fnv(st.st_dev, st.st_ino))
 
 
 def wasi_filesystem_types_descriptor_metadata_hash(guest: Guest, comp: int, self: int, retptr: int) -> None:
@@ -1454,9 +1454,9 @@ def wasi_filesystem_types_descriptor_metadata_hash_at(
 
 
 def wasi_filesystem_types_filesystem_error_code(guest: Guest, comp: int, err: int, retptr: int) -> None:
-    error: Error = table_get(guest, err, KIND_ERROR)  # type: ignore[assignment]
+    error: _Error = _table_get(guest, err, KIND_ERROR)  # type: ignore[assignment]
     if error.code is None:
-        store_u8(guest, comp, retptr, 0)
+        _store_u8(guest, comp, retptr, 0)
     else:
-        store_u8(guest, comp, retptr, 1)
-        store_u8(guest, comp, retptr + 1, error.code)
+        _store_u8(guest, comp, retptr, 1)
+        _store_u8(guest, comp, retptr + 1, error.code)

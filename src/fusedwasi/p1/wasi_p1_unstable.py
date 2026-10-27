@@ -8,12 +8,12 @@ import struct
 from typing import TYPE_CHECKING
 
 from .wasi_p1 import (
+    _filestat_of_fd,
+    _filestat_of_path,
     _poll,  # pyright: ignore[reportPrivateUsage]
     _seek_native,  # pyright: ignore[reportPrivateUsage]
     _seek_right,  # pyright: ignore[reportPrivateUsage]
     _signed,  # pyright: ignore[reportPrivateUsage]
-    filestat_of_fd,
-    filestat_of_path,
 )
 
 # every call that this snapshot has as the later one has it (re-exported: the module is a complete table of the calls)
@@ -140,7 +140,7 @@ from .wasi_p1 import (
 from .wasi_p1 import (
     sock_shutdown as sock_shutdown,
 )
-from .wasi_p1_core import E_INVAL, E_SUCCESS, load, put_bytes
+from .wasi_p1_core import E_INVAL, E_SUCCESS, _load, _put_bytes
 
 if TYPE_CHECKING:
     from .wasi_p1_core import Guest
@@ -159,18 +159,18 @@ def fd_fdstat_get(guest: Guest, fd: int, ptr: int) -> int:
     number = _fdstat_get(guest, fd, ptr)
     if number == E_SUCCESS:
         mask = (1 << 29) - 1
-        base, inheriting = struct.unpack("<QQ", load(guest, ptr + 8, 16))
-        put_bytes(guest, ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
+        base, inheriting = struct.unpack("<QQ", _load(guest, ptr + 8, 16))
+        _put_bytes(guest, ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
     return number
 
 
 def fd_filestat_get(guest: Guest, fd: int, ptr: int) -> int:
     """The filestat of this snapshot has a 32-bit link count (56 bytes)."""
-    return filestat_of_fd(guest, fd, ptr, True)
+    return _filestat_of_fd(guest, fd, ptr, True)
 
 
 def path_filestat_get(guest: Guest, fd: int, flags: int, path: int, length: int, ptr: int) -> int:
-    return filestat_of_path(guest, fd, flags, path, length, ptr, True)
+    return _filestat_of_path(guest, fd, flags, path, length, ptr, True)
 
 
 def poll_oneoff(guest: Guest, in_: int, out: int, count: int, nevents: int) -> int:

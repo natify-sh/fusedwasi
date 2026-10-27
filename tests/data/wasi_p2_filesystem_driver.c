@@ -21,7 +21,7 @@ static void show(const char *label, uint32_t off, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) printf("%02x", memory[off + i]);
     printf("\n");
 }
-static uint32_t u32(uint32_t off) { return fusedwasi_p2_load_u32(&s, 0, off); }
+static uint32_t u32(uint32_t off) { return fusedwasi_p2__load_u32(&s, 0, off); }
 static uint64_t u64(uint32_t off) { return (uint64_t)u32(off) | (uint64_t)u32(off + 4) << 32; }
 static void clear(uint32_t off, uint32_t n) { memset(memory + off, 0, n); }
 static uint32_t path(const char *text, size_t n) {

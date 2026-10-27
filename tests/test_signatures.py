@@ -35,12 +35,6 @@ P2_PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 # ---- what the repository does not have, and why ---------------------------------------------------------------------------------
 
-# Functions of the P1 Python module that are not imports of WASI.
-P1_PYTHON_HELPERS = {
-    "filestat_of_fd": "helper shared with wasi_p1_unstable, which writes the older layout of filestat",
-    "filestat_of_path": "helper shared with wasi_p1_unstable, which writes the older layout of filestat",
-}
-
 # Functions of the table of 0.2 that the twins do not implement. All three are behind an `@unstable` feature in the WIT of 0.2.12 and are
 # left out on purpose (host_scope.md: "without the unstable items"); `network-error-code`, the fourth unstable one, is implemented.
 P2_NOT_IMPLEMENTED = {
@@ -226,7 +220,7 @@ def test_p1_python_has_the_functions_of_the_table() -> None:
         for n, f in vars(wasi_p1).items()
         if inspect.isfunction(f) and not n.startswith("_") and f.__module__ == wasi_p1.__name__
     }
-    assert public - set(table) == set(P1_PYTHON_HELPERS)
+    assert public - set(table) == set()  # the helpers of the module (`_filestat_of_fd`, ...) start with an underscore
     assert set(table) - public == set()
     for name, f in table.items():
         params = list(inspect.signature(getattr(wasi_p1, name)).parameters)
@@ -242,7 +236,6 @@ def test_p1_unstable_python_functions_are_in_the_table() -> None:
         if inspect.isfunction(f)
         and not n.startswith("_")
         and f.__module__ in (wasi_p1.__name__, wasi_p1_unstable.__name__)
-        and n not in P1_PYTHON_HELPERS
     }
     assert public - set(table) == set()
     assert set(table) - public == {"sock_accept"}  # not a call of the first snapshot (the module says so)

@@ -7,19 +7,19 @@ through the pointer that is the last argument, in memory of the component (`cabi
 
 from __future__ import annotations
 
-from .wasi_p2_core import Guest, alloc, store_bytes, store_u32, store_u64, trap
+from .wasi_p2_core import Guest, _alloc, _store_bytes, _store_u32, _store_u64, _trap
 
-MAX_BYTES = 1 << 26
+_MAX_BYTES = 1 << 26
 
 
 def _bytes(guest: Guest, comp: int, insecure: bool, length: int, retptr: int) -> None:
-    if length > MAX_BYTES:
-        trap(guest, f"{length} random bytes requested")
+    if length > _MAX_BYTES:
+        _trap(guest, f"{length} random bytes requested")
     data = (guest.state.insecure_random_bytes if insecure else guest.state.random_bytes)(length)
-    ptr = alloc(guest, comp, 1, length)
-    store_bytes(guest, comp, ptr, data)
-    store_u32(guest, comp, retptr, ptr)
-    store_u32(guest, comp, retptr + 4, length)
+    ptr = _alloc(guest, comp, 1, length)
+    _store_bytes(guest, comp, ptr, data)
+    _store_u32(guest, comp, retptr, ptr)
+    _store_u32(guest, comp, retptr + 4, length)
 
 
 def _u64(guest: Guest, insecure: bool) -> int:
@@ -43,5 +43,5 @@ def wasi_random_insecure_get_insecure_random_u64(guest: Guest) -> int:
 
 
 def wasi_random_insecure_seed_insecure_seed(guest: Guest, comp: int, retptr: int) -> None:
-    store_u64(guest, comp, retptr, _u64(guest, True))
-    store_u64(guest, comp, retptr + 8, _u64(guest, True))
+    _store_u64(guest, comp, retptr, _u64(guest, True))
+    _store_u64(guest, comp, retptr + 8, _u64(guest, True))

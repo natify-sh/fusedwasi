@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn
 if TYPE_CHECKING:
     from .wasi_p2_filesystem import Filesystem
 
-INDEX_BITS = 20  # a handle is (generation << INDEX_BITS) | index; index 0 is never given out
-INDEX_MASK = (1 << INDEX_BITS) - 1
-GENERATION_MASK = (1 << (32 - INDEX_BITS)) - 1
+_INDEX_BITS = 20  # a handle is (generation << INDEX_BITS) | index; index 0 is never given out
+_INDEX_MASK = (1 << _INDEX_BITS) - 1
+_GENERATION_MASK = (1 << (32 - _INDEX_BITS)) - 1
 
 KIND_POLLABLE = 1
 KIND_ERROR = 2
@@ -84,7 +84,7 @@ class Pollable:
         raise NotImplementedError
 
 
-class Slot:
+class _Slot:
     __slots__ = ("generation", "kind", "live", "obj")
 
     def __init__(self) -> None:
@@ -144,7 +144,7 @@ class State:
         filesystem: Filesystem | None = None,
         user: object = None,
     ) -> None:
-        self.slots: list[Slot] = [Slot()]  # slot 0 is never used
+        self._slots: list[_Slot] = [_Slot()]  # slot 0 is never used
         self.args = list(args)  # wasi:cli/environment
         self.env = list(env)
         self.initial_cwd = initial_cwd
@@ -182,11 +182,11 @@ class State:
         self.clock = clock
         self.resolution_ns = list(resolution_ns) if resolution_ns is not None else list(_RESOLUTIONS)
         self.sleep = sleep or self._sleep
-        self.p1: Any = None  # private: the descriptors of WASI 0.1 (`fusedwasi.p1`), made by the first function of 0.1 on the state
+        self._p1: Any = None  # private: the descriptors of WASI 0.1 (`fusedwasi.p1`), made by the first function of 0.1 on the state
 
     def close_all(self) -> None:
         """Closes what the state holds open: the descriptors (files and directories, of 0.2 and of 0.1), the streams of files. The streams the caller gave are the caller's."""
-        for slot in self.slots:
+        for slot in self._slots:
             if not slot.live:
                 continue
             slot.live = False
@@ -196,7 +196,7 @@ class State:
                 close = getattr(slot.obj, "close", None)
                 if close is not None and slot.obj not in self.std.values():
                     close()
-        self.p1 = None
+        self._p1 = None
 
     def _sleep(self, ns: int) -> None:
         end = self.clock(1) + ns
@@ -228,7 +228,7 @@ class Guest:
         user: object = None,
     ) -> None:
         self.state = state
-        self.memories: list[object | Callable[[], object]] = (
+        self._memories: list[object | Callable[[], object]] = (
             list(memories) if isinstance(memories, (list, tuple)) else [] if memories is None else [memories]  # type: ignore[arg-type]
         )
         self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
@@ -241,7 +241,7 @@ class Guest:
         self.user = user  # the pointer of whoever made the guest: the library never reads or writes it (the twin of `fusedwasi_p2_guest.user`)
 
 
-def trap(guest: Guest, message: str) -> NoReturn:
+def _trap(guest: Guest, message: str) -> NoReturn:
     """A trap: the hook `guest.trap` is told first (it may raise its own exception); then `Trap` is raised."""
     if guest.trap is not None:
         guest.trap(message)
@@ -253,50 +253,50 @@ def trap(guest: Guest, message: str) -> NoReturn:
 
 def table_add(state: State, kind: int, obj: object) -> int:
     """Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). The handle, or 0 when the table is full."""
-    for index, slot in enumerate(state.slots):
+    for index, slot in enumerate(state._slots):
         if index and not slot.live:
             break
     else:
-        index = len(state.slots)
-        if index > INDEX_MASK:
+        index = len(state._slots)
+        if index > _INDEX_MASK:
             return 0
-        state.slots.append(Slot())
-        slot = state.slots[index]
-    slot.generation = (slot.generation + 1) & GENERATION_MASK
+        state._slots.append(_Slot())
+        slot = state._slots[index]
+    slot.generation = (slot.generation + 1) & _GENERATION_MASK
     slot.kind, slot.live, slot.obj = kind, True, obj
-    return (slot.generation << INDEX_BITS) | index
+    return (slot.generation << _INDEX_BITS) | index
 
 
-def table_new(guest: Guest, kind: int, obj: object) -> int:
+def _table_new(guest: Guest, kind: int, obj: object) -> int:
     """The same in a function that has the guest: a full table is a trap."""
     handle = table_add(guest.state, kind, obj)
     if not handle:
-        trap(guest, "table of handles is full")
+        _trap(guest, "table of handles is full")
     return handle
 
 
-def table_get(guest: Guest, handle: int, kind: int) -> object:
+def _table_get(guest: Guest, handle: int, kind: int) -> object:
     """The object of a live handle of the given kind; anything else is a trap."""
-    index = handle & INDEX_MASK
-    if index == 0 or index >= len(guest.state.slots):
-        trap(guest, f"bad handle {handle}")
-    slot = guest.state.slots[index]
-    if not slot.live or slot.generation != handle >> INDEX_BITS or slot.kind != kind:
-        trap(guest, f"bad handle {handle}")
+    index = handle & _INDEX_MASK
+    if index == 0 or index >= len(guest.state._slots):
+        _trap(guest, f"bad handle {handle}")
+    slot = guest.state._slots[index]
+    if not slot.live or slot.generation != handle >> _INDEX_BITS or slot.kind != kind:
+        _trap(guest, f"bad handle {handle}")
     return slot.obj
 
 
-def table_alive(guest: Guest, handle: int, kind: int) -> bool:
-    index = handle & INDEX_MASK
-    if index == 0 or index >= len(guest.state.slots):
+def _table_alive(guest: Guest, handle: int, kind: int) -> bool:
+    index = handle & _INDEX_MASK
+    if index == 0 or index >= len(guest.state._slots):
         return False
-    slot = guest.state.slots[index]
-    return slot.live and slot.generation == handle >> INDEX_BITS and slot.kind == kind
+    slot = guest.state._slots[index]
+    return slot.live and slot.generation == handle >> _INDEX_BITS and slot.kind == kind
 
 
-def table_drop(guest: Guest, handle: int, kind: int) -> None:
-    table_get(guest, handle, kind)
-    slot = guest.state.slots[handle & INDEX_MASK]
+def _table_drop(guest: Guest, handle: int, kind: int) -> None:
+    _table_get(guest, handle, kind)
+    slot = guest.state._slots[handle & _INDEX_MASK]
     slot.live, slot.obj = False, None
 
 
@@ -313,50 +313,50 @@ def flat_view(memory: object) -> memoryview:
 
 
 def _check(guest: Guest, comp: int, ptr: int, size: int) -> memoryview:
-    if comp >= len(guest.memories):
-        trap(guest, f"no memory {comp}")
-    memory = guest.memories[comp]
+    if comp >= len(guest._memories):
+        _trap(guest, f"no memory {comp}")
+    memory = guest._memories[comp]
     if callable(memory):  # a function that gives the buffer: a memory that moves is followed
         memory = memory()
     view = flat_view(memory)
     if ptr < 0 or ptr + size > len(view):
-        trap(guest, f"pointer {ptr:#x}+{size} is outside the memory")
+        _trap(guest, f"pointer {ptr:#x}+{size} is outside the memory")
     return view
 
 
-def store_u8(guest: Guest, comp: int, ptr: int, value: int) -> None:
+def _store_u8(guest: Guest, comp: int, ptr: int, value: int) -> None:
     _check(guest, comp, ptr, 1)[ptr] = value & 0xFF
 
 
-def store_u16(guest: Guest, comp: int, ptr: int, value: int) -> None:
+def _store_u16(guest: Guest, comp: int, ptr: int, value: int) -> None:
     struct.pack_into("<H", _check(guest, comp, ptr, 2), ptr, value & 0xFFFF)
 
 
-def load_u8(guest: Guest, comp: int, ptr: int) -> int:
+def _load_u8(guest: Guest, comp: int, ptr: int) -> int:
     return _check(guest, comp, ptr, 1)[ptr]
 
 
-def load_u16(guest: Guest, comp: int, ptr: int) -> int:
+def _load_u16(guest: Guest, comp: int, ptr: int) -> int:
     return struct.unpack_from("<H", _check(guest, comp, ptr, 2), ptr)[0]
 
 
-def store_u32(guest: Guest, comp: int, ptr: int, value: int) -> None:
+def _store_u32(guest: Guest, comp: int, ptr: int, value: int) -> None:
     struct.pack_into("<I", _check(guest, comp, ptr, 4), ptr, value & 0xFFFFFFFF)
 
 
-def store_u64(guest: Guest, comp: int, ptr: int, value: int) -> None:
+def _store_u64(guest: Guest, comp: int, ptr: int, value: int) -> None:
     struct.pack_into("<Q", _check(guest, comp, ptr, 8), ptr, value & 0xFFFFFFFFFFFFFFFF)
 
 
-def store_bytes(guest: Guest, comp: int, ptr: int, data: bytes) -> None:
+def _store_bytes(guest: Guest, comp: int, ptr: int, data: bytes) -> None:
     _check(guest, comp, ptr, len(data))[ptr : ptr + len(data)] = data
 
 
-def load_bytes(guest: Guest, comp: int, ptr: int, size: int) -> bytes:
+def _load_bytes(guest: Guest, comp: int, ptr: int, size: int) -> bytes:
     return bytes(_check(guest, comp, ptr, size)[ptr : ptr + size])
 
 
-def alloc(guest: Guest, comp: int, align: int, size: int) -> int:
+def _alloc(guest: Guest, comp: int, align: int, size: int) -> int:
     """Memory from the component for a list or a string that the host returns (`cabi_realloc`).
 
     The canonical ABI calls `realloc(0, 0, align, size)` also for an empty list or string (a component that counts its allocations, such as the adapter of WASI 0.1 of
@@ -365,12 +365,12 @@ def alloc(guest: Guest, comp: int, align: int, size: int) -> int:
     if guest.realloc is None:
         if size == 0:
             return align
-        trap(guest, "the component has no cabi_realloc")
+        _trap(guest, "the component has no cabi_realloc")
     ptr = guest.realloc(comp, 0, 0, align, size)
     if not ptr and size:
-        trap(guest, "cabi_realloc failed")
+        _trap(guest, "cabi_realloc failed")
     return ptr or align
 
 
-def load_u32(guest: Guest, comp: int, ptr: int) -> int:
+def _load_u32(guest: Guest, comp: int, ptr: int) -> int:
     return struct.unpack_from("<I", _check(guest, comp, ptr, 4), ptr)[0]

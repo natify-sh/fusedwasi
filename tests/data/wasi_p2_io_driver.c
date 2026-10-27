@@ -77,10 +77,10 @@ int main(int argc, char **argv) {
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, i, 100, 16), dump("read");
         uint32_t p = fusedwasi_wasi_io_streams_input_stream_subscribe(&s, i);
         printf("pollable %u ready %u\n", p, fusedwasi_wasi_io_poll_pollable_ready(&s, p));
-        fusedwasi_p2_store_u32(&s, 0, 90, p);
+        fusedwasi_p2__store_u32(&s, 0, 90, p);
         fusedwasi_wasi_io_poll_poll(&s, 0, 90, 1, 32), dump("poll");
         fusedwasi_wasi_io_poll_pollable_block(&s, p);
-        uint32_t e = fusedwasi_p2_error_new(&s, "boom");
+        uint32_t e = fusedwasi_p2__error_new_codes(&s, "boom", -1, -1);
         fusedwasi_wasi_io_error_error_to_debug_string(&s, 0, e, 48), dump("to_debug_string");
         fusedwasi_wasi_io_error_error_drop(&s, e);
         fusedwasi_wasi_io_streams_output_stream_blocking_write_and_flush(&s, 0, o2, 100, 5, 64), dump("blocking_write_and_flush");
@@ -94,9 +94,9 @@ int main(int argc, char **argv) {
         fusedwasi_wasi_io_streams_output_stream_drop(&s, o);
     } else if (!strcmp(scenario, "failure")) {
         fusedwasi_p2_stream *fin = (fusedwasi_p2_stream *)calloc(1, sizeof *fin), *fout = (fusedwasi_p2_stream *)calloc(1, sizeof *fout);
-        fin->read = failing_read, fin->ready = never_ready, fin->destroy = fusedwasi_p2_stream_free;
-        fout->check_write = failing_check_write, fout->ready = never_ready, fout->destroy = fusedwasi_p2_stream_free;
-        uint32_t hfi = fusedwasi_p2_input_stream_new(&s, fin), hfo = fusedwasi_p2_output_stream_new(&s, fout);
+        fin->read = failing_read, fin->ready = never_ready, fin->destroy = fusedwasi_p2__stream_free;
+        fout->check_write = failing_check_write, fout->ready = never_ready, fout->destroy = fusedwasi_p2__stream_free;
+        uint32_t hfi = fusedwasi_p2__input_stream_new(&s, fin), hfo = fusedwasi_p2__output_stream_new(&s, fout);
         printf("failing %u %u\n", hfi, hfo);
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, hfi, 4, 0), dump("read fails");
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, hfi, 4, 16), dump("read after the failure");

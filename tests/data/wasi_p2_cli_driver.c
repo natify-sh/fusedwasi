@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         world.terminals = FUSEDWASI_P2_TERMINAL_STDOUT;
         uint32_t hi = fusedwasi_p2_memory_input_new(&world, (const uint8_t *)"in!", 3), ho;
         fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 100, &ho);
-        world.std[0] = fusedwasi_p2_table_get(&s, hi, FUSEDWASI_P2_KIND_INPUT_STREAM)->obj;
+        world.std[0] = fusedwasi_p2__table_get(&s, hi, FUSEDWASI_P2_KIND_INPUT_STREAM)->obj;
         world.std[1] = &bo->base;
         printf("handles %u %u\n", hi, ho);
         fusedwasi_wasi_cli_environment_get_arguments(&s, 0, 0), dump("arguments");
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
         fusedwasi_wasi_cli_environment_initial_cwd(&s, 0, 40), dump("cwd");
         fusedwasi_wasi_cli_terminal_stdin_get_terminal_stdin(&s, 0, 56), dump("terminal stdin");
         fusedwasi_wasi_cli_terminal_stdout_get_terminal_stdout(&s, 0, 64), dump("terminal stdout");
-        fusedwasi_wasi_cli_terminal_output_terminal_output_drop(&s, fusedwasi_p2_load_u32(&s, 0, 68));
+        fusedwasi_wasi_cli_terminal_output_terminal_output_drop(&s, fusedwasi_p2__load_u32(&s, 0, 68));
         uint32_t a = fusedwasi_wasi_cli_stdin_get_stdin(&s), b = fusedwasi_wasi_cli_stdout_get_stdout(&s), c = fusedwasi_wasi_cli_stdout_get_stdout(&s);
         printf("std handles %u %u %u\n", a, b, c);
         fusedwasi_wasi_io_streams_output_stream_write(&s, 0, b, 120, 5, 80), dump("write");

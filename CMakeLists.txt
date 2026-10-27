@@ -67,6 +67,10 @@ if(FUSEDWASI_INSTALL)
         PATTERN "__pycache__" EXCLUDE
         FILES_MATCHING PATTERN "*.json" PATTERN "*.pyi")
 
+    # The public names, in C and in Python, with a line of purpose each (data: docs/public_api.md is made from it)
+    install(FILES src/fusedwasi/public_api.json
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fusedwasi)
+
     install(TARGETS fusedwasi_headers
         EXPORT fusedwasi-targets
         INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

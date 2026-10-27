@@ -28,19 +28,19 @@ from .wasi_p2_core import (
     Exit,
     Guest,
     State,
-    alloc,
-    store_bytes,
-    store_u8,
-    store_u32,
-    table_drop,
-    table_new,
+    _alloc,
+    _store_bytes,
+    _store_u8,
+    _store_u32,
+    _table_drop,
+    _table_new,
 )
 from .wasi_p2_io import InputStream, OutputStream, StreamClosed, StreamFailed
 
-CHUNK = 4096  # what a standard output takes at a time (`check-write`)
+_CHUNK = 4096  # what a standard output takes at a time (`check-write`)
 
 
-class FdInput(InputStream):
+class _FdInput(InputStream):
     """Reads a file descriptor without blocking where the system can tell (select); an end of file is `StreamClosed`."""
 
     def __init__(self, fd: int = 0) -> None:
@@ -63,12 +63,12 @@ class FdInput(InputStream):
         return data
 
 
-class FdOutput(OutputStream):
+class _FdOutput(OutputStream):
     def __init__(self, fd: int = 1) -> None:
         self.fd = fd
 
     def check_write(self) -> int:
-        return CHUNK
+        return _CHUNK
 
     def write(self, data: bytes) -> None:
         view = memoryview(data)
@@ -79,7 +79,7 @@ class FdOutput(OutputStream):
             raise StreamFailed(str(exc), errno=exc.errno) from exc
 
 
-class SysInput(InputStream):
+class _SysInput(InputStream):
     """`sys.stdin.buffer` of the moment (blocking: a read waits for at least one byte or the end)."""
 
     def read(self, n: int) -> bytes:
@@ -92,7 +92,7 @@ class SysInput(InputStream):
         return data
 
 
-class SysOutput(OutputStream):
+class _SysOutput(OutputStream):
     """`sys.stdout.buffer` or `sys.stderr.buffer` of the moment (the text layer is flushed first so that the order against `print` holds)."""
 
     def __init__(self, name: str) -> None:
@@ -102,7 +102,7 @@ class SysOutput(OutputStream):
         return getattr(sys, self.name)
 
     def check_write(self) -> int:
-        return CHUNK
+        return _CHUNK
 
     def write(self, data: bytes) -> None:
         target = self._target()
@@ -130,14 +130,14 @@ def _errno_of(exc: OSError | ValueError) -> int:
 
 def std(state: State, name: str) -> object:
     if name not in state.std:
-        state.std[name] = SysInput() if name == "stdin" else SysOutput(name)
+        state.std[name] = _SysInput() if name == "stdin" else _SysOutput(name)
     return state.std[name]
 
 
 def _string(guest: Guest, comp: int, text: str) -> tuple[int, int]:
     data = text.encode()
-    ptr = alloc(guest, comp, 1, len(data))
-    store_bytes(guest, comp, ptr, data)
+    ptr = _alloc(guest, comp, 1, len(data))
+    _store_bytes(guest, comp, ptr, data)
     return ptr, len(data)
 
 
@@ -146,34 +146,34 @@ def _string(guest: Guest, comp: int, text: str) -> tuple[int, int]:
 
 def wasi_cli_environment_get_environment(guest: Guest, comp: int, retptr: int) -> None:
     items = guest.state.env
-    ptr = alloc(guest, comp, 4, 16 * len(items))
+    ptr = _alloc(guest, comp, 4, 16 * len(items))
     for i, (name, value) in enumerate(items):
         for k, text in enumerate((name, value)):
             sptr, slen = _string(guest, comp, text)
-            store_u32(guest, comp, ptr + 16 * i + 8 * k, sptr)
-            store_u32(guest, comp, ptr + 16 * i + 8 * k + 4, slen)
-    store_u32(guest, comp, retptr, ptr)
-    store_u32(guest, comp, retptr + 4, len(items))
+            _store_u32(guest, comp, ptr + 16 * i + 8 * k, sptr)
+            _store_u32(guest, comp, ptr + 16 * i + 8 * k + 4, slen)
+    _store_u32(guest, comp, retptr, ptr)
+    _store_u32(guest, comp, retptr + 4, len(items))
 
 
 def wasi_cli_environment_get_arguments(guest: Guest, comp: int, retptr: int) -> None:
-    ptr = alloc(guest, comp, 4, 8 * len(guest.state.args))
+    ptr = _alloc(guest, comp, 4, 8 * len(guest.state.args))
     for i, text in enumerate(guest.state.args):
         sptr, slen = _string(guest, comp, text)
-        store_u32(guest, comp, ptr + 8 * i, sptr)
-        store_u32(guest, comp, ptr + 8 * i + 4, slen)
-    store_u32(guest, comp, retptr, ptr)
-    store_u32(guest, comp, retptr + 4, len(guest.state.args))
+        _store_u32(guest, comp, ptr + 8 * i, sptr)
+        _store_u32(guest, comp, ptr + 8 * i + 4, slen)
+    _store_u32(guest, comp, retptr, ptr)
+    _store_u32(guest, comp, retptr + 4, len(guest.state.args))
 
 
 def wasi_cli_environment_initial_cwd(guest: Guest, comp: int, retptr: int) -> None:
     if guest.state.initial_cwd is None:
-        store_u8(guest, comp, retptr, 0)
+        _store_u8(guest, comp, retptr, 0)
         return
     sptr, slen = _string(guest, comp, guest.state.initial_cwd)
-    store_u8(guest, comp, retptr, 1)
-    store_u32(guest, comp, retptr + 4, sptr)
-    store_u32(guest, comp, retptr + 8, slen)
+    _store_u8(guest, comp, retptr, 1)
+    _store_u32(guest, comp, retptr + 4, sptr)
+    _store_u32(guest, comp, retptr + 8, slen)
 
 
 # exit
@@ -200,15 +200,15 @@ def wasi_cli_exit_exit_with_code(guest: Guest, status_code: int) -> None:
 
 
 def wasi_cli_stdin_get_stdin(guest: Guest) -> int:
-    return table_new(guest, KIND_INPUT_STREAM, std(guest.state, "stdin"))
+    return _table_new(guest, KIND_INPUT_STREAM, std(guest.state, "stdin"))
 
 
 def wasi_cli_stdout_get_stdout(guest: Guest) -> int:
-    return table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stdout"))
+    return _table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stdout"))
 
 
 def wasi_cli_stderr_get_stderr(guest: Guest) -> int:
-    return table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stderr"))
+    return _table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stderr"))
 
 
 # the terminals
@@ -216,10 +216,10 @@ def wasi_cli_stderr_get_stderr(guest: Guest) -> int:
 
 def _terminal(guest: Guest, comp: int, retptr: int, bit: int, kind: int) -> None:
     if guest.state.terminals & bit:
-        store_u8(guest, comp, retptr, 1)
-        store_u32(guest, comp, retptr + 4, table_new(guest, kind, bit))
+        _store_u8(guest, comp, retptr, 1)
+        _store_u32(guest, comp, retptr + 4, _table_new(guest, kind, bit))
     else:
-        store_u8(guest, comp, retptr, 0)
+        _store_u8(guest, comp, retptr, 0)
 
 
 def wasi_cli_terminal_stdin_get_terminal_stdin(guest: Guest, comp: int, retptr: int) -> None:
@@ -235,8 +235,8 @@ def wasi_cli_terminal_stderr_get_terminal_stderr(guest: Guest, comp: int, retptr
 
 
 def wasi_cli_terminal_input_terminal_input_drop(guest: Guest, handle: int) -> None:
-    table_drop(guest, handle, KIND_TERMINAL_INPUT)
+    _table_drop(guest, handle, KIND_TERMINAL_INPUT)
 
 
 def wasi_cli_terminal_output_terminal_output_drop(guest: Guest, handle: int) -> None:
-    table_drop(guest, handle, KIND_TERMINAL_OUTPUT)
+    _table_drop(guest, handle, KIND_TERMINAL_OUTPUT)

@@ -7,7 +7,7 @@ from pathlib import Path
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import Guest, State
-from fusedwasi.p2.wasi_p2_core import load_u32, store_u32
+from fusedwasi.p2.wasi_p2_core import _load_u32, _store_u32
 
 R = 256
 STD = ("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH")
@@ -26,7 +26,7 @@ class Ours:
         self.host = Guest(State(http=True), [self.memory], realloc=bump)
 
     def u32(self, off: int) -> int:
-        return load_u32(self.host, 0, off)
+        return _load_u32(self.host, 0, off)
 
     def put(self, data: bytes) -> int:
         ptr = self.inp
@@ -42,7 +42,7 @@ class Ours:
         arr = self.put(bytes(16 * len(items)))
         for i, span in enumerate(spans):
             for k, x in enumerate(span):
-                store_u32(self.host, 0, arr + 16 * i + 4 * k, x)
+                _store_u32(self.host, 0, arr + 16 * i + 4 * k, x)
         self.clear()
         H.wasi_http_types_fields_from_list(self.host, 0, arr, len(items), R)
         assert self.memory[R] == 0
@@ -62,7 +62,7 @@ class Ours:
         return ",".join(sorted(out))
 
     def error(self, off: int) -> str:
-        return "err=" + H.CASES[self.memory[off]][0].lower().replace("-", "")
+        return "err=" + H._CASES[self.memory[off]][0].lower().replace("-", "")
 
     def request(self, t: list[str]) -> str:
         host = self.host

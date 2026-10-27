@@ -13,7 +13,7 @@ from cbuild import build
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_clocks as clocks
-from fusedwasi.p2.wasi_p2_core import KIND_POLLABLE, Trap, table_drop, table_get
+from fusedwasi.p2.wasi_p2_core import KIND_POLLABLE, Trap, _table_drop, _table_get
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_clocks_driver.c"
@@ -42,13 +42,13 @@ def python_output(scenario: str) -> str:
             b = clocks.wasi_clocks_monotonic_clock_subscribe_instant(host, 9000)
             c = clocks.wasi_clocks_monotonic_clock_subscribe_duration(host, 2**64 - 1)
             lines.append(f"{a} {b} {c}")
-            lines.append(" ".join(str(table_get(host, h, KIND_POLLABLE).deadline) for h in (a, b, c)))  # type: ignore[attr-defined]
-            table_drop(host, a, KIND_POLLABLE)
+            lines.append(" ".join(str(_table_get(host, h, KIND_POLLABLE).deadline) for h in (a, b, c)))  # type: ignore[attr-defined]
+            _table_drop(host, a, KIND_POLLABLE)
             lines.append(str(clocks.wasi_clocks_monotonic_clock_subscribe_instant(host, 1)))
         elif scenario == "double_drop":
             a = clocks.wasi_clocks_monotonic_clock_subscribe_instant(host, 1)
-            table_drop(host, a, KIND_POLLABLE)
-            table_drop(host, a, KIND_POLLABLE)
+            _table_drop(host, a, KIND_POLLABLE)
+            _table_drop(host, a, KIND_POLLABLE)
         elif scenario == "outside":
             clocks.wasi_clocks_wall_clock_now(host, 0, 60)
         elif scenario == "no_memory":

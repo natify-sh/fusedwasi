@@ -6,15 +6,15 @@ argument (the canonical ABI); `datetime` is a record `{seconds: u64, nanoseconds
 
 from __future__ import annotations
 
-from .wasi_p2_core import KIND_POLLABLE, Guest, Pollable, State, store_u32, store_u64, table_new
+from .wasi_p2_core import KIND_POLLABLE, Guest, Pollable, State, _store_u32, _store_u64, _table_new
 
 _NS = 1_000_000_000
 _MAX_U64 = (1 << 64) - 1
 
 
 def _datetime(guest: Guest, comp: int, retptr: int, ns: int) -> None:
-    store_u64(guest, comp, retptr, ns // _NS)
-    store_u32(guest, comp, retptr + 8, ns % _NS)
+    _store_u64(guest, comp, retptr, ns // _NS)
+    _store_u32(guest, comp, retptr + 8, ns % _NS)
 
 
 def wasi_clocks_wall_clock_now(guest: Guest, comp: int, retptr: int) -> None:
@@ -46,8 +46,8 @@ class DeadlinePollable(Pollable):
 
 
 def wasi_clocks_monotonic_clock_subscribe_instant(guest: Guest, when: int) -> int:
-    return table_new(guest, KIND_POLLABLE, DeadlinePollable(when))
+    return _table_new(guest, KIND_POLLABLE, DeadlinePollable(when))
 
 
 def wasi_clocks_monotonic_clock_subscribe_duration(guest: Guest, when: int) -> int:
-    return table_new(guest, KIND_POLLABLE, DeadlinePollable(min(guest.state.clock(1) + when, _MAX_U64)))
+    return _table_new(guest, KIND_POLLABLE, DeadlinePollable(min(guest.state.clock(1) + when, _MAX_U64)))

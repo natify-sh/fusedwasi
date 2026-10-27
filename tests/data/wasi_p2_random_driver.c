@@ -63,13 +63,13 @@ int main(int argc, char **argv) {
         printf("realloc calls %u\n", (unsigned)state.calls); /* also the empty list asked for memory */
     } else if (!strcmp(scenario, "default_source")) {
         /* the source of the system: no override; two calls give different bytes, and each is a system call and no file */
-        world.random_bytes = fusedwasi_p2_default_random_bytes;
+        world.random_bytes = fusedwasi_p2__default_random_bytes;
         uint64_t a = fusedwasi_wasi_random_random_get_random_u64(&s), b = fusedwasi_wasi_random_random_get_random_u64(&s);
         printf("distinct %d\n", a != b);
         fusedwasi_wasi_random_random_get_random_bytes(&s, 0, 100, 0);
-        printf("bytes %u\n", (unsigned)fusedwasi_p2_load_u32(&s, 0, 4));
+        printf("bytes %u\n", (unsigned)fusedwasi_p2__load_u32(&s, 0, 4));
         fusedwasi_wasi_random_random_get_random_bytes(&s, 0, 600, 0); /* more than 256, which is one call of the system */
-        printf("bytes %u\n", (unsigned)fusedwasi_p2_load_u32(&s, 0, 4));
+        printf("bytes %u\n", (unsigned)fusedwasi_p2__load_u32(&s, 0, 4));
     } else if (!strcmp(scenario, "too_many")) {
         fusedwasi_wasi_random_random_get_random_bytes(&s, 0, (uint64_t)1 << 40, 0);
     } else if (!strcmp(scenario, "failing")) {

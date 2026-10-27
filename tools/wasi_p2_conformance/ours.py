@@ -7,7 +7,7 @@ from pathlib import Path
 from fusedwasi.p2 import wasi_p2_filesystem as fs
 from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import Guest, State
-from fusedwasi.p2.wasi_p2_core import load_u32
+from fusedwasi.p2.wasi_p2_core import _load_u32
 
 R = 256
 KINDS = ["unknown", "block-device", "character-device", "directory", "fifo", "symbolic-link", "regular-file", "socket"]
@@ -34,7 +34,7 @@ class Ours:
 
     # memory helpers
     def u32(self, off: int) -> int:
-        return load_u32(self.host, 0, off)
+        return _load_u32(self.host, 0, off)
 
     def u64(self, off: int) -> int:
         return int.from_bytes(self.memory[off : off + 8], "little")
@@ -49,7 +49,7 @@ class Ours:
         self.memory[R : R + 128] = bytes(128)
 
     def err(self, at: int) -> str:
-        return "err=" + fs.ERROR_CODES[self.memory[R + at]]
+        return "err=" + fs._ERROR_CODES[self.memory[R + at]]
 
     def failed(self, at: int) -> bool:
         return self.memory[R] == 1

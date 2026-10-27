@@ -30,6 +30,9 @@ from ..p2.wasi_p2_filesystem import (
     Times,
 )
 from .wasi_p1_core import (
+    _K_DIR,
+    _K_FILE,
+    _K_STD,
     E_BADF,
     E_FAULT,
     E_FBIG,
@@ -53,9 +56,6 @@ from .wasi_p1_core import (
     FT_CHAR,
     FT_DIR,
     FT_REGULAR,
-    K_DIR,
-    K_FILE,
-    K_STD,
     LOOKUP_FOLLOW,
     O_CREAT,
     O_DIRECTORY,
@@ -93,35 +93,35 @@ from .wasi_p1_core import (
     R_POLL_FD_READWRITE,
     RIGHTS_STDIN,
     RIGHTS_STDOUT,
-    Entry,
-    Fds,
-    Listing,
-    Stat,
-    descriptor_of,
+    _descriptor_of,
+    _Entry,
+    _errno_of_error,
+    _Fds,
+    _fds_of,
+    _filetype_of,
+    _in_memory,
+    _iov,
+    _iovs_valid,
+    _Listing,
+    _load,
+    _path_at,
+    _put_bytes,
+    _put_u8,
+    _put_u16,
+    _put_u32,
+    _put_u64,
+    _read_bytes,
+    _read_std,
+    _release,
+    _Stat,
+    _std_filetype,
+    _std_is_real,
+    _store,
+    _write_std,
     errno_of,
-    errno_of_error,
-    fds_of,
-    filetype_of,
-    in_memory,
-    iov,
-    iovs_valid,
-    load,
-    path_at,
-    put_bytes,
-    put_u8,
-    put_u16,
-    put_u32,
-    put_u64,
-    read_bytes,
-    read_std,
-    release,
-    std_filetype,
-    std_is_real,
-    store,
-    write_std,
 )
 
-INT64_MAX = (1 << 63) - 1
+_INT64_MAX = (1 << 63) - 1
 
 
 def _signed(value: int) -> int:
@@ -133,19 +133,19 @@ def _signed(value: int) -> int:
 
 
 def _sizes(guest: Guest, count: int, size: int, count_ptr: int, size_ptr: int) -> int:
-    if not (put_u32(guest, count_ptr, count) and put_u32(guest, size_ptr, size)):
+    if not (_put_u32(guest, count_ptr, count) and _put_u32(guest, size_ptr, size)):
         return E_FAULT
     return E_SUCCESS
 
 
 def _strings(guest: Guest, items: list[bytes], table: int, out: int) -> int:
     buf = b"".join(item + b"\0" for item in items)
-    if not (in_memory(guest, out, len(buf)) and in_memory(guest, table, len(items) * 4)):
+    if not (_in_memory(guest, out, len(buf)) and _in_memory(guest, table, len(items) * 4)):
         return E_FAULT
-    put_bytes(guest, out, buf)
+    _put_bytes(guest, out, buf)
     offset = 0
     for i, item in enumerate(items):
-        put_u32(guest, table + 4 * i, out + offset)
+        _put_u32(guest, table + 4 * i, out + offset)
         offset += len(item) + 1
     return E_SUCCESS
 
@@ -182,7 +182,7 @@ def environ_get(guest: Guest, environ: int, buf: int) -> int:
 def clock_res_get(guest: Guest, ident: int, ptr: int) -> int:
     if ident > 3:
         return E_INVAL
-    return E_SUCCESS if put_u64(guest, ptr, guest.state.resolution_ns[ident]) else E_FAULT
+    return E_SUCCESS if _put_u64(guest, ptr, guest.state.resolution_ns[ident]) else E_FAULT
 
 
 def _clock_ns(state: State, ident: int) -> tuple[int, int]:
@@ -199,11 +199,11 @@ def clock_time_get(guest: Guest, ident: int, precision: int, ptr: int) -> int:
     status, ns = _clock_ns(guest.state, ident)
     if status:
         return status
-    return E_SUCCESS if put_u64(guest, ptr, ns) else E_FAULT
+    return E_SUCCESS if _put_u64(guest, ptr, ns) else E_FAULT
 
 
 def random_get(guest: Guest, buf: int, size: int) -> int:
-    if not in_memory(guest, buf, size):
+    if not _in_memory(guest, buf, size):
         return E_FAULT
     if size == 0:
         return E_SUCCESS
@@ -213,7 +213,7 @@ def random_get(guest: Guest, buf: int, size: int) -> int:
         return E_IO
     if len(data) != size:
         return E_IO
-    put_bytes(guest, buf, data)
+    _put_bytes(guest, buf, data)
     return E_SUCCESS
 
 
@@ -244,9 +244,9 @@ def proc_raise(guest: Guest, sig: int) -> int:
 # ---- descriptors --------------------------------------------------------------------------------------------------------------
 
 
-def _desc(guest: Guest, entry: Entry) -> Descriptor | None:
+def _desc(guest: Guest, entry: _Entry) -> Descriptor | None:
     """The resource of 0.2 behind a file or a directory."""
-    return descriptor_of(guest.state, entry)  # type: ignore[no-any-return]
+    return _descriptor_of(guest.state, entry)  # type: ignore[no-any-return]
 
 
 def _unseekable(failure: FsError) -> bool:
@@ -255,19 +255,19 @@ def _unseekable(failure: FsError) -> bool:
 
 
 def fd_write(guest: Guest, fd: int, iovs: int, count: int, nwritten: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind == K_DIR:
+    if entry.kind == _K_DIR:
         return E_ISDIR
-    if entry.kind == K_STD:
-        return E_BADF if entry.handle == 0 else write_std(guest, entry.handle, iovs, count, nwritten)
+    if entry.kind == _K_STD:
+        return E_BADF if entry.handle == 0 else _write_std(guest, entry.handle, iovs, count, nwritten)
     if not entry.rights & R_FD_WRITE:
         return E_NOTCAPABLE
-    bad = iovs_valid(guest, iovs, count)
+    bad = _iovs_valid(guest, iovs, count)
     if bad:
         return bad
     descriptor = _desc(guest, entry)
@@ -275,8 +275,8 @@ def fd_write(guest: Guest, fd: int, iovs: int, count: int, nwritten: int) -> int
         return E_BADF
     total = 0
     for i in range(count):
-        base, length = iov(guest, iovs, i)
-        if not in_memory(guest, base, length):
+        base, length = _iov(guest, iovs, i)
+        if not _in_memory(guest, base, length):
             return E_FAULT
         if length == 0:
             continue
@@ -286,7 +286,7 @@ def fd_write(guest: Guest, fd: int, iovs: int, count: int, nwritten: int) -> int
                 at = guest.state.filesystem.stat(descriptor).st_size
             except FsError:
                 pass
-        data = read_bytes(guest, base, length)  # straight from the memory of the module
+        data = _read_bytes(guest, base, length)  # straight from the memory of the module
         try:
             done = guest.state.filesystem.write(descriptor, data, at, p1=True)
         except FsError as failure:
@@ -305,26 +305,26 @@ def fd_write(guest: Guest, fd: int, iovs: int, count: int, nwritten: int) -> int
             total += failure.done
             if total:
                 break
-            return errno_of_error(failure)
+            return _errno_of_error(failure)
         entry.position = at + done
         total += done
-    return E_SUCCESS if put_u32(guest, nwritten, total) else E_FAULT
+    return E_SUCCESS if _put_u32(guest, nwritten, total) else E_FAULT
 
 
 def fd_read(guest: Guest, fd: int, iovs: int, count: int, nread: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind == K_STD:
-        return read_std(guest, iovs, count, nread) if entry.handle == 0 else E_BADF
-    if entry.kind == K_DIR:
+    if entry.kind == _K_STD:
+        return _read_std(guest, iovs, count, nread) if entry.handle == 0 else E_BADF
+    if entry.kind == _K_DIR:
         return E_ISDIR
     if not entry.rights & R_FD_READ:
         return E_NOTCAPABLE
-    bad = iovs_valid(guest, iovs, count)
+    bad = _iovs_valid(guest, iovs, count)
     if bad:
         return bad
     descriptor = _desc(guest, entry)
@@ -332,8 +332,8 @@ def fd_read(guest: Guest, fd: int, iovs: int, count: int, nread: int) -> int:
         return E_BADF
     total = 0
     for i in range(count):
-        base, length = iov(guest, iovs, i)
-        if not in_memory(guest, base, length):
+        base, length = _iov(guest, iovs, i)
+        if not _in_memory(guest, base, length):
             return E_FAULT
         if length == 0:
             continue
@@ -344,14 +344,14 @@ def fd_read(guest: Guest, fd: int, iovs: int, count: int, nread: int) -> int:
             if not _unseekable(failure):
                 if total:
                     break  # what was read is reported; the error comes with the next call
-                return errno_of_error(failure)
+                return _errno_of_error(failure)
             try:
                 data = os.read(descriptor.fd, length)
             except OSError as caught:
                 if total:
                     break
                 return errno_of(caught.errno)
-        put_bytes(guest, base, data)
+        _put_bytes(guest, base, data)
         total += len(data)
         if len(data) < length:
             break
@@ -359,7 +359,7 @@ def fd_read(guest: Guest, fd: int, iovs: int, count: int, nread: int) -> int:
         # Only a regular file goes on.
         if data and i + 1 < count and entry.filetype != FT_REGULAR:
             break
-    return E_SUCCESS if put_u32(guest, nread, total) else E_FAULT
+    return E_SUCCESS if _put_u32(guest, nread, total) else E_FAULT
 
 
 def _seek_right(offset: int, whence: int) -> int:
@@ -369,15 +369,15 @@ def _seek_right(offset: int, whence: int) -> int:
 
 def _seek_native(guest: Guest, fd: int, offset: int, whence: int, ptr: int, right: int) -> int:
     """The position is the adapter's. A file that is not a regular one (a pipe, a device) is asked of the system, which says what it says."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind == K_STD:
+    if entry.kind == _K_STD:
         return E_SPIPE
-    if entry.kind != K_FILE:
+    if entry.kind != _K_FILE:
         return E_BADF
     if not entry.rights & right:
         return E_NOTCAPABLE
@@ -397,12 +397,12 @@ def _seek_native(guest: Guest, fd: int, offset: int, whence: int, ptr: int, righ
             try:
                 origin = guest.state.filesystem.stat(descriptor).st_size
             except FsError as failure:
-                return errno_of_error(failure)
+                return _errno_of_error(failure)
         position = origin + offset
-        if position < 0 or position > INT64_MAX:
+        if position < 0 or position > _INT64_MAX:
             return E_INVAL
         entry.position = position
-    return E_SUCCESS if put_u64(guest, ptr, position) else E_FAULT
+    return E_SUCCESS if _put_u64(guest, ptr, position) else E_FAULT
 
 
 def fd_seek(guest: Guest, fd: int, offset: int, whence: int, ptr: int) -> int:
@@ -417,23 +417,23 @@ def fd_tell(guest: Guest, fd: int, ptr: int) -> int:
 
 
 def fd_close(guest: Guest, fd: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
     if (
-        entry.kind == K_STD
+        entry.kind == _K_STD
     ):  # the stream of the host stays open, but the program has let go of it: the number is free and a write to it is BADF
         entry.__init__()  # type: ignore[misc]
         return E_SUCCESS
-    release(guest.state, entry)  # the resource is dropped from the table of the state, and closed
+    _release(guest.state, entry)  # the resource is dropped from the table of the state, and closed
     return E_SUCCESS
 
 
 def fd_renumber(guest: Guest, source: int, target: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     a, b = fds.entry_of(source), fds.entry_of(target)
@@ -441,18 +441,18 @@ def fd_renumber(guest: Guest, source: int, target: int) -> int:
         return E_BADF
     if source == target:
         return E_SUCCESS
-    release(guest.state, b)
+    _release(guest.state, b)
     fds.entries[target] = a
-    fds.entries[source] = Entry()
+    fds.entries[source] = _Entry()
     return E_SUCCESS
 
 
 def fd_advise(guest: Guest, fd: int, offset: int, length: int, advice: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
-    if entry is None or entry.kind != K_FILE:
+    if entry is None or entry.kind != _K_FILE:
         return E_BADF
     if not entry.rights & R_FD_ADVISE:
         return E_NOTCAPABLE
@@ -462,40 +462,40 @@ def fd_advise(guest: Guest, fd: int, offset: int, length: int, advice: int) -> i
 
 
 def fd_fdstat_get(guest: Guest, fd: int, ptr: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    filetype = std_filetype(guest.state, entry) if entry.kind == K_STD else entry.filetype
-    base = (RIGHTS_STDIN if entry.handle == 0 else RIGHTS_STDOUT) if entry.kind == K_STD else entry.rights
-    if not in_memory(guest, ptr, 24):
+    filetype = _std_filetype(guest.state, entry) if entry.kind == _K_STD else entry.filetype
+    base = (RIGHTS_STDIN if entry.handle == 0 else RIGHTS_STDOUT) if entry.kind == _K_STD else entry.rights
+    if not _in_memory(guest, ptr, 24):
         return E_FAULT
-    put_bytes(guest, ptr, bytes(24))
-    put_u8(guest, ptr, filetype)
-    put_u16(guest, ptr + 2, entry.flags)
-    put_u64(guest, ptr + 8, base)
-    put_u64(guest, ptr + 16, entry.inheriting)
+    _put_bytes(guest, ptr, bytes(24))
+    _put_u8(guest, ptr, filetype)
+    _put_u16(guest, ptr + 2, entry.flags)
+    _put_u64(guest, ptr + 8, base)
+    _put_u64(guest, ptr + 16, entry.inheriting)
     return E_SUCCESS
 
 
 def fd_prestat_get(guest: Guest, fd: int, ptr: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None or entry.preopen is None:
         return E_BADF  # the end of the list the program walks
-    if not in_memory(guest, ptr, 8):
+    if not _in_memory(guest, ptr, 8):
         return E_FAULT
-    put_bytes(guest, ptr, bytes(8))  # the type of a preopen: a directory, 0
-    put_u32(guest, ptr + 4, len(entry.preopen))
+    _put_bytes(guest, ptr, bytes(8))  # the type of a preopen: a directory, 0
+    _put_u32(guest, ptr + 4, len(entry.preopen))
     return E_SUCCESS
 
 
 def fd_prestat_dir_name(guest: Guest, fd: int, path: int, size: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
@@ -503,9 +503,9 @@ def fd_prestat_dir_name(guest: Guest, fd: int, path: int, size: int) -> int:
         return E_BADF
     if size < len(entry.preopen):
         return E_NAMETOOLONG
-    if not in_memory(guest, path, len(entry.preopen)):
+    if not _in_memory(guest, path, len(entry.preopen)):
         return E_FAULT
-    put_bytes(guest, path, entry.preopen)
+    _put_bytes(guest, path, entry.preopen)
     return E_SUCCESS
 
 
@@ -516,13 +516,13 @@ def _ns(nanoseconds: int) -> int:
     """A time of a file in nanoseconds since 1970 as WASI has it (unsigned): before 1970 is 0, and past the year 2262 it saturates."""
     if nanoseconds < 0:
         return 0
-    if nanoseconds // 1_000_000_000 > INT64_MAX // 1_000_000_000 - 1:
-        return INT64_MAX
+    if nanoseconds // 1_000_000_000 > _INT64_MAX // 1_000_000_000 - 1:
+        return _INT64_MAX
     return nanoseconds
 
 
-def _stat_of(st: os.stat_result) -> Stat:
-    return Stat(
+def _stat_of(st: os.stat_result) -> _Stat:
+    return _Stat(
         dev=st.st_dev & 0xFFFFFFFFFFFFFFFF,
         ino=st.st_ino & 0xFFFFFFFFFFFFFFFF,
         nlink=st.st_nlink,
@@ -530,39 +530,39 @@ def _stat_of(st: os.stat_result) -> Stat:
         atim=_ns(st.st_atime_ns),
         mtim=_ns(st.st_mtime_ns),
         ctim=_ns(st.st_ctime_ns),
-        filetype=filetype_of(st.st_mode),
+        filetype=_filetype_of(st.st_mode),
     )
 
 
-def _put_filestat(guest: Guest, ptr: int, st: Stat, legacy: bool) -> int:
+def _put_filestat(guest: Guest, ptr: int, st: _Stat, legacy: bool) -> int:
     """The filestat of the first snapshot has a 32-bit link count and 56 bytes. It is written at once: for an engine that keeps its memory out of this
     process every write is a round trip."""
     total = 56 if legacy else 64
-    if not in_memory(guest, ptr, total):
+    if not _in_memory(guest, ptr, total):
         return E_FAULT
     if legacy:
         record = struct.pack("<QQB3xIQQQQ", st.dev, st.ino, st.filetype, st.nlink, st.size, st.atim, st.mtim, st.ctim)
     else:
         record = struct.pack("<QQB7xQQQQQ", st.dev, st.ino, st.filetype, st.nlink, st.size, st.atim, st.mtim, st.ctim)
-    put_bytes(guest, ptr, record)
+    _put_bytes(guest, ptr, record)
     return E_SUCCESS
 
 
-def filestat_of_fd(guest: Guest, fd: int, ptr: int, legacy: bool) -> int:
-    fds = fds_of(guest)
+def _filestat_of_fd(guest: Guest, fd: int, ptr: int, legacy: bool) -> int:
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind == K_STD:
-        if std_is_real(guest.state, entry):
+    if entry.kind == _K_STD:
+        if _std_is_real(guest.state, entry):
             try:
                 return _put_filestat(guest, ptr, _stat_of(os.fstat(entry.handle)), legacy)  # what it is
             except OSError:
                 pass
         return _put_filestat(
-            guest, ptr, Stat(filetype=FT_CHAR, nlink=1), legacy
+            guest, ptr, _Stat(filetype=FT_CHAR, nlink=1), legacy
         )  # a stream of the host: nothing to say but that it is a character device
     if not entry.rights & R_FD_FILESTAT_GET:
         return E_NOTCAPABLE
@@ -572,12 +572,12 @@ def filestat_of_fd(guest: Guest, fd: int, ptr: int, legacy: bool) -> int:
     try:
         st = guest.state.filesystem.stat(descriptor)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return _put_filestat(guest, ptr, _stat_of(st), legacy)
 
 
-def filestat_of_path(guest: Guest, fd: int, flags: int, path: int, length: int, ptr: int, legacy: bool) -> int:
-    fds = fds_of(guest)
+def _filestat_of_path(guest: Guest, fd: int, flags: int, path: int, length: int, ptr: int, legacy: bool) -> int:
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
@@ -585,52 +585,52 @@ def filestat_of_path(guest: Guest, fd: int, flags: int, path: int, length: int, 
         return E_BADF
     if not entry.rights & R_PATH_FILESTAT_GET:
         return E_NOTCAPABLE
-    if entry.kind != K_DIR:
+    if entry.kind != _K_DIR:
         return E_NOTDIR
     descriptor = _desc(guest, entry)
     if descriptor is None:
         return E_BADF
-    text = path_at(guest, path, length)
+    text = _path_at(guest, path, length)
     if text is None:
         return E_FAULT
     try:
         st = guest.state.filesystem.stat_at(descriptor, text, SYMLINK_FOLLOW if flags & LOOKUP_FOLLOW else 0, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return _put_filestat(guest, ptr, _stat_of(st), legacy)
 
 
 def fd_filestat_get(guest: Guest, fd: int, ptr: int) -> int:
-    return filestat_of_fd(guest, fd, ptr, False)
+    return _filestat_of_fd(guest, fd, ptr, False)
 
 
 def path_filestat_get(guest: Guest, fd: int, flags: int, path: int, length: int, ptr: int) -> int:
-    return filestat_of_path(guest, fd, flags, path, length, ptr, False)
+    return _filestat_of_path(guest, fd, flags, path, length, ptr, False)
 
 
-def _dirent_order(item: Listing) -> tuple[int, bytes]:
+def _dirent_order(item: _Listing) -> tuple[int, bytes]:
     return (0 if item.name == b"." else 1 if item.name == b".." else 2), item.name
 
 
-def _list(guest: Guest, descriptor: Descriptor) -> tuple[int, list[Listing]]:
+def _list(guest: Guest, descriptor: Descriptor) -> tuple[int, list[_Listing]]:
     """The names of the directory (descriptor.read-directory), with `.` and `..`, the inode of each from a stat of the name."""
     fs = guest.state.filesystem
     try:
         entries = fs.read_directory(descriptor)
     except FsError as failure:
-        return errno_of_error(failure), []
-    items: list[Listing] = []
+        return _errno_of_error(failure), []
+    items: list[_Listing] = []
     for name in (b".", b".."):
         try:
-            items.append(Listing(name, fs.stat_entry(descriptor, name).st_ino, 3))
+            items.append(_Listing(name, fs.stat_entry(descriptor, name).st_ino, 3))
         except FsError:
-            items.append(Listing(name, 0, 3))
+            items.append(_Listing(name, 0, 3))
     for kind, name in entries:
         try:
             ino = fs.stat_entry(descriptor, name).st_ino
         except FsError:  # gone since the listing
             ino = 0
-        items.append(Listing(name, ino, _FILETYPE_OF_TYPE.get(kind, 0)))
+        items.append(_Listing(name, ino, _FILETYPE_OF_TYPE.get(kind, 0)))
     return E_SUCCESS, items
 
 
@@ -639,17 +639,17 @@ _FILETYPE_OF_TYPE = {0: 0, 1: 1, 2: FT_CHAR, 3: FT_DIR, 4: 0, 5: 7, 6: FT_REGULA
 
 
 def fd_readdir(guest: Guest, fd: int, buf: int, size: int, cookie: int, used: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind != K_DIR:
+    if entry.kind != _K_DIR:
         return E_NOTDIR
     if not entry.rights & R_FD_READDIR:
         return E_NOTCAPABLE
-    if not in_memory(guest, buf, size):
+    if not _in_memory(guest, buf, size):
         return E_FAULT
     if cookie == 0 or entry.listing is None:  # the listing is made again when the program starts from the beginning
         descriptor = _desc(guest, entry)
@@ -668,15 +668,15 @@ def fd_readdir(guest: Guest, fd: int, buf: int, size: int, cookie: int, used: in
         item = names[index]
         head = struct.pack("<QQIB3x", index + 1, item.ino, len(item.name), item.filetype)
         part = min(size - at, len(head))  # the last entry may be cut short
-        put_bytes(guest, buf + at, head[:part])
+        _put_bytes(guest, buf + at, head[:part])
         at += part
         if part < len(head):
             break
         part = min(size - at, len(item.name))
-        put_bytes(guest, buf + at, item.name[:part])
+        _put_bytes(guest, buf + at, item.name[:part])
         at += part
         index += 1
-    return E_SUCCESS if put_u32(guest, used, at) else E_FAULT
+    return E_SUCCESS if _put_u32(guest, used, at) else E_FAULT
 
 
 def path_open(
@@ -691,13 +691,13 @@ def path_open(
     fdflags: int,
     out: int,
 ) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     directory = fds.entry_of(fd)
     if directory is None:
         return E_BADF
-    if directory.kind != K_DIR:
+    if directory.kind != _K_DIR:
         return E_NOTDIR
     if oflags >> 4 or fdflags >> 5:
         return E_INVAL
@@ -715,7 +715,7 @@ def path_open(
     parent = _desc(guest, directory)
     if parent is None:
         return E_BADF
-    text = path_at(guest, path, length)
+    text = _path_at(guest, path, length)
     if text is None:
         return E_FAULT
     # writing is what the rights say: to write, to sync the data, to allocate, to set the size (uvwasi; wasi-libc leaves these out of a read-only open)
@@ -752,7 +752,7 @@ def path_open(
             fs.close(made)
             raise
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     if (
         sys.platform != "win32" and fdflags & FD_NONBLOCK and made.fd >= 0
     ):  # what the open of 0.2 does not take: not blocking (append is the adapter's own)
@@ -769,16 +769,16 @@ def path_open(
         return E_NOMEM
     number = fds.new_fd()
     entry = fds.entries[number]
-    entry.kind = K_DIR if made.is_dir else K_FILE
-    entry.filetype = filetype_of(st.st_mode)
+    entry.kind = _K_DIR if made.is_dir else _K_FILE
+    entry.filetype = _filetype_of(st.st_mode)
     entry.handle = handle
     entry.rights = base
-    if entry.kind == K_DIR:
+    if entry.kind == _K_DIR:
         entry.rights &= ~(R_FD_SEEK | R_FD_TELL)  # a directory is not seeked
     entry.inheriting = inheriting
     entry.flags = fdflags
-    if not put_u32(guest, out, number):
-        release(guest.state, entry)
+    if not _put_u32(guest, out, number):
+        _release(guest.state, entry)
         return E_FAULT
     return E_SUCCESS
 
@@ -796,13 +796,13 @@ def _native_fdflags(fdflags: int) -> int:
 
 
 def _sync(guest: Guest, fd: int, right: int, data_only: bool) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, entry = fds.entry_with(fd, right)
     if number or entry is None:
         return number
-    if entry.kind == K_STD:
+    if entry.kind == _K_STD:
         return E_SUCCESS  # the stream is the host's: it flushes when it wants
     descriptor = _desc(guest, entry)
     if descriptor is None:
@@ -810,7 +810,7 @@ def _sync(guest: Guest, fd: int, right: int, data_only: bool) -> int:
     try:
         guest.state.filesystem.sync(descriptor, data_only)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
@@ -822,12 +822,12 @@ def fd_sync(guest: Guest, fd: int) -> int:
     return _sync(guest, fd, R_FD_SYNC, False)
 
 
-def _set_size(guest: Guest, entry: Entry, size: int) -> int:
-    if entry.kind == K_DIR:
+def _set_size(guest: Guest, entry: _Entry, size: int) -> int:
+    if entry.kind == _K_DIR:
         return E_ISDIR
-    if entry.kind != K_FILE:
+    if entry.kind != _K_FILE:
         return E_BADF
-    if size > INT64_MAX:
+    if size > _INT64_MAX:
         return E_FBIG
     descriptor = _desc(guest, entry)
     if descriptor is None:
@@ -835,12 +835,12 @@ def _set_size(guest: Guest, entry: Entry, size: int) -> int:
     try:
         guest.state.filesystem.set_size(descriptor, size, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
 def fd_filestat_set_size(guest: Guest, fd: int, size: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, entry = fds.entry_with(fd, R_FD_FILESTAT_SET_SIZE)
@@ -849,17 +849,17 @@ def fd_filestat_set_size(guest: Guest, fd: int, size: int) -> int:
 
 def fd_allocate(guest: Guest, fd: int, offset: int, length: int) -> int:
     """Makes the file at least offset + length long (the file system may not reserve the room, but it is as long)."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, entry = fds.entry_with(fd, R_FD_ALLOCATE)
     if number or entry is None:
         return number
-    if entry.kind == K_DIR:
+    if entry.kind == _K_DIR:
         return E_ISDIR
-    if entry.kind != K_FILE:
+    if entry.kind != _K_FILE:
         return E_BADF
-    if offset > INT64_MAX or length > INT64_MAX - offset:
+    if offset > _INT64_MAX or length > _INT64_MAX - offset:
         return E_FBIG
     descriptor = _desc(guest, entry)
     if descriptor is None:
@@ -876,7 +876,7 @@ def fd_allocate(guest: Guest, fd: int, offset: int, length: int) -> int:
     try:
         st = guest.state.filesystem.stat(descriptor)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     if sys.platform != "win32" and not stat.S_ISREG(st.st_mode):
         return E_SPIPE  # a pipe: macOS would truncate it without a word
     return E_SUCCESS if st.st_size >= offset + length else _set_size(guest, entry, offset + length)
@@ -898,13 +898,13 @@ def _times(atim: int, mtim: int, flags: int) -> Times:
 
 
 def fd_filestat_set_times(guest: Guest, fd: int, atim: int, mtim: int, flags: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, entry = fds.entry_with(fd, R_FD_FILESTAT_SET_TIMES)
     if number or entry is None:
         return number
-    if entry.kind == K_STD:
+    if entry.kind == _K_STD:
         return E_BADF
     number = _times_flags_ok(flags)
     if number:
@@ -915,14 +915,14 @@ def fd_filestat_set_times(guest: Guest, fd: int, atim: int, mtim: int, flags: in
     try:
         guest.state.filesystem.set_times(descriptor, _times(atim, mtim, flags), lambda: guest.state.clock(0), p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
 def path_filestat_set_times(
     guest: Guest, fd: int, lookup: int, path: int, length: int, atim: int, mtim: int, flags: int
 ) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, directory = fds.dir_with(fd, R_PATH_FILESTAT_SET_TIMES)
@@ -934,7 +934,7 @@ def path_filestat_set_times(
     descriptor = _desc(guest, directory)
     if descriptor is None:
         return E_BADF
-    text = path_at(guest, path, length)
+    text = _path_at(guest, path, length)
     if text is None:
         return E_FAULT
     try:
@@ -947,12 +947,12 @@ def path_filestat_set_times(
             p1=True,
         )
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
 def fd_fdstat_set_flags(guest: Guest, fd: int, flags: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, entry = fds.entry_with(fd, R_FD_FDSTAT_SET_FLAGS)
@@ -960,8 +960,8 @@ def fd_fdstat_set_flags(guest: Guest, fd: int, flags: int) -> int:
         return number
     if flags > 31:
         return E_INVAL
-    if entry.kind != K_FILE:
-        return E_SUCCESS if entry.kind == K_STD else E_BADF
+    if entry.kind != _K_FILE:
+        return E_SUCCESS if entry.kind == _K_STD else E_BADF
     if (
         sys.platform != "win32"
     ):  # append is kept here and done by fd_write; no operation of 0.2 sets the others after the open, so they are set on the system descriptor
@@ -982,14 +982,14 @@ def fd_fdstat_set_flags(guest: Guest, fd: int, flags: int) -> int:
 
 def fd_fdstat_set_rights(guest: Guest, fd: int, base: int, inheriting: int) -> int:
     """The rights can only be given up, never gained."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
     if (
-        entry.kind == K_STD
+        entry.kind == _K_STD
     ):  # the rights of a standard stream are fixed: giving some up (or none) is fine, getting more is not (the narrowing is not kept)
         have = RIGHTS_STDIN if entry.handle == 0 else RIGHTS_STDOUT
         return E_NOTCAPABLE if base & ~have or inheriting else E_SUCCESS
@@ -1002,7 +1002,7 @@ def fd_fdstat_set_rights(guest: Guest, fd: int, base: int, inheriting: int) -> i
 
 def _dir_and_path(guest: Guest, fd: int, right: int, path: int, length: int) -> tuple[int, Descriptor | None, bytes]:
     """(errno, the directory's resource of 0.2, the path): a directory with the right, and a path that is in the memory."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds, None, b""
     number, directory = fds.dir_with(fd, right)
@@ -1011,7 +1011,7 @@ def _dir_and_path(guest: Guest, fd: int, right: int, path: int, length: int) -> 
     descriptor = _desc(guest, directory)
     if descriptor is None:
         return E_BADF, None, b""
-    text = path_at(guest, path, length)
+    text = _path_at(guest, path, length)
     if text is None:
         return E_FAULT, None, b""
     return E_SUCCESS, descriptor, text
@@ -1024,7 +1024,7 @@ def path_create_directory(guest: Guest, fd: int, path: int, length: int) -> int:
     try:
         guest.state.filesystem.create_directory_at(descriptor, text, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
@@ -1035,7 +1035,7 @@ def path_remove_directory(guest: Guest, fd: int, path: int, length: int) -> int:
     try:
         guest.state.filesystem.remove_directory_at(descriptor, text, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
@@ -1046,7 +1046,7 @@ def path_unlink_file(guest: Guest, fd: int, path: int, length: int) -> int:
     try:
         guest.state.filesystem.unlink_file_at(descriptor, text, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
@@ -1055,22 +1055,22 @@ def path_unlink_file(guest: Guest, fd: int, path: int, length: int) -> int:
 
 def _at(guest: Guest, fd: int, iovs: int, count: int, offset: int, out: int, writing: bool) -> int:
     """Read or write at a position, leaving the position of the descriptor where it was."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     entry = fds.entry_of(fd)
     if entry is None:
         return E_BADF
-    if entry.kind == K_STD:
+    if entry.kind == _K_STD:
         return E_SPIPE
-    if entry.kind == K_DIR:
+    if entry.kind == _K_DIR:
         return E_ISDIR
     # the specification asks for fd_seek as well; wasi-libc opens a file for writing without it and calls pwrite all the same
     if not entry.rights & (R_FD_WRITE if writing else R_FD_READ):
         return E_NOTCAPABLE
-    if offset > INT64_MAX:
+    if offset > _INT64_MAX:
         return E_INVAL
-    bad = iovs_valid(guest, iovs, count)
+    bad = _iovs_valid(guest, iovs, count)
     if bad:
         return bad
     descriptor = _desc(guest, entry)
@@ -1085,27 +1085,27 @@ def _at(guest: Guest, fd: int, iovs: int, count: int, offset: int, out: int, wri
         except FsError:
             pass
     for i in range(count):
-        base, length = iov(guest, iovs, i)
-        if not in_memory(guest, base, length):
+        base, length = _iov(guest, iovs, i)
+        if not _in_memory(guest, base, length):
             return E_FAULT
         if length == 0:
             continue
         try:
             if writing:
-                n = fs.write(descriptor, read_bytes(guest, base, length), offset + total, p1=True)
+                n = fs.write(descriptor, _read_bytes(guest, base, length), offset + total, p1=True)
             else:
                 data = fs.read(descriptor, length, offset + total, p1=True)
                 n = len(data)
-                put_bytes(guest, base, data)
+                _put_bytes(guest, base, data)
         except FsError as failure:
             total += failure.done
             if total:
                 break
-            return errno_of_error(failure)
+            return _errno_of_error(failure)
         total += n
         if n < length:
             break
-    return E_SUCCESS if put_u32(guest, out, total) else E_FAULT
+    return E_SUCCESS if _put_u32(guest, out, total) else E_FAULT
 
 
 def fd_pread(guest: Guest, fd: int, iovs: int, count: int, offset: int, nread: int) -> int:
@@ -1117,7 +1117,7 @@ def fd_pwrite(guest: Guest, fd: int, iovs: int, count: int, offset: int, nwritte
 
 
 def path_rename(guest: Guest, fd: int, old: int, old_len: int, new_fd: int, new: int, new_len: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, source = fds.dir_with(fd, R_PATH_RENAME_SOURCE)
@@ -1129,18 +1129,18 @@ def path_rename(guest: Guest, fd: int, old: int, old_len: int, new_fd: int, new:
     a, b = _desc(guest, source), _desc(guest, target)
     if a is None or b is None:
         return E_BADF
-    first, second = path_at(guest, old, old_len), path_at(guest, new, new_len)
+    first, second = _path_at(guest, old, old_len), _path_at(guest, new, new_len)
     if first is None or second is None:
         return E_FAULT
     try:
         guest.state.filesystem.rename_at(a, first, b, second, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
 def path_link(guest: Guest, fd: int, flags: int, old: int, old_len: int, new_fd: int, new: int, new_len: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, source = fds.dir_with(fd, R_PATH_LINK_SOURCE)
@@ -1152,67 +1152,67 @@ def path_link(guest: Guest, fd: int, flags: int, old: int, old_len: int, new_fd:
     a, b = _desc(guest, source), _desc(guest, target)
     if a is None or b is None:
         return E_BADF
-    first, second = path_at(guest, old, old_len), path_at(guest, new, new_len)
+    first, second = _path_at(guest, old, old_len), _path_at(guest, new, new_len)
     if first is None or second is None:
         return E_FAULT
     try:
         guest.state.filesystem.link_at(a, SYMLINK_FOLLOW if flags & LOOKUP_FOLLOW else 0, first, b, second, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
-PATH_MAX = 4096
+_PATH_MAX = 4096
 
 
 def path_symlink(guest: Guest, target: int, target_len: int, fd: int, path: int, length: int) -> int:
     """A link that leads out cannot be followed, and one that is absolute could not be anywhere else than outside: neither is made."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, directory = fds.dir_with(fd, R_PATH_SYMLINK)
     if number or directory is None:
         return number
-    if not in_memory(guest, target, target_len):
+    if not _in_memory(guest, target, target_len):
         return E_FAULT
     if target_len == 0:
         return E_NOENT
-    text = read_bytes(guest, target, target_len)
+    text = _read_bytes(guest, target, target_len)
     if b"\0" in text:
         return E_INVAL
     if text[:1] == b"/":
         return E_NOTCAPABLE
-    if len(text) >= PATH_MAX:
+    if len(text) >= _PATH_MAX:
         return E_NAMETOOLONG
     descriptor = _desc(guest, directory)
     if descriptor is None:
         return E_BADF
-    where = path_at(guest, path, length)
+    where = _path_at(guest, path, length)
     if where is None:
         return E_FAULT
     try:
         guest.state.filesystem.symlink_at(descriptor, text, where, p1=True)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     return E_SUCCESS
 
 
-LINK_MAX = 4096  # the most that path_readlink reads of a link
+_LINK_MAX = 4096  # the most that path_readlink reads of a link
 
 
 def path_readlink(guest: Guest, fd: int, path: int, length: int, buf: int, buf_len: int, used: int) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     number, directory = fds.dir_with(fd, R_PATH_READLINK)
     if number or directory is None:
         return number
-    if not in_memory(guest, buf, buf_len):
+    if not _in_memory(guest, buf, buf_len):
         return E_FAULT
     descriptor = _desc(guest, directory)
     if descriptor is None:
         return E_BADF
-    where = path_at(guest, path, length)
+    where = _path_at(guest, path, length)
     if where is None:
         return E_FAULT
     try:
@@ -1220,12 +1220,12 @@ def path_readlink(guest: Guest, fd: int, path: int, length: int, buf: int, buf_l
             descriptor, where, p1=True
         )  # (a rooted target is not-permitted: PERM)
     except FsError as failure:
-        return errno_of_error(failure)
+        return _errno_of_error(failure)
     shown = (
-        target[: min(buf_len, LINK_MAX)] if buf_len else b""
+        target[: min(buf_len, _LINK_MAX)] if buf_len else b""
     )  # a buffer of 0 bytes still says whether this is a link
-    put_bytes(guest, buf, shown)
-    return E_SUCCESS if put_u32(guest, used, len(shown)) else E_FAULT
+    _put_bytes(guest, buf, shown)
+    return E_SUCCESS if _put_u32(guest, used, len(shown)) else E_FAULT
 
 
 # ---- poll_oneoff and the sockets ----------------------------------------------------------------------------------------------
@@ -1250,7 +1250,7 @@ else:  # no poll in the system's select: the descriptors that could need it are 
 def _subscription_wait(guest: Guest, sub: int, legacy: bool, now: dict[int, int]) -> tuple[int, int]:
     """(errno, nanoseconds a clock subscription still has to wait). `legacy`: the first snapshot, whose clock subscription starts with an identifier."""
     shift = 8 if legacy else 0
-    raw = load(guest, sub + 16 + shift, 28)  # the identifier at 0, the timeout at 8, the flags at 24
+    raw = _load(guest, sub + 16 + shift, 28)  # the identifier at 0, the timeout at 8, the flags at 24
     ident = struct.unpack_from("<I", raw, 0)[0]
     timeout = struct.unpack_from("<Q", raw, 8)[0]
     flags = struct.unpack_from("<H", raw, 24)[0]
@@ -1293,17 +1293,17 @@ class _Waiter:
             self.ready = bool(getattr(self.stream, "dead", False)) or bool(self.stream.ready())  # type: ignore[attr-defined]
 
 
-def _poll_kind(guest: Guest, fds: Fds, sub: int, tag: int) -> tuple[int, _Waiter | None]:
+def _poll_kind(guest: Guest, fds: _Fds, sub: int, tag: int) -> tuple[int, _Waiter | None]:
     """(errno of the event, what has to be waited for or None when the answer is at once)."""
-    entry = fds.entry_of(struct.unpack("<I", load(guest, sub + 16, 4))[0])
+    entry = fds.entry_of(struct.unpack("<I", _load(guest, sub + 16, 4))[0])
     if entry is None:
         return E_BADF, None
     need = R_POLL_FD_READWRITE | (R_FD_READ if tag == 1 else R_FD_WRITE)
-    if entry.kind == K_STD:  # the rights of the standard streams are fixed and include polling
+    if entry.kind == _K_STD:  # the rights of the standard streams are fixed and include polling
         if tag == 1 and entry.handle == 0:
             waiter = _Waiter()
             stream = guest.state.std.get("stdin")
-            if sys.platform != "win32" and std_is_real(guest.state, entry):  # the standard input of the process
+            if sys.platform != "win32" and _std_is_real(guest.state, entry):  # the standard input of the process
                 waiter.native_fd, waiter.events = 0, _POLLIN
                 return E_SUCCESS, waiter
             if stream is not None and hasattr(
@@ -1314,7 +1314,7 @@ def _poll_kind(guest: Guest, fds: Fds, sub: int, tag: int) -> tuple[int, _Waiter
         return E_SUCCESS, None
     if entry.rights & need != need:
         return E_NOTCAPABLE, None
-    if entry.kind == K_FILE and entry.filetype != FT_REGULAR and sys.platform != "win32":
+    if entry.kind == _K_FILE and entry.filetype != FT_REGULAR and sys.platform != "win32":
         descriptor = _desc(guest, entry)
         if descriptor is not None and descriptor.fd >= 0:
             waiter = _Waiter()
@@ -1336,15 +1336,15 @@ def _pending(fd: int) -> int:
 
 
 def _poll(guest: Guest, in_: int, out: int, count: int, nevents: int, legacy: bool) -> int:
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     stride = 56 if legacy else 48
     if count == 0:
         return E_INVAL
-    if not in_memory(guest, in_, count * stride) or not in_memory(guest, out, count * 32):
+    if not _in_memory(guest, in_, count * stride) or not _in_memory(guest, out, count * 32):
         return E_FAULT
-    subs = load(guest, in_, count * stride)  # the subscriptions, read once
+    subs = _load(guest, in_, count * stride)  # the subscriptions, read once
     now: dict[int, int] = {}
     shortest: int | None = None  # a clock was subscribed
     immediate = False
@@ -1420,7 +1420,7 @@ def _poll(guest: Guest, in_: int, out: int, count: int, nevents: int, legacy: bo
                         nbytes = _pending(waiter.native_fd)
             else:
                 error, _ = _poll_kind(guest, fds, sub, tag)
-                if error == E_SUCCESS and entry is not None and entry.kind == K_FILE and tag == 1:
+                if error == E_SUCCESS and entry is not None and entry.kind == _K_FILE and tag == 1:
                     descriptor = _desc(guest, entry)
                     if descriptor is not None:
                         try:
@@ -1436,9 +1436,9 @@ def _poll(guest: Guest, in_: int, out: int, count: int, nevents: int, legacy: bo
         if tag != 0:
             struct.pack_into("<Q", record, 16, nbytes)
             struct.pack_into("<H", record, 24, flags)
-        store(guest, event, bytes(record))
+        _store(guest, event, bytes(record))
         made += 1
-    return E_SUCCESS if put_u32(guest, nevents, made) else E_FAULT
+    return E_SUCCESS if _put_u32(guest, nevents, made) else E_FAULT
 
 
 def poll_oneoff(guest: Guest, in_: int, out: int, count: int, nevents: int) -> int:
@@ -1447,7 +1447,7 @@ def poll_oneoff(guest: Guest, in_: int, out: int, count: int, nevents: int) -> i
 
 def _socket(guest: Guest, fd: int) -> int:
     """A descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor."""
-    fds = fds_of(guest)
+    fds = _fds_of(guest)
     if isinstance(fds, int):
         return fds
     return E_BADF if fds.entry_of(fd) is None else E_NOTSOCK

@@ -15,7 +15,7 @@ from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_filesystem as fs
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Trap, load_u32
+from fusedwasi.p2.wasi_p2_core import Trap, _load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
@@ -65,7 +65,7 @@ class Run:
         self.lines.append(f"{label} {off}:{bytes(self.memory[off : off + n]).hex()}")
 
     def u32(self, off: int) -> int:
-        return load_u32(self.host, 0, off)
+        return _load_u32(self.host, 0, off)
 
     def u64(self, off: int) -> int:
         return self.u32(off) | self.u32(off + 4) << 32
@@ -396,19 +396,19 @@ def test_values(tmp_path: Path) -> None:
     assert got["[sub/f]"].startswith("stat type 6 nlink 1 size 4")  # a regular file of 4 bytes
     assert got["[ln/f]"] == got["[sub/f]"]  # through a link to a directory inside the tree
     for escape in ("[abs/passwd]", "[up]", "[../x]", "[/etc]", "[sub/../..]"):
-        assert got[escape] == f"stat err {fs.ERROR_CODES.index('not-permitted')}", escape  # nothing leaves the tree
-    assert got["[loop1]"] == f"stat err {fs.ERROR_CODES.index('loop')}"
-    assert got["[nope]"] == f"stat err {fs.ERROR_CODES.index('no-entry')}"
-    assert got["[sub/f/x]"] == f"stat err {fs.ERROR_CODES.index('not-directory')}"
+        assert got[escape] == f"stat err {fs._ERROR_CODES.index('not-permitted')}", escape  # nothing leaves the tree
+    assert got["[loop1]"] == f"stat err {fs._ERROR_CODES.index('loop')}"
+    assert got["[nope]"] == f"stat err {fs._ERROR_CODES.index('no-entry')}"
+    assert got["[sub/f/x]"] == f"stat err {fs._ERROR_CODES.index('not-directory')}"
     # a slash after a link makes it followed, as in POSIX and in Wasmtime, but below the base: a link inside is a directory, one that leads out is refused
     assert got["[ln/]"].startswith("stat type 3")
-    assert got["[lkout/]"] == f"stat err {fs.ERROR_CODES.index('not-permitted')}"
+    assert got["[lkout/]"] == f"stat err {fs._ERROR_CODES.index('not-permitted')}"
     assert got["[lkout]"].startswith("stat type 5")  # the link itself is there to see
     assert (
-        got["[lkout/.]"] == f"stat err {fs.ERROR_CODES.index('not-permitted')}"
+        got["[lkout/.]"] == f"stat err {fs._ERROR_CODES.index('not-permitted')}"
     )  # with the flag a link that leads out is refused
-    assert got["[long]"] == f"stat err {fs.ERROR_CODES.index('name-too-long')}"
-    code = fs.ERROR_CODES.index
+    assert got["[long]"] == f"stat err {fs._ERROR_CODES.index('name-too-long')}"
+    code = fs._ERROR_CODES.index
 
     def result(label: str, offset: int, at: int = 1) -> int:
         """The error-code byte of an `err` result that the scenario shows (at 1 in `result<_, error-code>`, at 4 in `result<string, error-code>`)."""
@@ -453,7 +453,7 @@ def test_walk_stays_below_the_directory(tmp_path: Path) -> None:
         for path in (b"esc/secret", b"esc", b"./esc/../secret", b"a/../../out/secret"):
             with pytest.raises(fs.FsError) as caught:
                 fs._walk(fs._ref(base), path, True)  # pyright: ignore[reportPrivateUsage]
-            assert fs.ERROR_CODES[caught.value.code] in ("not-permitted", "no-entry"), path
+            assert fs._ERROR_CODES[caught.value.code] in ("not-permitted", "no-entry"), path
     finally:
         if base.fd >= 0:
             os.close(base.fd)
@@ -542,7 +542,7 @@ def test_errno_tables_of_c_and_python_agree(tmp_path: Path) -> None:
     ]
     assert len(rows) == 200
     for number, fs_code, net_code in ((int(a), int(b), int(c)) for a, b, c in rows):
-        python_fs = fs.ERROR_CODES[fs._CODE[fs._ERRNO.get(number, "io")]]  # pyright: ignore[reportPrivateUsage]
-        assert fs.ERROR_CODES[fs_code] == python_fs, f"errno {number} (wasi:filesystem)"
-        python_net = sk.NETWORK_ERRORS[sk._CODE[sk._ERRNO.get(number, "unknown")]]  # pyright: ignore[reportPrivateUsage]
-        assert sk.NETWORK_ERRORS[net_code] == python_net, f"errno {number} (wasi:sockets)"
+        python_fs = fs._ERROR_CODES[fs._CODE[fs._ERRNO.get(number, "io")]]  # pyright: ignore[reportPrivateUsage]
+        assert fs._ERROR_CODES[fs_code] == python_fs, f"errno {number} (wasi:filesystem)"
+        python_net = sk._NETWORK_ERRORS[sk._CODE[sk._ERRNO.get(number, "unknown")]]  # pyright: ignore[reportPrivateUsage]
+        assert sk._NETWORK_ERRORS[net_code] == python_net, f"errno {number} (wasi:sockets)"

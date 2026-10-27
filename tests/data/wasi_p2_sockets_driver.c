@@ -25,8 +25,8 @@ static void show(const char *label, uint32_t off, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) printf("%02x", memory[off + i]);
     printf("\n");
 }
-static uint32_t u32(uint32_t off) { return fusedwasi_p2_load_u32(&s, 0, off); }
-static uint16_t u16(uint32_t off) { return fusedwasi_p2_load_u16(&s, 0, off); }
+static uint32_t u32(uint32_t off) { return fusedwasi_p2__load_u32(&s, 0, off); }
+static uint16_t u16(uint32_t off) { return fusedwasi_p2__load_u16(&s, 0, off); }
 static void clear(void) { memset(memory + R, 0, 64); }
 static void nap(void) {
 #ifdef _WIN32
@@ -82,12 +82,12 @@ static void put_dgram(uint32_t idx, const char *data, int has_remote, uint32_t p
     uint32_t base = 2200 + 44 * idx, dptr = 2000 + 16 * idx, n = (uint32_t)strlen(data);
     memcpy(memory + dptr, data, n);
     memset(memory + base, 0, 44);
-    fusedwasi_p2_store_u32(&s, 0, base, dptr);
-    fusedwasi_p2_store_u32(&s, 0, base + 4, n);
-    fusedwasi_p2_store_u8(&s, 0, base + 8, (uint8_t)has_remote);
+    fusedwasi_p2__store_u32(&s, 0, base, dptr);
+    fusedwasi_p2__store_u32(&s, 0, base + 4, n);
+    fusedwasi_p2__store_u8(&s, 0, base + 8, (uint8_t)has_remote);
     if (has_remote) { /* 127.0.0.1:port as the variant at +12 */
-        fusedwasi_p2_store_u8(&s, 0, base + 12, 0);
-        fusedwasi_p2_store_u16(&s, 0, base + 16, (uint16_t)port);
+        fusedwasi_p2__store_u8(&s, 0, base + 12, 0);
+        fusedwasi_p2__store_u16(&s, 0, base + 16, (uint16_t)port);
         memory[base + 18] = 127, memory[base + 21] = 1;
     }
 }
@@ -288,7 +288,7 @@ int main(int argc, char **argv) {
             }
         }
         /* an error that is not a network one */
-        uint32_t e = fusedwasi_p2_error_new(&s, "plain");
+        uint32_t e = fusedwasi_p2__error_new_codes(&s, "plain", -1, -1);
         clear(), fusedwasi_wasi_sockets_network_network_error_code(&s, 0, e, R), show("network-error-code of a plain error", R, 2);
         fusedwasi_wasi_sockets_network_network_drop(&s, net);
     } else if (!strcmp(scenario, "reset")) {
@@ -309,7 +309,7 @@ int main(int argc, char **argv) {
         settle_accept(srv);
         uint32_t conn = u32(R + 4);
         struct linger lg = {1, 0};
-        setsockopt(fusedwasi_p2_tcp_get(&s, conn)->fd, SOL_SOCKET, SO_LINGER, (const char *)&lg, sizeof lg);
+        setsockopt(fusedwasi_p2__tcp_get(&s, conn)->fd, SOL_SOCKET, SO_LINGER, (const char *)&lg, sizeof lg);
         fusedwasi_wasi_sockets_tcp_tcp_socket_drop(&s, conn); /* closing with linger 0 sends a reset */
         read_some("read after a reset", cin);
         uint32_t err = u32(R + 8);

@@ -35,14 +35,14 @@ int main(int argc, char **argv) {
         uint32_t b = fusedwasi_wasi_clocks_monotonic_clock_subscribe_instant(&s, 9000);
         uint32_t c = fusedwasi_wasi_clocks_monotonic_clock_subscribe_duration(&s, UINT64_MAX);
         printf("%u %u %u\n", a, b, c);
-        printf("%" PRIu64 " %" PRIu64 " %" PRIu64 "\n", ((fusedwasi_p2_pollable *)fusedwasi_p2_table_get(&s, a, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline,
-               ((fusedwasi_p2_pollable *)fusedwasi_p2_table_get(&s, b, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline, ((fusedwasi_p2_pollable *)fusedwasi_p2_table_get(&s, c, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline);
-        fusedwasi_p2_table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
+        printf("%" PRIu64 " %" PRIu64 " %" PRIu64 "\n", ((fusedwasi_p2_pollable *)fusedwasi_p2__table_get(&s, a, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline,
+               ((fusedwasi_p2_pollable *)fusedwasi_p2__table_get(&s, b, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline, ((fusedwasi_p2_pollable *)fusedwasi_p2__table_get(&s, c, FUSEDWASI_P2_KIND_POLLABLE)->obj)->deadline);
+        fusedwasi_p2__table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
         printf("%u\n", fusedwasi_wasi_clocks_monotonic_clock_subscribe_instant(&s, 1)); /* the slot of `a` again, another generation */
     } else if (!strcmp(scenario, "double_drop")) {
         uint32_t a = fusedwasi_wasi_clocks_monotonic_clock_subscribe_instant(&s, 1);
-        fusedwasi_p2_table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
-        fusedwasi_p2_table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
+        fusedwasi_p2__table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
+        fusedwasi_p2__table_drop(&s, a, FUSEDWASI_P2_KIND_POLLABLE);
     } else if (!strcmp(scenario, "outside")) {
         fusedwasi_wasi_clocks_wall_clock_now(&s, 0, 60); /* 16 bytes do not fit at 60 of 64 */
     } else if (!strcmp(scenario, "no_memory")) {

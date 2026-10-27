@@ -29,13 +29,13 @@ def test_p2_reads_and_writes_any_buffer(name: str, make: Callable[[], object]) -
     memory = make()
     for guest_memory in (memory, lambda: memory):  # the buffer, and a function that gives it
         guest = core.Guest(core.State(), [guest_memory])
-        core.store_bytes(guest, 0, 8, b"abc")
-        core.store_u32(guest, 0, 16, 0x01020304)
-        core.store_u64(guest, 0, 24, 5)
-        assert core.load_bytes(guest, 0, 8, 3) == b"abc" and core.load_u32(guest, 0, 16) == 0x01020304
-        assert core.load_u8(guest, 0, 16) == 4  # little-endian, whatever the item size of the buffer
+        core._store_bytes(guest, 0, 8, b"abc")
+        core._store_u32(guest, 0, 16, 0x01020304)
+        core._store_u64(guest, 0, 24, 5)
+        assert core._load_bytes(guest, 0, 8, 3) == b"abc" and core._load_u32(guest, 0, 16) == 0x01020304
+        assert core._load_u8(guest, 0, 16) == 4  # little-endian, whatever the item size of the buffer
         with pytest.raises(core.Trap):
-            core.load_u32(guest, 0, 254)  # the size is in bytes
+            core._load_u32(guest, 0, 254)  # the size is in bytes
 
 
 @pytest.mark.parametrize("name,make", forms(), ids=[n for n, _ in forms()])
@@ -45,6 +45,6 @@ def test_p1_reads_and_writes_any_buffer(name: str, make: Callable[[], object]) -
         state = wasi_p1_core.State(args=["ab", "c"])
         guest = wasi_p1_core.Guest(state, guest_memory)
         assert wasi_p1.args_sizes_get(guest, 0, 4) == 0
-        assert wasi_p1_core.get_u32(guest, 0) == 2 and wasi_p1_core.get_u32(guest, 4) == 5
+        assert wasi_p1_core._get_u32(guest, 0) == 2 and wasi_p1_core._get_u32(guest, 4) == 5
         assert wasi_p1.args_get(guest, 16, 64) == 0
-        assert wasi_p1_core.read_bytes(guest, 64, 5) == b"ab\0c\0"
+        assert wasi_p1_core._read_bytes(guest, 64, 5) == b"ab\0c\0"

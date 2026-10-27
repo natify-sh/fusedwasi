@@ -21,12 +21,12 @@ from fusedwasi.p2 import wasi_p2_sockets as sk
 from fusedwasi.p2.wasi_p2_core import (
     KIND_TCP_SOCKET,
     Trap,
-    load_u16,
-    load_u32,
-    store_u8,
-    store_u16,
-    store_u32,
-    table_get,
+    _load_u16,
+    _load_u32,
+    _store_u8,
+    _store_u16,
+    _store_u32,
+    _table_get,
 )
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
@@ -73,10 +73,10 @@ def python_output(scenario: str) -> str:
         pr(f"{label}:{bytes(memory[off : off + n]).hex()}\n")
 
     def u32(off: int) -> int:
-        return load_u32(host, 0, off)
+        return _load_u32(host, 0, off)
 
     def u16(off: int) -> int:
-        return load_u16(host, 0, off)
+        return _load_u16(host, 0, off)
 
     def clear() -> None:
         memory[R : R + 64] = bytes(64)
@@ -113,12 +113,12 @@ def python_output(scenario: str) -> str:
         base, dptr = 2200 + 44 * idx, 2000 + 16 * idx
         memory[dptr : dptr + len(data)] = data
         memory[base : base + 44] = bytes(44)
-        store_u32(host, 0, base, dptr)
-        store_u32(host, 0, base + 4, len(data))
-        store_u8(host, 0, base + 8, int(has_remote))
+        _store_u32(host, 0, base, dptr)
+        _store_u32(host, 0, base + 4, len(data))
+        _store_u8(host, 0, base + 8, int(has_remote))
         if has_remote:
-            store_u8(host, 0, base + 12, 0)
-            store_u16(host, 0, base + 16, port)
+            _store_u8(host, 0, base + 12, 0)
+            _store_u16(host, 0, base + 16, port)
             memory[base + 18] = 127
             memory[base + 21] = 1
 
@@ -453,7 +453,7 @@ def python_output(scenario: str) -> str:
                             break
                         show("  address", R + 4, 6 if memory[R + 4] == 0 else 18)
                     sk.wasi_sockets_ip_name_lookup_resolve_address_stream_drop(host, rs)
-            e = io.error_new(host, "plain")
+            e = io._error_new(host, "plain")
             clear()
             sk.wasi_sockets_network_network_error_code(host, 0, e, R)
             show("network-error-code of a plain error", R, 2)
@@ -482,7 +482,7 @@ def python_output(scenario: str) -> str:
             cin = u32(R + 4)
             settle("accept", srv)
             conn = u32(R + 4)
-            sock = cast(Any, table_get(host, conn, KIND_TCP_SOCKET)).sock
+            sock = cast(Any, _table_get(host, conn, KIND_TCP_SOCKET)).sock
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
             sk.wasi_sockets_tcp_tcp_socket_drop(host, conn)  # closing with linger 0 sends a reset
             read_some("read after a reset", cin)
@@ -560,7 +560,7 @@ def lines_of(scenario: str) -> list[str]:
 
 def test_values() -> None:
     lines = lines_of("main")
-    code = sk.NETWORK_ERRORS.index
+    code = sk._NETWORK_ERRORS.index
 
     def err(label: str, at: int = 1) -> int:
         line = next(x for x in lines if x.startswith(f"{label}:"))
@@ -602,7 +602,7 @@ def test_values() -> None:
 
 def test_denied_by_default() -> None:
     lines = lines_of("denied")
-    denied = f"{sk.NETWORK_ERRORS.index('access-denied'):02x}"
+    denied = f"{sk._NETWORK_ERRORS.index('access-denied'):02x}"
     for label in ("tcp bind", "tcp connect", "udp bind"):
         assert f"{label}:01{denied}" in lines, label
     assert next(x for x in lines if x.startswith("resolve:")).startswith(f"resolve:01000000{denied}")
@@ -611,7 +611,7 @@ def test_denied_by_default() -> None:
 def test_a_reset_is_a_network_error() -> None:
     lines = lines_of("reset")
     assert "read after a reset stream-error tag 0" in lines  # last-operation-failed
-    assert f"network-error-code:01{sk.NETWORK_ERRORS.index('connection-reset'):02x}" in lines
+    assert f"network-error-code:01{sk._NETWORK_ERRORS.index('connection-reset'):02x}" in lines
     assert "debug string is not empty: 1" in lines
     assert "and again stream-error tag 1" in lines  # the stream is closed after the failure
 
