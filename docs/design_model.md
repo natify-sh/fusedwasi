@@ -114,3 +114,14 @@ What a signal does to a program is the host's decision, not WASI's: the guest on
 * `sig > 30` stays `INVAL`; `0` stays success (no signal).
 * `finished`, `end_value`, `FUSEDWASI_P1_END_SIGNAL` and `FUSEDWASI_P1_END_NONE`/`END_EXIT` go away from the state: what remains of the end of a call is `exited` and `exit_code`, on the guest (section 3). Python: `WasiSignal` and `Signal` go away; the hook is a callable of the `Guest`.
 * The user that wants today's behaviour of wasmext (a signal that kills ends the program, with the number and the name) writes it as the hook; the table of which signals end a process moves to that user. The test `tests/test_wasi_p1_core.py` (`proc_raise trapped`, `end 2 9`) is rewritten for the hook.
+
+## 11. The proof of neutrality (accepted by the owner, 2026-10-27)
+
+"fusedwasi does not care who uses it" is shown, not claimed. The rework is not done until fusedwasi has, **inside this repository**, two small users that have nothing to do with `wasm2c`, `wasmext` or `wasmhost`, and that use only the public API of this document:
+
+1. **A Python user over an engine that is not ours**: the Python twin driven by `wasmtime-py` (the `State` and a `Guest` per instance, the memory as a function that gives the memory of the instance in call, `trap` and `exit` as exceptions), running a small WASI 0.1 program and a small WASI 0.2 command (as a core module) and checking the result against the same program under Wasmtime's own WASI. Lives in `examples/` or `tests/neutral/`, with its own test.
+2. **A C user over an engine that is not `wasm2c`**: a small C driver (a tiny interpreter or an existing small engine such as `wasm3` or `WAMR`, whichever can be had in CI without a heavy dependency) with its own `Guest`, memory source, `trap` and `realloc`. If no engine is practical, the driver runs the C functions on a hand-made guest memory, as the existing C tests do, and says plainly that this proves the C interface but not an engine.
+
+Rules for both: they include only the public headers and import only the public Python names; they live in the repository of fusedwasi; they run in its CI; a change of the public API that breaks one of them is a change that is reviewed, not worked around.
+
+Where it fits in the order (section 7, item 5): after the split (step 1) and 0.1 over 0.2 (step 2), before the public/private marks are frozen and before `0.1.0a1`. The first user (Python over `wasmtime-py`) can start as soon as the split is pushed and is the quickest check that the split is neutral.
