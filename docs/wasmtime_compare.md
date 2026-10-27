@@ -165,3 +165,36 @@ Sockets (no way to allow the network in `wasmtime-py`), terminals, a real stdin,
 ### What this changes
 
 Nothing in `src/`. **F9/F8 decided by the owner (2026-10-27):** a directory opened below one that has `mutate-directory` inherits the rights of its parent, as in Wasmtime; `host_scope.md`, the README of the tool and the `#~` marks of `script_fs.txt` were corrected in the same commit as this section (the 8 lines that now agree lost their mark; `flags nm` got one). The marks were not re-run after the edit. The C drivers `ours_c.c` and `ours_http_c.c` (`HOST=c` of `runner.py`) are **not in the tree yet**: they were written for the API before the State/Guest split of `design_model.md` and are adapted after it; the pre-split versions are in commit `98a7243` of the local branch `worktree-agent-a227be3ce8558457a` of the repository of this session, and the table above holds for them. The stale paths in `tools/` are fixed. Cli, clocks and random were compared in Python only.
+
+## Re-run after the 0.1-over-0.2 rewrite
+
+The run of 2026-10-27 above was made before the filesystem of 0.2 was split into operations plus ABI wrappers (`500cfb4`), before WASI 0.1 was put over 0.2 and before State and Guest were merged (`14829c4`). This section is the same comparison after them, at `f06e34b` plus the drivers below. **Everything here was run in this session unless it says "not run".** Nothing under `src/` or `tests/` was changed.
+
+### What was ported (tools only, public API only)
+
+* `ours.py`, `ours_http.py`: `Host(...)` became `Guest(State(preopens=...) or State(http=True), [memory], realloc=...)`; the functions of `wasi_p2_*` are called as before, with the guest first.
+* `ours_c.c`, `ours_http_c.c` (taken from `98a7243`, which is not in this branch): one `fusedwasi_p2_state` (`fusedwasi_p2_init`, `preopens`, `http_check`) and one `fusedwasi_p2_guest` (`fusedwasi_p2_guest_init`, `trap`, `realloc`, `fusedwasi_p2_set_memory`); every call is `fusedwasi_wasi_<package>_<name>(&guest, ...)`. Built by `HOST=c` of `runner.py` with `cc -O1 -g -fsanitize=address,undefined`. `runner.py` already had `HOST=c` and `SHOW_KNOWN=1`, unchanged. The sanitizers printed nothing on stderr and both programs exited 0 (this time stderr was read, which the run above did not do for http).
+* `docs/experiments/wasmtime_compare/harness.py`: `Host` and the 0.1 `State(memory, core=...)` became one `State` and one `Guest` (`fusedwasi.p2`, the same classes as `fusedwasi.p1`); the functions of `wasi_p1` take the guest.
+
+Toolchain: Wasmtime (`wasmtime` from pip) **50.0.1**, Python 3.13.16 in a scratch venv with `pytest`, `cargo` with the target `wasm32-wasip2` (the guest built in 27 s, `Cargo.lock` unchanged), `gcc 13.3.0`, `wasm-tools`, the WIT of `wasip2-*+wasi-0.2.12` in the cargo registry. Linux x86-64.
+
+### Results
+
+| Part | Host | Operations | Differ (not marked `#~`) | Marked `#~` and differ | Marked `#~` and agree |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `wasi:filesystem` (`script_fs.txt`) | Python | 262 | **0** | 25 | 0 |
+| `wasi:filesystem` | **C** | 262 | **0** | 25 | 0 |
+| `wasi:http` (`script_http.txt`) | Python | 23 | 0 | 4 | 0 |
+| `wasi:http` | **C** | 23 | 0 | 4 | 0 |
+
+Against the run before: the filesystem had 1 unmarked difference (`flags nm`), 24 marked that differ and 8 marked that agree. The marks were edited after that run (`flags nm` marked, the 8 `nm` lines unmarked), and now the 25 marked lines are the earlier 24 and `flags nm`, none of them agrees, and nothing is unmarked: **the expectation held**. http is unchanged (0 and 4). C and Python gave the same line for all 262 and all 23 operations (the lists of lines were compared as lists, not by eye), and every unmarked line equals Wasmtime's.
+
+A second check, stronger than the counts: the lines of the Python twin and of the C host (all four of them) were also produced at `98a7243` (before the rewrite, with the old drivers) and at the current tree, and compared as text: **identical, line for line**. So the rewrite changed no result of `wasi:filesystem` or `wasi:http` on these scripts, in either host, and there is **no new difference and no new finding** for 0.2. The wording of the verdicts F1 to F9 and of the http table above stands.
+
+### The older flat experiment (cli, clocks, random, filesystem as flat core calls, and WASI 0.1)
+
+`python docs/experiments/wasmtime_compare/run.py --all`: **301 of 365 steps agree**, the same as before the rewrite (the run at `98a7243` was repeated here and also gave 301). The results of every step of the five groups were written as JSON by both runs and compared, for Wasmtime and for fusedwasi: **no step changed** (0 of 365), so the list of changed steps is empty. That includes the 0.1 side, which was rewritten over 0.2: the 52 differences of WASI 0.1 (the E-rows above) are the same 52, with the same text. (The step labels were compared too; the number of steps is the same.)
+
+### Not run, still not compared
+
+Sockets, terminals, a real stdin, Windows, macOS, MSVC; the C host for cli, clocks, random and io (and for the flat experiment, which binds the Python functions only); streaming of big bodies; the CI of fusedwasi does not run any of this. Only the compilation with `-Wall -Wextra -O1 -c` of `ours_c.c` was seen to give three `-Wmaybe-uninitialized` warnings from `fusedwasi_wasi_filesystem_types_descriptor_read_directory` (GCC 13.3, inlined into the driver's `main`; the function sets the three results on every path that returns OK, so it looks like a false positive; a small file that calls the same function does not warn). Nothing was changed for it; the driver is built without `-Wall`.
