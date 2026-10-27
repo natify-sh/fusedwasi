@@ -259,7 +259,7 @@ Python gets the same contract plus the exceptions `Exit` and `Signal`: the excep
 7. The 0.1 and 0.2 preopen structs differ in field names and polarity.
 8. The format of the headers is read by `make_wasi_p2_table.py` with a regular expression; ship a table or document the format.
 9. `release_checklist.md` section 1 has the wrong function-name scheme; correct it.
-10. Section 2 of the checklist says 0.2 was not compared with Wasmtime; `tools/wasi_p2_conformance/` does that for the filesystem and http (its README says 262 and 23 operations; **[unverified] that it still runs**, it needs Rust and `wasm32-wasip2`). Its README refers to `docs/experiments/wasi_p2_conformance/`, a path that does not exist in this tree.
+10. (Done 2026-10-27: `tools/wasi_p2_conformance/` runs again, with the paths fixed; filesystem and http were compared with Wasmtime 50.0.1, see `wasmtime_compare.md`.)
 
 ## 6. What was done about the gaps of section 2 (task 4, 2026-10-26)
 

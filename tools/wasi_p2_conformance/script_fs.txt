@@ -266,14 +266,14 @@ open mm4 mm f f c rw
 flags mm4
 # a directory opened without mutate-directory: the WIT says read-only for what changes it; Wasmtime does not look at the flag (the rest of the script follows from that)
 open nm root sub f d r
-flags nm
-mkdir nm made  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-unlink nm f  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-rmdir nm none  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-rename nm f root moved  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-symlink nm x lnk  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-open nm2 nm f f c w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
-open nm3 nm f f - w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+flags nm  #~ Wasmtime reports only r; here the mutate-directory that the directory inherited from its parent is reported (the same as `flags mm`)
+mkdir nm made
+unlink nm f
+rmdir nm none
+rename nm f root moved
+symlink nm x lnk
+open nm2 nm f f c w
+open nm3 nm f f - w
 open nm4 nm f f - r
-open nm5 nm g f t w  #~ mutate-directory unset on a directory: the WIT says read-only; Wasmtime ignores the flag
+open nm5 nm g f t w
 stat-at nm f f

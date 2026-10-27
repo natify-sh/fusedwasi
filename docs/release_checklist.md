@@ -20,7 +20,7 @@ To decide: which fields are public (and read-only for the host), which are priva
 
 ## 2. Behaviour not yet checked against a real host
 
-- 0.1 is held by the official wasi-testsuite (72 tests, run in the CI of `wasmext`). 0.2 is compared only with the text of the WIT and between the C and the Python (`host_scope.md`, "Checked against the WIT"); **it has not been compared with Wasmtime**. A script like `wasmext/docs/experiments/wasmtime_exit/` (the `wasmtime` package from pip) for `cli`, `filesystem`, `clocks` and `io` would show differences of behaviour.
+- 0.1 is held by the official wasi-testsuite (72 tests, run in the CI of `wasmext`). 0.2 is compared only with the text of the WIT and between the C and the Python (`host_scope.md`, "Checked against the WIT"); **it was compared with Wasmtime 50.0.1 on 2026-10-27 (filesystem and http, in Python and in C; cli, clocks and random in Python only; no sockets, terminals, Windows or macOS; see `wasmtime_compare.md`)**. A script like `wasmext/docs/experiments/wasmtime_exit/` (the `wasmtime` package from pip) for `cli`, `filesystem`, `clocks` and `io` would show differences of behaviour.
 - The deliberate differences from the letter of the WIT are listed in `host_scope.md`; each should be kept on purpose or removed.
 
 ## 3. Known gaps

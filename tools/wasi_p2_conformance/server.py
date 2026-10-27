@@ -5,7 +5,8 @@ import sys
 import threading
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from test_wasi_p2_http import respond  # noqa: E402
 
 listener = socket.socket()

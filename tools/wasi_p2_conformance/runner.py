@@ -1,6 +1,6 @@
 """Runs the scripts on the guest in Wasmtime (wasmtime-py) and on the Python host of fusedwasi, and shows the lines that differ.
 
-    uv run python docs/experiments/wasi_p2_conformance/runner.py [script_fs.txt]
+    uv run python tools/wasi_p2_conformance/runner.py [script_fs.txt]
 
 Needs: `pip install wasmtime`, `rustup target add wasm32-wasip2`, and `cargo build --release --target wasm32-wasip2` in guest/. Not part of the tests (CI has none of that).
 """
@@ -19,7 +19,7 @@ import wasmtime.component as c
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parents[2] / "src"))
+sys.path.insert(0, str(HERE.parents[1] / "src"))
 import ours
 
 RELEASE = HERE / "guest" / "target" / "wasm32-wasip2" / "release"
@@ -84,6 +84,34 @@ def ours_lines(script: Path, base: Path) -> list[str]:
     return ours.run(script, [(str(rw), "/world", True), (str(ro), "/ro", False)])
 
 
+def ours_c_lines(script: Path, base: Path) -> list[str]:
+    """The C host (ours_c.c, built into the temp directory) on the same script and tree."""
+    rw, ro = fresh(base)
+    exe = base.parent / "ours_c"
+    include = HERE.parents[1] / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
+    subprocess.run(["cc", "-O1", "-g", "-fsanitize=address,undefined", "-I", str(include), "-o", str(exe), str(HERE / "ours_c.c")], check=True)
+    done = subprocess.run([str(exe), str(script), str(rw), str(ro)], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+    if done.returncode:
+        print(f"ours_c exited {done.returncode}: {done.stderr[-2000:]}", file=sys.stderr)
+    return done.stdout.splitlines()
+
+
+def ours_c_http_lines(script: Path, base: Path) -> list[str]:
+    """The C host (ours_http_c.c) on the same requests; its error-codes are numbers, turned into the names of the Python twin."""
+    import re
+
+    from fusedwasi.p2 import wasi_p2_http as H
+
+    base.mkdir(parents=True, exist_ok=True)
+    exe = base / "ours_http_c"
+    include = HERE.parents[1] / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
+    subprocess.run(["cc", "-O1", "-g", "-fsanitize=address,undefined", "-I", str(include), "-o", str(exe), str(HERE / "ours_http_c.c")], check=True)
+    done = subprocess.run([str(exe), str(script)], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
+    if done.returncode:
+        print(f"ours_http_c exited {done.returncode}: {done.stderr[-2000:]}", file=sys.stderr)
+    return [re.sub(r"err=#(\d+)", lambda m: "err=" + H.CASES[int(m.group(1))][0].lower().replace("-", ""), x) for x in done.stdout.splitlines()]
+
+
 def wasmtime_http_lines(script: Path, base: Path) -> list[str]:
     base.mkdir(parents=True, exist_ok=True)
     out = base / "out.txt"
@@ -119,19 +147,21 @@ def main() -> int:
             filled = work / "script_http.txt"
             filled.write_text(script.read_text().replace("PORT", port))
             theirs = wasmtime_http_lines(filled, work / "wasmtime")
-            mine = ours_http.run(filled)
+            mine = ours_c_http_lines(filled, work / "c") if os.environ.get("HOST") == "c" else ours_http.run(filled)
             script = filled
         finally:
             server.kill()
     else:
         theirs = wasmtime_lines(script, work / "wasmtime")
-        mine = ours_lines(script, work / "ours")
+        mine = ours_c_lines(script, work / "ours") if os.environ.get("HOST") == "c" else ours_lines(script, work / "ours")
     source = [x.strip() for x in script.read_text().splitlines() if x.strip() and not x.strip().startswith("#")]
     bad = known = 0
     for i, (a, b) in enumerate(zip(theirs, mine, strict=False)):
         if a != b:
             if "#~" in source[i]:
                 known += 1
+                if os.environ.get("SHOW_KNOWN"):
+                    print(f"KNOWN      {source[i]}\n    wasmtime: {a}\n    ours:     {b}")
                 continue
             bad += 1
             print(f"DIFFERENT  {source[i]}\n    wasmtime: {a}\n    ours:     {b}")

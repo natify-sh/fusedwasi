@@ -86,3 +86,82 @@ WASI_WIT=<dir with cli.wit, clocks.wit, filesystem.wit, io.wit, random.wit ...> 
 ```
 
 `wasm-tools` must be on the `PATH`. Without `WASI_WIT` the script looks for the `wasip2` crate in `~/.cargo/registry`. About a minute.
+
+## Run of 2026-10-27
+
+Run at the tip of `wasi-p2` (`6a45104`) in a clean worktree. **Everything below was run in this session unless it says "not run".** Nothing under `src/` or `tests/` was touched; nothing was pushed.
+
+### Toolchain (all of it could be had)
+
+* Rust: `cargo 1.97.0`, `rustup` stable with the target `wasm32-wasip2` already installed. The guest (`tools/wasi_p2_conformance/guest`, crate `wasi 0.14.7`, the interfaces of `0.2.4`) built in 11 s with `cargo build --release --target wasm32-wasip2` (the target directory was outside the tree; `Cargo.lock` unchanged), giving `conf.wasm` and `http.wasm`.
+* Wasmtime: the `wasmtime` package **50.0.1** from pip, Python 3.14.6 in a scratch venv (`uv`, through the proxy of the environment, TLS verification on). `pytest` was also needed, because `server.py` imports `tests/test_wasi_p2_http.py`.
+* C: `gcc`; the C host is header-only (`include/fusedwasi/p2/*.h`), so it is driven by a C program built for each run (see below). Built with `-fsanitize=address,undefined`; the filesystem run printed nothing from either sanitizer (checked by hand); the http run exited 0 (its stderr was not inspected for UBSan lines).
+* `wasm-tools` and `wat2wasm` were on the machine, so the older experiment of `docs/experiments/wasmtime_compare/` was run again too.
+
+### What was found broken in the tools themselves (fixed in `tools/`, not in `src/`)
+
+The tools could not run as they stood: they were moved from `docs/experiments/wasi_p2_conformance/` and the paths were not updated.
+
+* `runner.py` put `HERE.parents[2] / "src"` on the path (a directory outside the repository); it is `parents[1]` now. Its usage line and the README say `tools/wasi_p2_conformance/`.
+* `server.py` took `tests/` from `parents[3]` (outside the tree) and did not put `src/` on the path; it is `parents[2]` now, plus `src`. Without that the http guest panicked on an empty port, which looks like a Wasmtime failure but is the server not starting.
+* New: `ours_c.c` and `ours_http_c.c` (the C host driven by the same two scripts, ports of `ours.py` and `ours_http.py`), and in `runner.py` the environment variable `HOST=c` (build the C driver into the temp directory with `cc` and run it instead of the Python twin) and `SHOW_KNOWN=1` (print the differences marked `#~` as well, which is how the lists below were made).
+
+```
+rustup target add wasm32-wasip2
+(cd tools/wasi_p2_conformance/guest && cargo build --release --target wasm32-wasip2)
+python tools/wasi_p2_conformance/runner.py                                              # filesystem, Python twin
+HOST=c python tools/wasi_p2_conformance/runner.py                                       # filesystem, C host
+python tools/wasi_p2_conformance/runner.py tools/wasi_p2_conformance/script_http.txt    # http (HOST=c for C)
+```
+
+### Results
+
+| Part | Host | Operations | Differ (not marked `#~`) | Marked `#~` and differ | Marked `#~` and agree |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `wasi:filesystem` (`script_fs.txt`) | Python | 262 | 1 | 24 | 8 |
+| `wasi:filesystem` | **C** | 262 | 1 | 24 | 8 |
+| `wasi:http` (`script_http.txt`) | Python | 23 | 0 | 4 | 0 |
+| `wasi:http` | **C** | 23 | 0 | 4 | 0 |
+
+**C and Python gave the same line for each of the 262 and the 23 operations**: the text of the differences against Wasmtime is identical in both (the output of the runner was compared with `diff`), and every other line equals Wasmtime's, so on those the C equals Python too. The http error-codes of the C driver are numbers that the runner turns into names with the table of the Python twin (an assumption of the comparison). `pytest tests/test_wasi_p2_*.py` (with `-o pythonpath=src`): 74 passed, 1 skipped.
+
+Also run, Python twin only: `docs/experiments/wasmtime_compare/run.py` (cli, clocks, random, filesystem as flat core-module calls, and WASI 0.1): **301 of 365 steps agree**, 64 differ (the run of 2026-10-26 said 300 and 65). The 12 differences of WASI 0.2 are exactly D1 to D8 above (cli 2 steps, clocks 3, random 1, filesystem 6), so those verdicts stand. The 52 of WASI 0.1 are the E-rows above; I did not find which step makes the difference of one against the earlier count. **Not run: the C host for cli, clocks, random, io, or for this older experiment** (it binds the imports to the Python functions; there is no C driver for it), so for those packages the C is covered only by the C-against-Python tests of the repository.
+
+### Every difference of `script_fs.txt` (Wasmtime against fusedwasi; C and Python the same)
+
+| # | Operations (numbers of the output lines) | Wasmtime | fusedwasi | Verdict |
+| --- | --- | --- | --- | --- |
+| F1 | 12 operations on a **read-only preopen** (`open` for write, create or truncate, `mkdir`, `rmdir`, `unlink`, `symlink`, `rename` out of and into it, `link` into it): 184, 185, 194, 205-212, 217 | `not-permitted` | `read-only` | **Deliberate** (the WIT lists `read-only`; README of the tool). |
+| F2 | `write-via-stream` (19, 224) and `append-via-stream` (225) on a descriptor opened without `write` | the stream is made and fails later (`stream-failed`) | `bad-descriptor` at once | **Deliberate** (README). |
+| F3 | `write` (213) and `set-size` (35, 218) on a descriptor that cannot write | `write`: `not-permitted`; `set-size`: `invalid` (35) and `not-permitted` (218) | `bad-descriptor` | **Deliberate** for fusedwasi; **Wasmtime quirk** that its own two cases of `set-size` differ. Same family as D5. |
+| F4 | `read` of a directory descriptor (54) | `bad-descriptor` | `is-directory` | **Deliberate** (D6). |
+| F5 | `blocking-read` of 0 bytes from a file stream (223) | `stream-closed` | an empty list | **Deliberate** (README). |
+| F6 | a **FIFO**: `readdir` (61) and `stat-at` (233) | type `unknown` | type `fifo` | **Wasmtime quirk** (the WIT has `fifo`). |
+| F7 | `link-at` with `symlink-follow` (191) | `invalid` | `no-entry` here (see below) | **Wasmtime quirk** (D8). |
+| F8 | `get-flags` of a directory opened with `mutate-directory` (243, marked) and **of a directory opened with `read` only (252, not marked)** | `r` | `rm` | see F9. **The only line of the script that differs without a `#~`.** |
+| F9 | 8 operations marked "mutate-directory unset on a directory" (253-259, 261: `mkdir`, `unlink`, `rmdir`, `rename`, `symlink`, `open` for write, through a directory opened with `read` only) | succeed, or the same error as fusedwasi | **the same as Wasmtime: they agree now** | Not a difference any more; see below. |
+
+Details that matter:
+
+* **F9 / F8 (documentation drift, and a behaviour to decide on).** `wasi_p2_filesystem.py` says in `open_at`: "what a directory may do is what the directory it was opened under may do (as in Wasmtime), and not what was asked for"; the C run shows the same. So a directory opened below a descriptor that has `mutate-directory` gets `read | mutate-directory` whatever flags the guest asked for: a directory opened with `read` only can be changed through, as in Wasmtime, and `get-flags` reports a `mutate-directory` that the guest did not ask for (Wasmtime reports `read` only and never reports `mutate-directory`). The README of the tool says the opposite ("This host follows the WIT"; the 8 `#~` lines of the `nm` group still claim a difference that is gone), and `host_scope.md` ("a change of a directory without `mutate-directory` ... is `read-only`, as the WIT says") is true only for a descriptor whose parent lacks the flag (a read-only preopen). The line `flags nm` has no `#~` mark although it is the same Wasmtime quirk as `flags mm`, which has one: mark it, and remove the `#~` from the 8 lines that now agree. **Verdict:** deliberate (it is in the code, with a comment), but a decision to confirm and to write down: it makes a handle opened with `read` as powerful as one opened with `read, mutate-directory`.
+* **F7 and the script.** The line `link root f ln root lnlink` is not a good test: by that line `ln` has been unlinked, so fusedwasi answers `no-entry`, not "done" as the comment says. With a probe on a fresh tree (a scratch script, not committed): Wasmtime answers `invalid` to **every** `link-at` with `symlink-follow` (a link to a file or to a directory, dangling, a missing name, leading out, absolute); fusedwasi follows: a link to a file and a regular file are **done** (a hard link to the target), a link to a directory is `not-permitted`, a dangling link or a missing name `no-entry`, a link out or an absolute link `not-permitted`. C and Python gave the same answers on the probe.
+* **The numbers of the README are old.** It says 39 of 236 differed on 2026-10-23 and 32 operations are marked. Today: 262 operations, 32 marked, 24 of them differ, 8 agree (F9), and 1 differs unmarked (F8). Of the four mistakes of that first run (`read` end-of-file, empty name, slash after a link, `directory` on a link) none came back.
+
+### Every difference of `script_http.txt` (C and Python the same)
+
+19 of 23 requests agree (status, fields without `date` and `server`, body, trailers, and the `error-code` for a refused connection, a missing name, a silent server, a bad status line). The four marked ones differ as the README says, and nothing else:
+
+| Request | Wasmtime | fusedwasi | Verdict |
+| --- | --- | --- | --- |
+| `/truncated` (the body ends before `Content-Length`) | answers 200 with 10 bytes, the body stream fails at the end | the request fails: `HTTP-response-incomplete` | **Deliberate** (the answer is read whole). |
+| `/badchunk` | answers 200, the body stream fails (empty body) | `HTTP-protocol-error` | **Deliberate** (same). |
+| `/te` (unknown transfer coding) | 200, the body is read to the end (`xx`) | `HTTP-response-transfer-coding` | **Deliberate**; the WIT has the case, hyper does not use it. |
+| `/bighead` (a head of 70 000 bytes) | 200 with the field | `HTTP-response-header-section-size` | **Deliberate** (64 KiB limit). |
+
+### Not compared
+
+Sockets (no way to allow the network in `wasmtime-py`), terminals, a real stdin, Windows and macOS; the C host for cli, clocks, random and io (see above); streaming of big bodies, and `Content-Length` against chunks for a request body (the README says Wasmtime always chunks; no step of the script looks at it). Everything here was measured on Linux x86-64.
+
+### What this changes
+
+Nothing in `src/`. **F9/F8 decided by the owner (2026-10-27):** a directory opened below one that has `mutate-directory` inherits the rights of its parent, as in Wasmtime; `host_scope.md`, the README of the tool and the `#~` marks of `script_fs.txt` were corrected in the same commit as this section (the 8 lines that now agree lost their mark; `flags nm` got one). The marks were not re-run after the edit. The C drivers `ours_c.c` and `ours_http_c.c` (`HOST=c` of `runner.py`) are **not in the tree yet**: they were written for the API before the State/Guest split of `design_model.md` and are adapted after it; the pre-split versions are in commit `98a7243` of the local branch `worktree-agent-a227be3ce8558457a` of the repository of this session, and the table above holds for them. The stale paths in `tools/` are fixed. Cli, clocks and random were compared in Python only.

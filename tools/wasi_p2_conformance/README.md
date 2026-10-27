@@ -4,8 +4,8 @@ The same script of operations is run by a guest in Wasmtime (a Rust component fo
 
     pip install wasmtime            # in the environment of the project
     rustup target add wasm32-wasip2
-    (cd docs/experiments/wasi_p2_conformance/guest && cargo build --release --target wasm32-wasip2)
-    python docs/experiments/wasi_p2_conformance/runner.py [script_fs.txt]
+    (cd tools/wasi_p2_conformance/guest && cargo build --release --target wasm32-wasip2)
+    python tools/wasi_p2_conformance/runner.py [script_fs.txt]
 
 Not part of the tests: CI has neither Wasmtime nor the Rust target.
 
@@ -23,7 +23,7 @@ First run (2026-10-23): 39 of 236 operations differed. **Four of them were mista
 The rest is marked `#~` in the script with the reason (32 operations, all of them differences of choice, not of safety):
 
 * **A read-only preopen:** Wasmtime says `not-permitted`, the WIT (and this host) `read-only`.
-* **`mutate-directory`:** the WIT says `open-at` from a descriptor without it fails with `read-only` if it is asked to write or create; Wasmtime does not look at the flag (a directory opened with only `read` can still be changed through, and `get-flags` does not show `mutate-directory` at all). This host follows the WIT. *A guest that opens a directory without the flag and then changes it works in Wasmtime and fails here.*
+* **`mutate-directory`:** a directory opened below a descriptor that has `mutate-directory` gets the rights of its parent, whatever the guest asked for (decided by the owner, 2026-10-27, because Wasmtime does the same): a directory opened with only `read` can still be changed through. `open-at` of a *write* from a descriptor whose parent lacks the flag (a read-only preopen) is `read-only`, as the WIT says (Wasmtime says `not-permitted`). `get-flags` here reports the `mutate-directory` the directory inherited; Wasmtime never reports it.
 * A FIFO is `fifo` here, `unknown` in Wasmtime.
 * `link-at` with `symlink-follow`: Wasmtime says `invalid`, here it is done.
 * A stream for writing on a descriptor that was opened without `write`: `bad-descriptor` at once here, the stream fails later in Wasmtime. The same for `set-size` and `write` on such a descriptor, and `read` of a directory (`is-directory` here, `bad-descriptor` there). A `blocking-read` of 0 bytes: an empty list here, `closed` there.
