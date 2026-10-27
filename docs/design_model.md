@@ -76,7 +76,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 ## 7. Open decisions (the owner)
 
 1. ~~One state for 0.1 and 0.2~~ decided: 0.1 over 0.2 (section 4).
-2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). Open: whether the first parameter keeps the name `s`.
+2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). The first parameter of a function is the guest: `g` in C, `guest` in Python (not `s`, which would read as the state); the state is `g->state.
 3. ~~The border cases~~ settled (section 3). `proc_raise` decided (owner, 2026-10-27): a hook `signal` on the guest; the default answers `NOTSUP` as Wasmtime does; the library no longer ends the program by itself (section 10).
 4. ~~Typed `std[3]`~~ decided with the split: `fusedwasi_p2_stream *std[3]` (a forward declaration), the one-line casts of derived structs in the drivers are fixed in the same change.
 5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
