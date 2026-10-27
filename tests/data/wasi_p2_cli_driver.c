@@ -42,6 +42,7 @@ int main(int argc, char **argv) {
     memcpy(memory + 120, "hello", 5);
     fusedwasi_p2_fd_stream *fin = NULL, *fout = NULL;
     int out_pipe[2] = {-1, -1};
+    (void)out_pipe; /* used by the POSIX-only scenario fd */
     if (!strcmp(scenario, "main")) {
         world.terminals = FUSEDWASI_P2_TERMINAL_STDOUT;
         uint32_t hi = fusedwasi_p2_memory_input_new(&world, (const uint8_t *)"in!", 3), ho;
@@ -70,6 +71,11 @@ int main(int argc, char **argv) {
         fusedwasi_p2_free(&world);
         fusedwasi_p2_buffer_output_release(bo);
         return 0;
+#ifdef _WIN32
+    } else if (!strcmp(scenario, "fd")) {
+        puts("the scenario fd needs pipe()"); /* POSIX only: its test is skipped on Windows */
+        return 2;
+#else
     } else if (!strcmp(scenario, "fd")) {
         int in_pipe[2];
         if (pipe(in_pipe) || pipe(out_pipe)) return 2;
@@ -91,6 +97,7 @@ int main(int argc, char **argv) {
         printf("\n");
         close(in_pipe[0]);
         close(out_pipe[0]);
+#endif
     } else if (!strcmp(scenario, "exit_ok")) {
         fusedwasi_wasi_cli_exit_exit(&s, 0);
     } else if (!strcmp(scenario, "exit_err")) {

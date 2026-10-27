@@ -5,7 +5,6 @@ No wasm2c and no module: a fake memory of 256 bytes, a bump allocator for `cabi_
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -145,8 +144,8 @@ def c_output(scenario: str, binary: Path) -> str:
 
 @pytest.fixture(scope="module")
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if CC is None or sys.platform == "win32":
-        pytest.skip("no C compiler of the POSIX kind")
+    if CC is None:
+        pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2io") / "driver"
     build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
     return binary

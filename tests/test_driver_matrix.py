@@ -8,7 +8,6 @@ cross compiler, whichever are installed. No `-Wno-...` flag: a finding is fixed 
 """
 
 import shutil
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -19,12 +18,6 @@ REPO = Path(__file__).resolve().parent.parent
 INCLUDE = REPO / "src" / "fusedwasi" / "include"
 PROGRAMS = sorted((REPO / "tests" / "data").glob("*.c")) + sorted((REPO / "tools" / "wasi_p2_conformance").glob("*.c"))
 COMPILERS = [c for c in ("gcc", "clang", "x86_64-w64-mingw32-gcc") if shutil.which(c)]
-# the drivers that use the POSIX calls pipe() and poll() are not built for Windows (their test is POSIX only, too)
-POSIX_ONLY = {"wasi_p2_cli_driver.c"}
-
-
-def for_windows(compiler: str) -> bool:
-    return sys.platform == "win32" or "mingw" in compiler
 
 
 def test_there_are_programs_to_build() -> None:
@@ -48,7 +41,7 @@ def test_every_program_builds_without_a_warning(compiler: str, level: str, tmp_p
         f"-I{INCLUDE / 'fusedwasi' / 'p2'}",
         f"-I{REPO / 'tests' / 'data'}",
     ]
-    programs = [p for p in PROGRAMS if not (for_windows(compiler) and p.name in POSIX_ONLY)]
+    programs = PROGRAMS
 
     def compile_one(program: Path) -> None:
         build([compiler, *flags, str(program), "-o", str(tmp_path / (program.stem + ".o"))])

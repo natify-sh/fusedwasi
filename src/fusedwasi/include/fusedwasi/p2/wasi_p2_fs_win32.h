@@ -10,6 +10,7 @@
 
 #include <fcntl.h>
 #include <io.h>
+#include <share.h>
 #include <winioctl.h>
 
 typedef const char *fusedwasi_p2__dirref; /* the path of the directory */
@@ -24,6 +25,15 @@ typedef const char *fusedwasi_p2__dirref; /* the path of the directory */
 
 /* copy a string that is known to fit (the callers check the size first), and add one: without the functions the CRT of Microsoft warns about (C4996) */
 FUSEDWASI_P2_FN void fusedwasi_p2__str_set(char *dst, const char *src) { memcpy(dst, src, strlen(src) + 1); }
+
+/* out = a + b + c, or name-too-long when it does not fit in `cap` bytes with its NUL (a bounded copy whose result the compiler can see is checked) */
+FUSEDWASI_P2_FN int fusedwasi_p2__cat3(char *out, size_t cap, const char *a, const char *b, const char *c) {
+    size_t la = strlen(a), lb = strlen(b), lc = strlen(c);
+    if (la + lb + lc >= cap) return FUSEDWASI_P2_E_NAME_TOO_LONG;
+    memcpy(out, a, la), memcpy(out + la, b, lb), memcpy(out + la + lb, c, lc);
+    out[la + lb + lc] = '\0';
+    return FUSEDWASI_P2__OK;
+}
 FUSEDWASI_P2_FN void fusedwasi_p2__str_add(char *dst, const char *src) { memcpy(dst + strlen(dst), src, strlen(src) + 1); }
 
 /* UTF-8 and UTF-16 */
@@ -107,8 +117,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2__target(const char *dir, const char *leaf, char
         memcpy(bare, leaf, n);
         bare[n] = '\0';
         if (!fusedwasi_p2__name_ok(bare)) return FUSEDWASI_P2_E_INVALID;
-        if (strlen(dir) + 1 + n >= cap) return FUSEDWASI_P2_E_NAME_TOO_LONG;
-        snprintf(out, cap, "%s\\%s", dir, bare);
+        int joined = fusedwasi_p2__cat3(out, cap, dir, "\\", bare);
+        if (joined != FUSEDWASI_P2__OK) return joined;
     }
     if (slash) {
         fusedwasi_p2__stat st;
@@ -242,9 +252,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__sys_readlink(fusedwasi_p2__dirref dir, const c
     for (char *p = text; *p; p++)
         if (*p == '\\') *p = '/';
     int drive = text[0] && text[1] == ':' && ((text[0] >= 'a' && text[0] <= 'z') || (text[0] >= 'A' && text[0] <= 'Z'));
-    if (strlen(text) + (drive ? 1 : 0) >= cap) return FUSEDWASI_P2_E_NAME_TOO_LONG;
-    snprintf(out, cap, "%s%s", drive ? "/" : "", text);
-    return FUSEDWASI_P2__OK;
+    return fusedwasi_p2__cat3(out, cap, drive ? "/" : "", text, "");
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2__sys_mkdir(fusedwasi_p2__dirref dir, const char *leaf) {
@@ -327,8 +335,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__sys_link(fusedwasi_p2__dirref d1, const char *
 FUSEDWASI_P2_FN int fusedwasi_p2__target_is_dir(const char *dir, const char *target) {
     char joined[FUSEDWASI_P2__PATH_MAX], out[FUSEDWASI_P2__PATH_MAX];
     const char *base = strncmp(dir, "\\\\?\\", 4) == 0 ? dir + 4 : dir;
-    if (strlen(base) + 1 + strlen(target) >= sizeof joined) return 0;
-    snprintf(joined, sizeof joined, "%s\\%s", base, target);
+    if (fusedwasi_p2__cat3(joined, sizeof joined, base, "\\", target) != FUSEDWASI_P2__OK) return 0;
     size_t len = 0;
     char *save = NULL;
     (void)save;
@@ -439,7 +446,12 @@ FUSEDWASI_P2_FN int fusedwasi_p2__sys_open_at(fusedwasi_p2__dirref dir, const ch
     if (open_flags & FUSEDWASI_P2__TRUNCATE) oflags |= _O_TRUNC;
     wchar_t *w = fusedwasi_p2__wide(full);
     if (!w) return FUSEDWASI_P2_E_INVALID;
+#ifdef _MSC_VER /* _wopen is deprecated there; _wsopen_s is what it calls with _SH_DENYNO */
+    int fd = -1;
+    if (_wsopen_s(&fd, w, oflags, _SH_DENYNO, _S_IREAD | _S_IWRITE) != 0) fd = -1;
+#else
     int fd = _wopen(w, oflags, _S_IREAD | _S_IWRITE);
+#endif
     free(w);
     if (fd < 0) return fusedwasi_p2__fail();
     out->fd = fd, out->is_dir = 0;

@@ -121,19 +121,18 @@ def c_output(scenario: str, binary: Path) -> str:
 
 @pytest.fixture(scope="module")
 def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if CC is None or sys.platform == "win32":
-        pytest.skip("no C compiler of the POSIX kind")
+    if CC is None:
+        pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2cli") / "driver"
     build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
     return binary
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS)
+@pytest.mark.parametrize("scenario", [pytest.param(s, marks=posix_only) if s == "fd" else s for s in SCENARIOS])
 def test_c_and_python_agree(driver: Path, scenario: str) -> None:
     assert python_output(scenario) == c_output(scenario, driver)
 
 
-@posix_only
 def test_values() -> None:
     lines = python_output("main").splitlines()
     assert "stdout 68656c6c6f68656c6c6f" in lines  # two writes through two handles, the first one dropped in between
@@ -143,8 +142,12 @@ def test_values() -> None:
         4, "little"
     )  # "prog" is the first string, after the list
     assert arguments[176:180] == b"prog"
-    assert python_output("fd").splitlines()[-1] == "pipe 68656c6c6f"
     assert [python_output(s).strip() for s in ("exit_ok", "exit_err", "exit_code")] == ["EXIT 0", "EXIT 1", "EXIT 255"]
+
+
+@posix_only
+def test_the_descriptor_streams_over_pipes() -> None:
+    assert python_output("fd").splitlines()[-1] == "pipe 68656c6c6f"
 
 
 def test_default_streams_are_python_ones(capfd: pytest.CaptureFixture[str]) -> None:

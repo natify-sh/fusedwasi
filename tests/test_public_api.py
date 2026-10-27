@@ -152,7 +152,7 @@ def test_a_new_field_of_a_public_struct_fails_until_it_is_listed_or_marked(
 
 def test_a_neutral_user_of_a_private_name_fails(api: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {
-        "user.c": "int main(void) { fusedwasi_p2_state s; fusedwasi_p2_init(&s); fusedwasi_p2__table_get(0, 0, 0); s.slots__ = 0; g.memories = 1; return 0; }",
+        "user.c": "int main(void) { fusedwasi_p2_state s; fusedwasi_p2_init(&s); fusedwasi_p2__table_get(0, 0, 0); s.slots__ = 0; g.memories__ = 1; return 0; }",
     }
     monkeypatch.setattr(tool, "neutral_c_sources", lambda: sources)
     problems = tool.check_neutral_c(api)

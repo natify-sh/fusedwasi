@@ -2,7 +2,6 @@
 
 import re
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,7 @@ SOURCE = (
 COMPILERS = [c for c in ("gcc", "clang", "cc") if shutil.which(c)]
 
 
-@pytest.mark.skipif(sys.platform == "win32" or not COMPILERS, reason="POSIX with a C compiler")
+@pytest.mark.skipif(not COMPILERS, reason="a C compiler")
 @pytest.mark.parametrize("compiler", sorted(set(COMPILERS)))
 def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path: Path) -> None:
     source = tmp_path / "check.c"
@@ -58,7 +57,7 @@ def test_every_name_has_the_prefix_of_the_library() -> None:
         assert not loose, (header.name, sorted(loose))
 
 
-@pytest.mark.skipif(sys.platform == "win32" or not COMPILERS, reason="POSIX with a C compiler")
+@pytest.mark.skipif(not COMPILERS, reason="a C compiler")
 @pytest.mark.parametrize("compiler", sorted(set(COMPILERS)))
 def test_the_headers_are_found_by_the_published_include_path_alone(compiler: str, tmp_path: Path) -> None:
     """`get_include()` and the CMake target `fusedwasi::headers` give one directory, the one that holds `fusedwasi/`: `#include <fusedwasi/p1/wasi_p1.h>` has to work with just that."""

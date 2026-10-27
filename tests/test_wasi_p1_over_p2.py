@@ -5,7 +5,6 @@ import errno
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -18,8 +17,6 @@ from fusedwasi.p2 import wasi_p2_filesystem as fs
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 C_P1 = C_P2.parent / "p1"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the C programs are built and run on POSIX only")
 
 
 def python_scenario(root: Path) -> list[str]:

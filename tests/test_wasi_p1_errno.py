@@ -6,7 +6,6 @@ Found by comparing with uvwasi, which maps 56 errnos; there were 27, and everyth
 import errno
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -30,7 +29,7 @@ WASI = {
 }  # fmt: skip
 
 
-@pytest.mark.skipif(sys.platform == "win32" or CC is None, reason="POSIX with a C compiler")
+@pytest.mark.skipif(CC is None, reason="a C compiler")
 def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> None:
     binary = tmp_path / "check"
     build(

@@ -6,7 +6,7 @@ Written by `tools/public_api.py doc` from `src/fusedwasi/public_api.json`; do no
 * **Python**: a private name has a leading underscore (`_check`, `State._slots`). A module lists no other name than the ones below and the functions of its imports.
 * **unstable**: public in the alpha, with no promise: wasi:http and wasi:sockets.
 
-`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 326 public names besides the 247 functions of the imports, 542 private names and 9 private fields.
+`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 326 public names besides the 247 functions of the imports, 543 private names and 9 private fields.
 
 ## C
 

@@ -1,3 +1,6 @@
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS /* the program uses fopen and getenv as they are */
+#endif
 /* Runs a script of WASI 0.1 calls (the files of tests/data/p1) on the C core, with a fake memory, and prints what happens. test_wasi_p1_core.py does the same in Python and compares. */
 #include <stdio.h>
 #include <setjmp.h>

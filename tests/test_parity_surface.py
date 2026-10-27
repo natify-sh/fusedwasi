@@ -7,7 +7,6 @@ Each test builds a small C program (skipped without a C compiler; not run on Win
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,8 +22,6 @@ from fusedwasi.p2.wasi_p2_core import Guest, State
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 C_P1 = C_P2.parent / "p1"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the C programs are built and run on POSIX only")
 
 
 def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:

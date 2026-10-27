@@ -1227,7 +1227,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__http_connect(const char *host, int port, int m
         }
         fusedwasi_p2__set_blocking(fd, 0);
         int failed = 0, code = 0;
-        if (connect(fd, a->ai_addr, a->ai_addrlen) != 0) {
+        if (connect(fd, a->ai_addr, (socklen_t)a->ai_addrlen) != 0) {
             if (fusedwasi_p2__errno() != EINPROGRESS && fusedwasi_p2__errno() != EWOULDBLOCK) {
                 failed = 1;
                 code = fusedwasi_p2__errno();
