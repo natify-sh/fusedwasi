@@ -165,9 +165,261 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_descriptor_new(fusedwasi_p2_state *state, 
     return handle;
 }
 
-/* results */
+/* the descriptor of a live handle, NULL for any other (no trap: the adapter of WASI 0.1 holds handles of its own) */
+FUSEDWASI_P2_FN fusedwasi_p2_descriptor *fusedwasi_p2_descriptor_find(fusedwasi_p2_state *state, uint32_t handle) {
+    fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(state, handle, FUSEDWASI_P2_KIND_DESCRIPTOR);
+    return slot ? (fusedwasi_p2_descriptor *)slot->obj : NULL;
+}
+
+/* ---- the operations ---------------------------------------------------------------------------------------------------------------------------------------------
+ * A function of wasi:filesystem is an operation and the Canonical ABI around it. The operation takes host values (a descriptor, a path as bytes and its length, an offset, a buffer) and
+ * returns FUSEDWASI_P2_OK or an error-code; it never reads the memory of a guest and never traps. The function of 0.2 below reads its arguments from the memory of the guest and writes the
+ * result there; the adapter of WASI 0.1 (p1/wasi_p1_core.h) calls the same operations with its own arguments, so a rule of 0.2 is written once.
+ *
+ * `opts` is 0 for a function of 0.2 and FUSEDWASI_P2_FS_P1 for the adapter of 0.1, which keeps rights of its own and has checked them: the flags of the descriptor (read, write, mutate-directory)
+ * are not asked, the walk of a path is the one of 0.1 (a link with a slash after it, where links are not followed, is not a directory), a way out of the directory is FUSEDWASI_P2_E_ESCAPE (0.2: not-permitted),
+ * and the name `.` as the last name of a path answers as 0.1 does (unlink and remove: invalid; rename and link: invalid or exist; make and symlink: exist; readlink: invalid). */
+enum { FUSEDWASI_P2_FS_P1 = 1 };
+#define FUSEDWASI_P2_E_ESCAPE 100   /* beyond the codes of the WIT; only with FUSEDWASI_P2_FS_P1 */
+#define FUSEDWASI_P2_E_NO_CLOCK 101 /* beyond the codes of the WIT: `state->clock` failed; the WASI function that asked has the guest and traps */
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_need(const fusedwasi_p2_descriptor *d, uint32_t flag, uint32_t opts) { return (opts & FUSEDWASI_P2_FS_P1) ? FUSEDWASI_P2_OK : fusedwasi_p2_need(d, flag); }
+
+/* the walk of a path below the directory `d` */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_walk(fusedwasi_p2_walk *w, const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, int follow, uint32_t opts) {
+    if (!d->is_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
+    int rc = fusedwasi_p2_walk_path_with(w, d, path, len, follow, (opts & FUSEDWASI_P2_FS_P1) != 0);
+    return (opts & FUSEDWASI_P2_FS_P1) && rc == FUSEDWASI_P2_E_NOT_PERMITTED ? FUSEDWASI_P2_E_ESCAPE : rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_is_itself(const fusedwasi_p2_walk *w, uint32_t opts) { return (opts & FUSEDWASI_P2_FS_P1) && strcmp(w->leaf, ".") == 0; }
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_stat(const fusedwasi_p2_descriptor *d, fusedwasi_p2_stat *out) { return fusedwasi_p2_sys_fstat(d, out); }
+
+/* read at an offset: the bytes are in `buf`, `*got` of them (0 at the end of the file) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_read(const fusedwasi_p2_descriptor *d, uint8_t *buf, uint64_t len, uint64_t offset, uint64_t *got, uint32_t opts) {
+    *got = 0;
+    int rc = fusedwasi_p2_fs_need(d, FUSEDWASI_P2_READ, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    int64_t n = fusedwasi_p2_sys_pread(d->fd, buf, (size_t)len, offset, &rc);
+    if (n < 0) return rc;
+    *got = (uint64_t)n;
+    return FUSEDWASI_P2_OK;
+}
+
+/* write at an offset, all of it or an error (`*done` is what was written before the error) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_write(const fusedwasi_p2_descriptor *d, const uint8_t *data, uint64_t len, uint64_t offset, uint64_t *done, uint32_t opts) {
+    *done = 0;
+    int rc = fusedwasi_p2_fs_need(d, FUSEDWASI_P2_WRITE, opts);
+    while (rc == FUSEDWASI_P2_OK && *done < len) {
+        int64_t n = fusedwasi_p2_sys_pwrite(d->fd, data + *done, (size_t)(len - *done), offset + *done, &rc);
+        if (n >= 0) *done += (uint64_t)n;
+    }
+    return rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_set_size(const fusedwasi_p2_descriptor *d, uint64_t size, uint32_t opts) {
+    int rc = fusedwasi_p2_fs_need(d, FUSEDWASI_P2_WRITE, opts);
+    return rc == FUSEDWASI_P2_OK ? fusedwasi_p2_sys_ftruncate(d->fd, size) : rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_sync(const fusedwasi_p2_descriptor *d, int data_only) { return fusedwasi_p2_sys_fsync(d, data_only); }
+
+/* new-timestamp: 0 no-change, 1 now, 2 timestamp (`ns` since 1970) */
+FUSEDWASI_P2_FN int64_t fusedwasi_p2_new_time(uint32_t tag, int64_t ns, int64_t current_ns, int64_t now_ns) {
+    if (tag == 0) return current_ns;
+    if (tag == 1) return now_ns;
+    return ns;
+}
+
+typedef struct {
+    uint32_t a_tag, m_tag;
+    int64_t a_ns, m_ns;
+} fusedwasi_p2_times;
+
+/* the times to set, from what the file has now; the clock is asked here, and only when the file could be read (FUSEDWASI_P2_E_NO_CLOCK when it cannot be read) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_times_of(fusedwasi_p2_state *state, const fusedwasi_p2_stat *st, const fusedwasi_p2_times *t, int64_t *a_ns, int64_t *m_ns) {
+    uint64_t now = 0;
+    if (state->clock(state, 0, &now) != 0) return FUSEDWASI_P2_E_NO_CLOCK;
+    *a_ns = fusedwasi_p2_new_time(t->a_tag, t->a_ns, st->atime_ns, (int64_t)now);
+    *m_ns = fusedwasi_p2_new_time(t->m_tag, t->m_ns, st->mtime_ns, (int64_t)now);
+    return FUSEDWASI_P2_OK;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_set_times(fusedwasi_p2_state *state, const fusedwasi_p2_descriptor *d, const fusedwasi_p2_times *t, uint32_t opts) {
+    fusedwasi_p2_stat st;
+    int64_t a = 0, m = 0;
+    int rc = fusedwasi_p2_fs_need(d, d->is_dir ? FUSEDWASI_P2_MUTATE : FUSEDWASI_P2_WRITE, opts);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_sys_fstat(d, &st);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_times_of(state, &st, t, &a, &m);
+    return rc == FUSEDWASI_P2_OK ? fusedwasi_p2_sys_set_times_fd(d, a, m) : rc;
+}
+
+/* the names of a directory, sorted, without . and .., with their types; the caller frees them (`fusedwasi_p2_names_free`, and `free` of the types) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_read_directory(const fusedwasi_p2_descriptor *d, char ***names, uint8_t **types, uint32_t *count) {
+    if (!d->is_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
+    return fusedwasi_p2_sys_list(d, names, types, count);
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_stat_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t path_flags, fusedwasi_p2_stat *out, uint32_t opts) {
+    fusedwasi_p2_walk w;
+    int rc = fusedwasi_p2_fs_walk(&w, d, path, len, (path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW) != 0, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = fusedwasi_p2_sys_lstat(w.dir, w.leaf, out); /* a link at the end was read by the walk if it was to be */
+    fusedwasi_p2_walk_close(&w);
+    return rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_set_times_at(fusedwasi_p2_state *state, const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t path_flags,
+                                                 const fusedwasi_p2_times *t, uint32_t opts) {
+    fusedwasi_p2_walk w;
+    int rc = fusedwasi_p2_fs_need(d, FUSEDWASI_P2_MUTATE, opts);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_walk(&w, d, path, len, (path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW) != 0, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    fusedwasi_p2_stat st;
+    int64_t a = 0, m = 0;
+    rc = fusedwasi_p2_sys_lstat(w.dir, w.leaf, &st);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_times_of(state, &st, t, &a, &m);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_sys_set_times(w.dir, w.leaf, a, m);
+    fusedwasi_p2_walk_close(&w);
+    return rc;
+}
+
+/* A name to be made that has a slash after it (a link): the code when it can only be an error; FUSEDWASI_P2_OK when it has none */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_leaf_slash(fusedwasi_p2_dirref parent, const char *leaf) {
+    size_t n = strlen(leaf);
+    if (n == 0 || leaf[n - 1] != '/') return FUSEDWASI_P2_OK;
+    char bare[FUSEDWASI_P2_NAME_MAX + 2];
+    memcpy(bare, leaf, n - 1);
+    bare[n - 1] = '\0';
+    fusedwasi_p2_stat st;
+    int rc = fusedwasi_p2_sys_lstat(parent, bare, &st);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    return st.type == FUSEDWASI_P2_T_DIRECTORY ? FUSEDWASI_P2_E_EXIST : FUSEDWASI_P2_E_NOT_DIRECTORY;
+}
+
+/* The two directories and names of rename and link, walked; both walks are closed by the caller when the answer is FUSEDWASI_P2_OK. `follow` is for the first. */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_pair(const fusedwasi_p2_descriptor *d1, const uint8_t *p1, uint32_t l1, int follow, const fusedwasi_p2_descriptor *d2, const uint8_t *p2, uint32_t l2,
+                                         fusedwasi_p2_walk *w1, fusedwasi_p2_walk *w2, uint32_t opts) {
+    int rc = fusedwasi_p2_fs_need(d1, FUSEDWASI_P2_MUTATE, opts);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_walk(w1, d1, p1, l1, follow, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = fusedwasi_p2_fs_need(d2, FUSEDWASI_P2_MUTATE, opts);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_walk(w2, d2, p2, l2, 0, opts);
+    if (rc != FUSEDWASI_P2_OK) {
+        fusedwasi_p2_walk_close(w1);
+        return rc;
+    }
+    if (fusedwasi_p2_fs_is_itself(w1, opts) || fusedwasi_p2_fs_is_itself(w2, opts)) { /* a directory itself is neither moved nor made a link */
+        rc = fusedwasi_p2_fs_is_itself(w2, opts) ? FUSEDWASI_P2_E_EXIST : FUSEDWASI_P2_E_INVALID;
+        fusedwasi_p2_walk_close(w1);
+        fusedwasi_p2_walk_close(w2);
+        return rc;
+    }
+    return FUSEDWASI_P2_OK;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_link_at(const fusedwasi_p2_descriptor *d, uint32_t old_flags, const uint8_t *old_path, uint32_t old_len, const fusedwasi_p2_descriptor *new_d,
+                                            const uint8_t *new_path, uint32_t new_len, uint32_t opts) {
+    fusedwasi_p2_walk w1, w2;
+    int rc = fusedwasi_p2_fs_pair(d, old_path, old_len, (old_flags & FUSEDWASI_P2_SYMLINK_FOLLOW) != 0, new_d, new_path, new_len, &w1, &w2, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = (opts & FUSEDWASI_P2_FS_P1) ? fusedwasi_p2_fs_leaf_slash(w2.dir, w2.leaf) : FUSEDWASI_P2_OK;
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_sys_link(w1.dir, w1.leaf, w2.dir, w2.leaf); /* (the walk read a link at the end if it was to be followed) */
+    fusedwasi_p2_walk_close(&w1);
+    fusedwasi_p2_walk_close(&w2);
+    return rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_rename_at(const fusedwasi_p2_descriptor *d, const uint8_t *old_path, uint32_t old_len, const fusedwasi_p2_descriptor *new_d, const uint8_t *new_path,
+                                              uint32_t new_len, uint32_t opts) {
+    fusedwasi_p2_walk w1, w2;
+    int rc = fusedwasi_p2_fs_pair(d, old_path, old_len, 0, new_d, new_path, new_len, &w1, &w2, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = fusedwasi_p2_sys_rename(w1.dir, w1.leaf, w2.dir, w2.leaf);
+    fusedwasi_p2_walk_close(&w1);
+    fusedwasi_p2_walk_close(&w2);
+    return rc;
+}
+
+/* open: `made` is the new descriptor with its flags (a directory has what the directory it was opened under has, as in Wasmtime, and not what was asked for) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_open_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t path_flags, uint32_t open_flags, uint32_t flags,
+                                            fusedwasi_p2_descriptor *made, uint32_t opts) {
+    if (!d->is_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
+    if (!(opts & FUSEDWASI_P2_FS_P1)) {
+        if ((flags & (FUSEDWASI_P2_WRITE | FUSEDWASI_P2_MUTATE)) && !(d->flags & FUSEDWASI_P2_MUTATE)) return FUSEDWASI_P2_E_READ_ONLY; /* a descriptor cannot hand out more than it has (as the WIT says for open-at) */
+        if ((flags & FUSEDWASI_P2_READ) && !(d->flags & FUSEDWASI_P2_READ)) return FUSEDWASI_P2_E_NOT_PERMITTED;
+        if ((open_flags & (FUSEDWASI_P2_CREATE | FUSEDWASI_P2_TRUNCATE)) && !(d->flags & FUSEDWASI_P2_MUTATE)) return FUSEDWASI_P2_E_READ_ONLY;
+    }
+    fusedwasi_p2_walk w;
+    int rc = fusedwasi_p2_fs_walk(&w, d, path, len, (path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW) != 0, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = fusedwasi_p2_sys_open_at(w.dir, w.leaf, open_flags, flags, made);
+    fusedwasi_p2_walk_close(&w);
+    if (rc == FUSEDWASI_P2_OK) made->flags = made->is_dir ? (d->flags & (FUSEDWASI_P2_READ | FUSEDWASI_P2_MUTATE)) : flags;
+    return rc;
+}
+
+/* the target of a link in `out` (NUL-terminated, `cap` bytes with the NUL); a rooted target is not shown */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_readlink_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, char *out, size_t cap, uint32_t opts) {
+    fusedwasi_p2_walk w;
+    int rc = fusedwasi_p2_fs_walk(&w, d, path, len, 0, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    rc = fusedwasi_p2_fs_is_itself(&w, opts) ? FUSEDWASI_P2_E_INVALID : fusedwasi_p2_sys_readlink(w.dir, w.leaf, out, cap);
+    fusedwasi_p2_walk_close(&w);
+    if (rc == FUSEDWASI_P2_OK && out[0] == '/') return FUSEDWASI_P2_E_NOT_PERMITTED;
+    return rc;
+}
+
+/* the calls that make or remove a name below a directory */
+enum { FUSEDWASI_P2_NAME_MKDIR, FUSEDWASI_P2_NAME_RMDIR, FUSEDWASI_P2_NAME_UNLINK, FUSEDWASI_P2_NAME_SYMLINK };
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_name_op(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, int op, const char *target, uint32_t opts) {
+    fusedwasi_p2_walk w;
+    int rc = fusedwasi_p2_fs_need(d, FUSEDWASI_P2_MUTATE, opts);
+    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_fs_walk(&w, d, path, len, 0, opts);
+    if (rc != FUSEDWASI_P2_OK) return rc;
+    int itself = fusedwasi_p2_fs_is_itself(&w, opts);
+    switch (op) {
+    case FUSEDWASI_P2_NAME_MKDIR: rc = itself ? FUSEDWASI_P2_E_EXIST : fusedwasi_p2_sys_mkdir(w.dir, w.leaf); break;
+    case FUSEDWASI_P2_NAME_RMDIR: rc = itself ? FUSEDWASI_P2_E_INVALID : fusedwasi_p2_sys_rmdir(w.dir, w.leaf); break;
+    case FUSEDWASI_P2_NAME_UNLINK:
+        rc = itself ? FUSEDWASI_P2_E_INVALID : fusedwasi_p2_sys_unlink(w.dir, w.leaf);
+        if ((opts & FUSEDWASI_P2_FS_P1) && rc == FUSEDWASI_P2_E_IS_DIRECTORY) { /* unlink of a directory: the answer of the system (the layer of 0.2 says is-directory for all) */
+#if defined(__APPLE__)
+            rc = FUSEDWASI_P2_E_NOT_PERMITTED;
+#elif defined(_WIN32)
+            rc = FUSEDWASI_P2_E_ACCESS;
+#endif
+        }
+        break;
+    default:
+        rc = itself ? FUSEDWASI_P2_E_EXIST : (opts & FUSEDWASI_P2_FS_P1) ? fusedwasi_p2_fs_leaf_slash(w.dir, w.leaf) : FUSEDWASI_P2_OK;
+        if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_sys_symlink(target, w.dir, w.leaf);
+        break;
+    }
+    fusedwasi_p2_walk_close(&w);
+    return rc;
+}
+
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_create_directory_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t opts) {
+    return fusedwasi_p2_fs_name_op(d, path, len, FUSEDWASI_P2_NAME_MKDIR, NULL, opts);
+}
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_remove_directory_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t opts) {
+    return fusedwasi_p2_fs_name_op(d, path, len, FUSEDWASI_P2_NAME_RMDIR, NULL, opts);
+}
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_unlink_file_at(const fusedwasi_p2_descriptor *d, const uint8_t *path, uint32_t len, uint32_t opts) {
+    return fusedwasi_p2_fs_name_op(d, path, len, FUSEDWASI_P2_NAME_UNLINK, NULL, opts);
+}
+/* `target` is a NUL-terminated string that the caller has looked at (no NUL inside, not rooted) */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_symlink_at(const fusedwasi_p2_descriptor *d, const char *target, const uint8_t *path, uint32_t len, uint32_t opts) {
+    return fusedwasi_p2_fs_name_op(d, path, len, FUSEDWASI_P2_NAME_SYMLINK, target, opts);
+}
+
+/* ---- the Canonical ABI around them ---------------------------------------------------------------------------------------------------------------------------- */
 
 FUSEDWASI_P2_FN void fusedwasi_p2_fs_fail(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, uint32_t at, int code) {
+    if (code == FUSEDWASI_P2_E_NO_CLOCK) g->trap(g, "the clock cannot be read");
     fusedwasi_p2_store_u8(g, comp, retptr, 1);
     fusedwasi_p2_store_u8(g, comp, at, (uint8_t)code);
 }
@@ -352,11 +604,11 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_advise(fusedwasi
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_sync_data(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_sys_fsync(fusedwasi_p2_descriptor_get(g, self), 1));
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_sync(fusedwasi_p2_descriptor_get(g, self), 1));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_sync(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_sys_fsync(fusedwasi_p2_descriptor_get(g, self), 0));
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_sync(fusedwasi_p2_descriptor_get(g, self), 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_get_flags(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -368,7 +620,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_get_flags(fusedw
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_get_type(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     fusedwasi_p2_stat st;
-    int rc = fusedwasi_p2_sys_fstat(d, &st);
+    int rc = fusedwasi_p2_fs_stat(d, &st);
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 1, rc);
         return;
@@ -378,42 +630,31 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_get_type(fusedwa
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_set_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t size, uint32_t retptr) {
-    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
-    int rc = fusedwasi_p2_need(d, FUSEDWASI_P2_WRITE);
-    if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_sys_ftruncate(d->fd, size);
-    fusedwasi_p2_status(g, comp, retptr, rc);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_set_size(fusedwasi_p2_descriptor_get(g, self), size, 0));
 }
 
-/* new-timestamp: 0 no-change, 1 now, 2 timestamp */
-FUSEDWASI_P2_FN int64_t fusedwasi_p2_new_time(uint32_t tag, uint64_t seconds, uint32_t nanos, int64_t current_ns, int64_t now_ns) {
-    if (tag == 0) return current_ns;
-    if (tag == 1) return now_ns;
-    return (int64_t)seconds * 1000000000LL + nanos;
+/* the times of a call: new-timestamp is 0 no-change, 1 now, 2 timestamp */
+FUSEDWASI_P2_FN void fusedwasi_p2_times_of_abi(fusedwasi_p2_times *t, uint32_t a_tag, uint64_t a_seconds, uint32_t a_nanos, uint32_t m_tag, uint64_t m_seconds, uint32_t m_nanos) {
+    t->a_tag = a_tag, t->m_tag = m_tag;
+    t->a_ns = (int64_t)a_seconds * 1000000000LL + a_nanos;
+    t->m_ns = (int64_t)m_seconds * 1000000000LL + m_nanos;
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_set_times(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t a_tag, uint64_t a_seconds, uint32_t a_nanos,
                                                            uint32_t m_tag, uint64_t m_seconds, uint32_t m_nanos, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
-    int rc = fusedwasi_p2_need(d, d->is_dir ? FUSEDWASI_P2_MUTATE : FUSEDWASI_P2_WRITE);
-    if (rc == FUSEDWASI_P2_OK) {
-        fusedwasi_p2_stat st;
-        rc = fusedwasi_p2_sys_fstat(d, &st);
-        if (rc == FUSEDWASI_P2_OK) {
-            int64_t now = (int64_t)fusedwasi_p2_clock_ns(g, 0);
-            rc = fusedwasi_p2_sys_set_times_fd(d, fusedwasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now), fusedwasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
-        }
-    }
-    fusedwasi_p2_status(g, comp, retptr, rc);
+    fusedwasi_p2_times t;
+    fusedwasi_p2_times_of_abi(&t, a_tag, a_seconds, a_nanos, m_tag, m_seconds, m_nanos);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_set_times(g->state, d, &t, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t length, uint64_t offset, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
-    int rc = fusedwasi_p2_need(d, FUSEDWASI_P2_READ);
     uint64_t want = length < FUSEDWASI_P2_READ_CAP ? length : FUSEDWASI_P2_READ_CAP;
     uint8_t *buf = (uint8_t *)malloc(want ? (size_t)want : 1);
     if (!buf) g->trap(g, "out of memory");
-    int64_t n = 0;
-    if (rc == FUSEDWASI_P2_OK) n = fusedwasi_p2_sys_pread(d->fd, buf, (size_t)want, offset, &rc);
+    uint64_t n = 0;
+    int rc = fusedwasi_p2_fs_read(d, buf, want, offset, &n, 0);
     if (rc != FUSEDWASI_P2_OK) {
         free(buf);
         fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 4, rc);
@@ -432,12 +673,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_write(fusedwasi_
                                                        uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     const uint8_t *data = fusedwasi_p2_mem(g, comp, ptr, length);
-    int rc = fusedwasi_p2_need(d, FUSEDWASI_P2_WRITE);
-    uint32_t done = 0;
-    while (rc == FUSEDWASI_P2_OK && done < length) {
-        int64_t n = fusedwasi_p2_sys_pwrite(d->fd, data + done, length - done, offset + done, &rc);
-        if (n >= 0) done += (uint32_t)n;
-    }
+    uint64_t done = 0;
+    int rc = fusedwasi_p2_fs_write(d, data, length, offset, &done, 0);
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 8, rc);
         return;
@@ -448,14 +685,10 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_write(fusedwasi_
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read_directory(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
-    if (!d->is_dir) {
-        fusedwasi_p2_handle_result(g, comp, retptr, FUSEDWASI_P2_E_NOT_DIRECTORY, 0);
-        return;
-    }
     char **names;
     uint8_t *types;
     uint32_t count;
-    int rc = fusedwasi_p2_sys_list(d, &names, &types, &count);
+    int rc = fusedwasi_p2_fs_read_directory(d, &names, &types, &count);
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_handle_result(g, comp, retptr, rc, 0);
         return;
@@ -482,7 +715,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_directory_entry_stream_read
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_stat(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     fusedwasi_p2_stat st;
-    int rc = fusedwasi_p2_sys_fstat(d, &st);
+    int rc = fusedwasi_p2_fs_stat(d, &st);
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 8, rc);
         return;
@@ -491,28 +724,10 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_stat(fusedwasi_p
     fusedwasi_p2_write_stat(g, comp, retptr + 8, &st);
 }
 
-/* the directory descriptor `self` and the path, walked: FUSEDWASI_P2_OK or the code */
-FUSEDWASI_P2_FN int fusedwasi_p2_begin(fusedwasi_p2_guest *g, uint32_t comp, fusedwasi_p2_walk *w, uint32_t self, uint32_t ptr, uint32_t length, int follow, uint32_t need,
-                             fusedwasi_p2_descriptor **out) {
+FUSEDWASI_P2_FN int fusedwasi_p2_stat_at_rc(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length, fusedwasi_p2_stat *st) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     const uint8_t *path = fusedwasi_p2_mem(g, comp, ptr, length);
-    *out = d;
-    if (need) {
-        int rc = fusedwasi_p2_need(d, need);
-        if (rc != FUSEDWASI_P2_OK) return rc;
-    }
-    if (!d->is_dir) return FUSEDWASI_P2_E_NOT_DIRECTORY;
-    return fusedwasi_p2_walk_path(w, d, path, length, follow);
-}
-
-FUSEDWASI_P2_FN int fusedwasi_p2_stat_at_rc(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length, fusedwasi_p2_stat *st) {
-    fusedwasi_p2_walk w;
-    fusedwasi_p2_descriptor *d;
-    int rc = fusedwasi_p2_begin(g, comp, &w, self, ptr, length, path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW, 0, &d);
-    if (rc != FUSEDWASI_P2_OK) return rc;
-    rc = fusedwasi_p2_sys_lstat(w.dir, w.leaf, st);
-    fusedwasi_p2_walk_close(&w);
-    return rc;
+    return fusedwasi_p2_fs_stat_at(d, path, length, path_flags, st, 0);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_stat_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length,
@@ -530,143 +745,68 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_stat_at(fusedwas
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_set_times_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length,
                                                               uint32_t a_tag, uint64_t a_seconds, uint32_t a_nanos, uint32_t m_tag, uint64_t m_seconds,
                                                               uint32_t m_nanos, uint32_t retptr) {
-    fusedwasi_p2_walk w;
-    fusedwasi_p2_descriptor *d;
-    int rc = fusedwasi_p2_begin(g, comp, &w, self, ptr, length, path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW, FUSEDWASI_P2_MUTATE, &d);
-    if (rc == FUSEDWASI_P2_OK) {
-        fusedwasi_p2_stat st;
-        rc = fusedwasi_p2_sys_lstat(w.dir, w.leaf, &st);
-        if (rc == FUSEDWASI_P2_OK) {
-            int64_t now = (int64_t)fusedwasi_p2_clock_ns(g, 0);
-            rc = fusedwasi_p2_sys_set_times(w.dir, w.leaf, fusedwasi_p2_new_time(a_tag, a_seconds, a_nanos, st.atime_ns, now),
-                                       fusedwasi_p2_new_time(m_tag, m_seconds, m_nanos, st.mtime_ns, now));
-        }
-        fusedwasi_p2_walk_close(&w);
-    }
-    fusedwasi_p2_status(g, comp, retptr, rc);
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    const uint8_t *path = fusedwasi_p2_mem(g, comp, ptr, length);
+    fusedwasi_p2_times t;
+    fusedwasi_p2_times_of_abi(&t, a_tag, a_seconds, a_nanos, m_tag, m_seconds, m_nanos);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_set_times_at(g->state, d, path, length, path_flags, &t, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_link_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t old_flags, uint32_t old_ptr, uint32_t old_len,
                                                          uint32_t new_dir, uint32_t new_ptr, uint32_t new_len, uint32_t retptr) {
-    fusedwasi_p2_walk w1, w2;
-    fusedwasi_p2_descriptor *d, *n = fusedwasi_p2_descriptor_get(g, new_dir);
-    int rc = fusedwasi_p2_begin(g, comp, &w1, self, old_ptr, old_len, old_flags & FUSEDWASI_P2_SYMLINK_FOLLOW, FUSEDWASI_P2_MUTATE, &d);
-    if (rc == FUSEDWASI_P2_OK) {
-        rc = fusedwasi_p2_need(n, FUSEDWASI_P2_MUTATE);
-        if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_begin(g, comp, &w2, new_dir, new_ptr, new_len, 0, FUSEDWASI_P2_MUTATE, &n);
-        if (rc == FUSEDWASI_P2_OK) {
-            rc = fusedwasi_p2_sys_link(w1.dir, w1.leaf, w2.dir, w2.leaf);
-            fusedwasi_p2_walk_close(&w2);
-        }
-        fusedwasi_p2_walk_close(&w1);
-    }
-    fusedwasi_p2_status(g, comp, retptr, rc);
+    fusedwasi_p2_descriptor *n = fusedwasi_p2_descriptor_get(g, new_dir), *d = fusedwasi_p2_descriptor_get(g, self);
+    const uint8_t *old_path = fusedwasi_p2_mem(g, comp, old_ptr, old_len), *new_path = fusedwasi_p2_mem(g, comp, new_ptr, new_len);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_link_at(d, old_flags, old_path, old_len, n, new_path, new_len, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_open_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t path_flags, uint32_t ptr, uint32_t length,
                                                          uint32_t open_flags, uint32_t flags, uint32_t retptr) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     const uint8_t *path = fusedwasi_p2_mem(g, comp, ptr, length);
-    int rc = FUSEDWASI_P2_OK;
+    fusedwasi_p2_descriptor made;
     uint32_t handle = 0;
-    if (!d->is_dir) {
-        rc = FUSEDWASI_P2_E_NOT_DIRECTORY;
-    } else if ((flags & (FUSEDWASI_P2_WRITE | FUSEDWASI_P2_MUTATE)) && !(d->flags & FUSEDWASI_P2_MUTATE)) {
-        rc = FUSEDWASI_P2_E_READ_ONLY; /* a descriptor cannot hand out more than it has (as the WIT says for open-at) */
-    } else if ((flags & FUSEDWASI_P2_READ) && !(d->flags & FUSEDWASI_P2_READ)) {
-        rc = FUSEDWASI_P2_E_NOT_PERMITTED;
-    } else if ((open_flags & (FUSEDWASI_P2_CREATE | FUSEDWASI_P2_TRUNCATE)) && !(d->flags & FUSEDWASI_P2_MUTATE)) {
-        rc = FUSEDWASI_P2_E_READ_ONLY;
-    } else {
-        fusedwasi_p2_walk w;
-        rc = fusedwasi_p2_walk_path(&w, d, path, length, path_flags & FUSEDWASI_P2_SYMLINK_FOLLOW);
-        if (rc == FUSEDWASI_P2_OK) {
-            fusedwasi_p2_descriptor made;
-            rc = fusedwasi_p2_sys_open_at(w.dir, w.leaf, open_flags, flags, &made);
-            /* what a directory may do is what the directory it was opened under may do (as in Wasmtime, where a child directory gets the permissions of the preopen), and not
-               what was asked for: a program of WASI 0.1 opens a directory with the rights it needs to read it and then creates files in it */
-            if (rc == FUSEDWASI_P2_OK) handle = fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_descriptor_new(g->state, &made, made.is_dir ? (d->flags & (FUSEDWASI_P2_READ | FUSEDWASI_P2_MUTATE)) : flags));
-            fusedwasi_p2_walk_close(&w);
-        }
+    int rc = fusedwasi_p2_fs_open_at(d, path, length, path_flags, open_flags, flags, &made, 0);
+    if (rc == FUSEDWASI_P2_OK) {
+        handle = fusedwasi_p2_descriptor_new(g->state, &made, made.flags);
+        if (!handle) fusedwasi_p2_sys_close(&made);
+        handle = fusedwasi_p2_handle_or_trap(g, handle);
     }
     fusedwasi_p2_handle_result(g, comp, retptr, rc, handle);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_readlink_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length, uint32_t retptr) {
-    fusedwasi_p2_walk w;
-    fusedwasi_p2_descriptor *d;
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    const uint8_t *path = fusedwasi_p2_mem(g, comp, ptr, length);
     char target[FUSEDWASI_P2_PATH_MAX];
-    int rc = fusedwasi_p2_begin(g, comp, &w, self, ptr, length, 0, 0, &d);
-    if (rc == FUSEDWASI_P2_OK) {
-        rc = fusedwasi_p2_sys_readlink(w.dir, w.leaf, target, sizeof target);
-        fusedwasi_p2_walk_close(&w);
-    }
+    int rc = fusedwasi_p2_fs_readlink_at(d, path, length, target, sizeof target, 0);
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 4, rc);
-        return;
-    }
-    if (target[0] == '/') { /* an absolute or rooted target is not shown */
-        fusedwasi_p2_fs_fail(g, comp, retptr, retptr + 4, FUSEDWASI_P2_E_NOT_PERMITTED);
         return;
     }
     fusedwasi_p2_ok(g, comp, retptr);
     fusedwasi_p2_string(g, comp, target, retptr + 4);
 }
 
-typedef int (*fusedwasi_p2_name_op)(fusedwasi_p2_dirref dir, const char *leaf, const void *arg);
-
-FUSEDWASI_P2_FN void fusedwasi_p2_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, uint32_t self, uint32_t ptr, uint32_t length, fusedwasi_p2_name_op op, const void *arg) {
-    fusedwasi_p2_walk w;
-    fusedwasi_p2_descriptor *d;
-    int rc = fusedwasi_p2_begin(g, comp, &w, self, ptr, length, 0, FUSEDWASI_P2_MUTATE, &d);
-    if (rc == FUSEDWASI_P2_OK) {
-        rc = op(w.dir, w.leaf, arg);
-        fusedwasi_p2_walk_close(&w);
-    }
-    fusedwasi_p2_status(g, comp, retptr, rc);
-}
-
-FUSEDWASI_P2_FN int fusedwasi_p2_op_mkdir(fusedwasi_p2_dirref dir, const char *leaf, const void *arg) {
-    (void)arg;
-    return fusedwasi_p2_sys_mkdir(dir, leaf);
-}
-FUSEDWASI_P2_FN int fusedwasi_p2_op_rmdir(fusedwasi_p2_dirref dir, const char *leaf, const void *arg) {
-    (void)arg;
-    return fusedwasi_p2_sys_rmdir(dir, leaf);
-}
-FUSEDWASI_P2_FN int fusedwasi_p2_op_unlink(fusedwasi_p2_dirref dir, const char *leaf, const void *arg) {
-    (void)arg;
-    return fusedwasi_p2_sys_unlink(dir, leaf);
-}
-FUSEDWASI_P2_FN int fusedwasi_p2_op_symlink(fusedwasi_p2_dirref dir, const char *leaf, const void *arg) { return fusedwasi_p2_sys_symlink((const char *)arg, dir, leaf); }
-
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_create_directory_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length,
                                                                      uint32_t retptr) {
-    fusedwasi_p2_at(g, comp, retptr, self, ptr, length, fusedwasi_p2_op_mkdir, NULL);
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_create_directory_at(d, fusedwasi_p2_mem(g, comp, ptr, length), length, 0));
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_remove_directory_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length,
                                                                      uint32_t retptr) {
-    fusedwasi_p2_at(g, comp, retptr, self, ptr, length, fusedwasi_p2_op_rmdir, NULL);
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_remove_directory_at(d, fusedwasi_p2_mem(g, comp, ptr, length), length, 0));
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_unlink_file_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length, uint32_t retptr) {
-    fusedwasi_p2_at(g, comp, retptr, self, ptr, length, fusedwasi_p2_op_unlink, NULL);
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_unlink_file_at(d, fusedwasi_p2_mem(g, comp, ptr, length), length, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_rename_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t old_ptr, uint32_t old_len, uint32_t new_dir,
                                                            uint32_t new_ptr, uint32_t new_len, uint32_t retptr) {
-    fusedwasi_p2_walk w1, w2;
-    fusedwasi_p2_descriptor *d, *n = fusedwasi_p2_descriptor_get(g, new_dir);
-    int rc = fusedwasi_p2_begin(g, comp, &w1, self, old_ptr, old_len, 0, FUSEDWASI_P2_MUTATE, &d);
-    if (rc == FUSEDWASI_P2_OK) {
-        rc = fusedwasi_p2_need(n, FUSEDWASI_P2_MUTATE);
-        if (rc == FUSEDWASI_P2_OK) rc = fusedwasi_p2_begin(g, comp, &w2, new_dir, new_ptr, new_len, 0, FUSEDWASI_P2_MUTATE, &n);
-        if (rc == FUSEDWASI_P2_OK) {
-            rc = fusedwasi_p2_sys_rename(w1.dir, w1.leaf, w2.dir, w2.leaf);
-            fusedwasi_p2_walk_close(&w2);
-        }
-        fusedwasi_p2_walk_close(&w1);
-    }
-    fusedwasi_p2_status(g, comp, retptr, rc);
+    fusedwasi_p2_descriptor *n = fusedwasi_p2_descriptor_get(g, new_dir), *d = fusedwasi_p2_descriptor_get(g, self);
+    const uint8_t *old_path = fusedwasi_p2_mem(g, comp, old_ptr, old_len), *new_path = fusedwasi_p2_mem(g, comp, new_ptr, new_len);
+    fusedwasi_p2_status(g, comp, retptr, fusedwasi_p2_fs_rename_at(d, old_path, old_len, n, new_path, new_len, 0));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_symlink_at(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t old_ptr, uint32_t old_len, uint32_t new_ptr,
@@ -677,12 +817,15 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_symlink_at(fused
         fusedwasi_p2_status(g, comp, retptr, memchr(target, 0, old_len) ? FUSEDWASI_P2_E_INVALID : FUSEDWASI_P2_E_NOT_PERMITTED);
         return;
     }
+    fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
+    const uint8_t *path = fusedwasi_p2_mem(g, comp, new_ptr, new_len);
     char *copy = (char *)malloc((size_t)old_len + 1);
     if (!copy) g->trap(g, "out of memory");
     memcpy(copy, target, old_len);
     copy[old_len] = '\0';
-    fusedwasi_p2_at(g, comp, retptr, self, new_ptr, new_len, fusedwasi_p2_op_symlink, copy);
+    int rc = fusedwasi_p2_fs_symlink_at(d, copy, path, new_len, 0);
     free(copy);
+    fusedwasi_p2_status(g, comp, retptr, rc);
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_filesystem_types_descriptor_is_same_object(fusedwasi_p2_guest *g, uint32_t self, uint32_t other) {

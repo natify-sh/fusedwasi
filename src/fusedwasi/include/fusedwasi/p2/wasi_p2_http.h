@@ -1344,7 +1344,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_read_head(fusedwasi_p2_http_reader *r, fus
         fusedwasi_p2_http_fields *fields = fusedwasi_p2_http_fields_new(0);
         if (!fields) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "out of memory");
         for (;;) {
-            uint8_t *line;
+            uint8_t *line = NULL;
             size_t n = 0;
             if (fusedwasi_p2_http_line(r, err, &line, &n)) {
                 free(status_line);
@@ -1463,7 +1463,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_read_chunked(fusedwasi_p2_http_reader *r, 
     fusedwasi_p2_http_fields *t = fusedwasi_p2_http_fields_new(1);
     if (!t) return FUSEDWASI_P2_HTTP_OOM(err);
     for (;;) {
-        uint8_t *line;
+        uint8_t *line = NULL;
         size_t n = 0;
         if (fusedwasi_p2_http_line(r, err, &line, &n)) {
             fusedwasi_p2_http_fields_unref(t);

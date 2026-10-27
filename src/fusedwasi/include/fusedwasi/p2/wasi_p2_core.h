@@ -391,12 +391,19 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_handle_or_trap(fusedwasi_p2_guest *g, uint
     return handle;
 }
 
+/* The slot of a live handle of the given kind, or NULL for anything else. For whoever holds a handle itself (the adapter of WASI 0.1) and answers an error code, not a trap. */
+FUSEDWASI_P2_FN fusedwasi_p2_slot *fusedwasi_p2_table_find(fusedwasi_p2_state *state, uint32_t handle, uint32_t kind) {
+    uint32_t index = handle & FUSEDWASI_P2_INDEX_MASK;
+    if (index == 0 || index >= state->slot_count) return NULL;
+    fusedwasi_p2_slot *slot = &state->slots[index];
+    if (!slot->live || slot->generation != (handle >> FUSEDWASI_P2_INDEX_BITS) || slot->kind != kind) return NULL;
+    return slot;
+}
+
 /* The slot of a live handle of the given kind; anything else is a trap. */
 FUSEDWASI_P2_FN fusedwasi_p2_slot *fusedwasi_p2_table_get(fusedwasi_p2_guest *g, uint32_t handle, uint32_t kind) {
-    uint32_t index = handle & FUSEDWASI_P2_INDEX_MASK;
-    if (index == 0 || index >= g->state->slot_count) g->trap(g, "bad handle");
-    fusedwasi_p2_slot *slot = &g->state->slots[index];
-    if (!slot->live || slot->generation != (handle >> FUSEDWASI_P2_INDEX_BITS) || slot->kind != kind) g->trap(g, "bad handle");
+    fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(g->state, handle, kind);
+    if (!slot) g->trap(g, "bad handle");
     return slot;
 }
 

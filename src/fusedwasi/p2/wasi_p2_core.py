@@ -15,7 +15,10 @@ import os
 import struct
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
+
+if TYPE_CHECKING:
+    from .wasi_p2_filesystem import Filesystem
 
 INDEX_BITS = 20  # a handle is (generation << INDEX_BITS) | index; index 0 is never given out
 INDEX_MASK = (1 << INDEX_BITS) - 1
@@ -138,6 +141,7 @@ class State:
         http: bool = False,
         http_check: Callable[[str, str], bool] | None = None,
         http_send: Callable[[Any], Any] | None = None,
+        filesystem: Filesystem | None = None,
         user: object = None,
     ) -> None:
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
@@ -150,6 +154,13 @@ class State:
         }
         # wasi:filesystem/preopens: (path on the host, name for the guest) or (path, name, writable); a directory is writable unless the third item is False
         self.preopens = [(p[0], p[1], p[2] if len(p) > 2 else True) for p in preopens]  # type: ignore[misc]
+        # the files behind wasi:filesystem and WASI 0.1: the operations of `wasi_p2_filesystem` on host values. The default is the files of the system; `Filesystem()` is a host without
+        # files, and a host that has others (in memory, say) gives an object with the same methods (Python-only: in C the host writes functions)
+        if filesystem is None:
+            from .wasi_p2_filesystem import SystemFilesystem
+
+            filesystem = SystemFilesystem()
+        self.filesystem = filesystem
         # wasi:sockets: nothing is allowed unless the caller says so, as in Wasmtime. `network=True` allows everything; `socket_addr_check(ip, port, use)` decides
         # for each bind or connect (`use` is one of `USE_TCP_BIND` ... `USE_UDP_OUTGOING`, the numbers of FUSEDWASI_P2_USE_* in C; `use_name(use)` is its name); `allow_ip_name_lookup` for `resolve-addresses`
         self.socket_addr_check: Callable[[str, int, int], bool] = socket_addr_check or (lambda ip, port, use: network)
