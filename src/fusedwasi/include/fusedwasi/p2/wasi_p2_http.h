@@ -1992,8 +1992,8 @@ FUSEDWASI_P2_FN fusedwasi_p2_http_outparam *fusedwasi_p2_http_outparam_new(fused
     return p;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_set(fusedwasi_p2_state *s, uint32_t comp, uint32_t param, uint32_t tag, uint64_t a1, uint64_t a2, uint64_t a3,
-                                                      uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7) {
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_set(fusedwasi_p2_state *s, uint32_t comp, uint32_t param, uint32_t tag, uint32_t a1, uint32_t a2, uint64_t a3,
+                                                      uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) {
     fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)fusedwasi_p2_table_get(s, param, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM)->obj;
     if (tag == 0) {
         fusedwasi_p2_table_get(s, (uint32_t)a1, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);

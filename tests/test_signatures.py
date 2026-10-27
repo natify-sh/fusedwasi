@@ -291,6 +291,34 @@ def test_p2_c_has_the_functions_of_the_table() -> None:
         assert len(wasm) - 1 == len(table[name].params), f"{name}: c {len(wasm) - 1}, table {len(table[name].params)}"
 
 
+C_WASM_TYPE = {"uint32_t": "i32", "uint64_t": "i64", "float": "f32", "double": "f64"}
+
+
+def c_wasm_types(params: list[str]) -> list[str]:
+    out: list[str] = []
+    for p in params:
+        m = re.match(r"\s*(?:const\s+)?(uint32_t|uint64_t|float|double)\b(?!\s*\*)", p)
+        assert m, f"not a scalar parameter of a core module: {p!r}"
+        out.append(C_WASM_TYPE[m.group(1)])
+    return out
+
+
+def test_p2_c_parameter_types_are_those_of_the_table() -> None:
+    """The C function of 0.2 is declared with the core type of each parameter (i32 is uint32_t, i64 is uint64_t): a function bound by its exact signature would be wrong otherwise."""
+    table = {impl_name(f): f for f in signatures.load("p2").functions}
+    for name, params in p2_c_functions().items():
+        wasm = [p for p in params if not re.search(r"\bcomp\b", p)][1:]  # without the state
+        assert c_wasm_types(wasm) == [p.type for p in table[name].params], name
+
+
+def test_p1_c_parameter_types_are_those_of_the_table() -> None:
+    table = {f.name: f for f in signatures.load("p1").functions}
+    current, unstable = p1_c_functions()
+    for found in (current, unstable):
+        for name, params in found.items():
+            assert c_wasm_types(params) == [p.type for p in table[name].params], name
+
+
 def test_the_returns_agree_with_the_table() -> None:
     """A Python function of 0.2 returns a value exactly when the table has a flat result."""
     table = {impl_name(f): f for f in signatures.load("p2").functions}

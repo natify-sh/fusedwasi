@@ -88,7 +88,7 @@ Not compared: the byte text of the three versions function by function (their sy
 - The number of parameters of each Python and each C function equals the table's (for 0.2 without the `comp` of the call; for 0.1 without the state `s` and the C `trapped`). All 46 and all 201 agree.
 - A Python function of 0.2 returns a value exactly when the table has a flat result.
 
-One difference of width was found by comparing the C types with the table by hand (not a test): `fusedwasi_wasi_http_types_response_outparam_set` takes `a1`...`a7` as `uint64_t`, where the Canonical ABI has `i32` for all of them except one `i64`. Called from a glue that converts its arguments it works; a function pointer bound to the exact signature would not match. Nothing was changed.
+The C types of every function of both snapshots are compared with the table by `test_p1_c_parameter_types_are_those_of_the_table` and `test_p2_c_parameter_types_are_those_of_the_table` (i32 is `uint32_t`, i64 is `uint64_t`). The one difference found by hand before the test, `fusedwasi_wasi_http_types_response_outparam_set` (`a1`...`a7` were all `uint64_t`, the Canonical ABI has `i32` for all but `a3`, an `i64`), is fixed (2026-10-27).
 
 ## Names that differ between the table and the implementations
 
