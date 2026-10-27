@@ -9,6 +9,9 @@ Writes into src/fusedwasi/signatures/:
   - wasi_p1.json, wasi_p2.json: for each function the module and the name as a core module imports it, the official name, the flat core
     parameters and results (Canonical ABI for 0.2, the witx ABI for 0.1), the first sentence of the documentation, and the exact source
     (tag, commit, sha256 of every file);
+  - the same files also say, for each function, where fusedwasi has it: the C symbol (`c_name`), the Python module and name (`python_module`, `python_name`) and whether a
+    function of 0.2 takes the number of the memory after the guest (`takes_comp`). They are read from the headers and the Python files of this repository as text and checked
+    against each other (a function that only one twin has stops the generator), so `tests/test_signatures.py` fails when a header and the table drift apart;
   - wasi_p1_protocols.pyi, wasi_p2_protocols.pyi: one typing.Protocol per function, positional-only so the names document and do not constrain.
 
 Standard library only. `python tools/make_signatures.py` writes; `--check` only compares with the files on disk and exits 1 on a difference.
@@ -17,6 +20,7 @@ Standard library only. `python tools/make_signatures.py` writes; `--check` only 
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import keyword
@@ -782,6 +786,70 @@ def build_p2(src: dict[str, Any]) -> tuple[list[Func], list[dict[str, str]]]:
     return funcs, records
 
 
+# ---- where fusedwasi has each function ---------------------------------------------------------------------------------------
+
+INCLUDE = ROOT / "src" / "fusedwasi" / "include" / "fusedwasi"
+PYTHON = ROOT / "src" / "fusedwasi"
+P2_PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
+
+
+def c_prototypes(key: str) -> dict[str, int]:
+    """The C functions of the headers by name, with the number of parameters after the guest (and, for 0.1, before `trapped`)."""
+    found: dict[str, int] = {}
+    if key == "p1":
+        text = read_text(INCLUDE / "p1" / "wasi_p1_core.h")
+        for m in re.finditer(r"static\s+inline\s+(?:uint32_t|void)\s+(fusedwasi_p1_\w+)\(\s*void\s*\*vg\s*,([^)]*?)int\s*\*trapped\s*\)", text, re.DOTALL):
+            found[m.group(1)] = len([x for x in m.group(2).split(",") if x.strip()])
+    else:
+        for pkg in P2_PACKAGES:
+            text = read_text(INCLUDE / "p2" / f"wasi_p2_{pkg}.h")
+            for m in re.finditer(r"FUSEDWASI_P2_FN\s+\w+\s+(fusedwasi_wasi_\w+)\(([^)]*)\)", text):
+                found[m.group(1)] = len([x for x in m.group(2).split(",") if x.strip()]) - 1
+    return found
+
+
+def python_functions(path: Path) -> dict[str, int]:
+    """The functions at the top of a Python file by name, with the number of parameters after the guest."""
+    tree = ast.parse(read_text(path))
+    return {n.name: len(n.args.posonlyargs) + len(n.args.args) - 1 for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+
+def p2_function_name(f: Func) -> str:
+    """wasi_<package>_<interface>[_<resource>]_<function>: the name of a function of 0.2 in both twins (C adds the prefix `fusedwasi_`)."""
+    e = f.extra
+    last = {"constructor": "new", "resource-drop": "drop"}.get(e["kind"], f.official_name)
+    parts = ["wasi", e["package"].split(":")[1], e["interface"], e["resource"] or "", last]
+    return "_".join(p.replace("-", "_") for p in parts if p)
+
+
+def attach_implementations(funcs: list[Func], key: str) -> None:
+    c = c_prototypes(key)
+    py: dict[str, tuple[str, dict[str, int]]] = {}
+    if key == "p1":
+        py["fusedwasi.p1.wasi_p1"] = ("fusedwasi.p1.wasi_p1", python_functions(PYTHON / "p1" / "wasi_p1.py"))
+    else:
+        for pkg in P2_PACKAGES:
+            py[pkg] = (f"fusedwasi.p2.wasi_p2_{pkg}", python_functions(PYTHON / "p2" / f"wasi_p2_{pkg}.py"))
+    for f in funcs:
+        if key == "p1":
+            name, c_name, module_key = f.name, f"fusedwasi_p1_{f.name}", "fusedwasi.p1.wasi_p1"
+        else:
+            name = p2_function_name(f)
+            c_name, module_key = "fusedwasi_" + name, f.extra["package"].split(":")[1]
+        module, functions = py[module_key]
+        in_c, in_py = c_name in c, name in functions
+        if in_c != in_py:
+            raise ValueError(f"{f.module} {f.name}: {c_name} is {'in' if in_c else 'not in'} the headers and {name} is {'in' if in_py else 'not in'} {module}")
+        if not in_c:  # left out on purpose by both twins (the unstable items)
+            f.extra.update(c_name=None, python_module=None, python_name=None, takes_comp=None)
+            continue
+        wire = len(f.params)
+        comp = c[c_name] == wire + 1 if key == "p2" else False
+        if c[c_name] != wire + comp or functions[name] != wire + comp:
+            raise ValueError(f"{f.module} {f.name}: {wire} parameters in the table, {c[c_name]} in C, {functions[name]} in Python")
+        f.extra.update(c_name=c_name, python_module=module, python_name=name, takes_comp=comp)
+
+
 # ---- output -----------------------------------------------------------------------------------------------------------------
 
 
@@ -878,6 +946,7 @@ def generate() -> dict[str, bytes]:
     result: dict[str, bytes] = {}
     for key, builder in (("p1", build_p1), ("p2", build_p2)):
         funcs, records = builder(sources[key])
+        attach_implementations(funcs, key)
         if key == "p1":
             api = sources["p1"]["snapshot"]
             title = "Protocols for the functions that a core module imports from WASI 0.1 (`wasi_snapshot_preview1`)."

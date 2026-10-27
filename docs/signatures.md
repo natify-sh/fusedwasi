@@ -11,7 +11,7 @@ All in `src/fusedwasi/signatures/` (a Python package, so they travel with the wh
 | `wasi_p1.json` | 46 functions of `wasi_snapshot_preview1` |
 | `wasi_p2.json` | 204 functions of `wasi:*@0.2.12`: the 200 imports of the command world and of `wasi:http` that a host must answer (137 + 63, the number `tools/wasi_p2_audit` counts), and 4 functions that the WIT marks `@unstable` (`stability: "unstable"` with its `feature`) |
 | `wasi_p1_protocols.pyi`, `wasi_p2_protocols.pyi` | one `class <CamelName>(Protocol)` per function |
-| `__init__.py` | `load("p1")`, `load("p2")` and `get_signatures_path()` (also `fusedwasi.get_signatures_path()`, the sibling of `get_include()`) |
+| `__init__.py` | `load("p1")`, `load("p2")`, `find_import(module, name)` and `get_signatures_path()` (also `fusedwasi.get_signatures_path()`, the sibling of `get_include()`) |
 
 The header of each JSON has `source` (the repository, the tag, the commit and the sha256 of every source file read), `count` and `api`. Each function has:
 
@@ -19,6 +19,7 @@ The header of each JSON has `source` (the repository, the tag, the commit and th
 - `official_name`: the name in the specification (`read`; for 0.1 the same as `name`; `constructor` and `resource-drop` for those two kinds). For 0.2 also `package`, `interface`, `kind` (`func`, `method`, `static`, `constructor`, `resource-drop`), `resource`, `stability`, `feature`.
 - `protocol`: the name of the class in the `.pyi` (0.1: `FdRead`; 0.2: package, interface, resource, function, e.g. `IoStreamsInputStreamRead`; unique, the generator stops if two clash).
 - `doc`: the first sentence of the comment of the specification (empty for the 44 imports of 0.2 that have none: the drops and a few constructors).
+- `c_name`, `python_module`, `python_name`, `takes_comp` (added in round 2, schema still 1: the fields are new, none is changed): where fusedwasi has the function. `c_name` is the C symbol (`fusedwasi_p1_<name>`; `fusedwasi_wasi_<package>_<interface>[_<resource>]_<function>`), `python_module` and `python_name` the module of the twin (`fusedwasi.p1.wasi_p1`, `fusedwasi.p2.wasi_p2_<package>`) and the function in it, `takes_comp` whether a function of 0.2 takes the number of the memory after the guest (in C and in Python alike; always false for 0.1). The generator reads the headers and the Python files as text and stops if the two twins and the table do not agree; the three functions that fusedwasi leaves out on purpose have `null` in all four. `Function.python_function()` imports and returns the Python function.
 - `params`: the flat core parameters as the core module sees them, each `{name, type, role, source_type}`; `results`: the flat results (same shape).
 
 **Types and roles.** `type` is `i32`, `i64`, `f32` or `f64`. `role` is `pointer`, `length` (the second half of a string or a list, or a parameter of the type `size` in 0.1), `handle` (a descriptor of 0.1, an `own` or `borrow` of 0.2), `value`, `tag` (the discriminant of a variant, an option or a result), `retptr` (a pointer to memory where the result is written) or `errno` (the result of a function of 0.1).
@@ -42,9 +43,13 @@ f = p2.get("wasi:io/streams@0.2.12", "[method]input-stream.read")
 signatures.get_signatures_path()  # the directory with the files
 ```
 
+## Binding an import (a host)
+
+`fusedwasi.signatures.find_import(module, name)` takes what a core module imports and gives the `Function`, or None: `("wasi_snapshot_preview1", "fd_write")`, or `("wasi:io/streams@0.2.6", "[method]output-stream.write")`. A package of 0.2 is matched whatever the patch version is (the table is of `0.2.12`; `@0.2.0` to `@0.2.99` find the same row; another major.minor finds nothing; `wasi_unstable` is not in the table and gives None). The row has the flat parameters and results (to link the import with the right types), the C symbol, the Python function (`python_function()`) and `takes_comp`. Nothing else is needed to bind an import: `tests/neutral/` binds the imports of a module with this call alone, in Python over wasmtime-py and pywasm3, and in C over wasm3 (the glue is generated from the table).
+
 ## Rule for the consumer (a stub generator)
 
-Copy the Protocols a module needs into its own `.pyi` (with `from typing import Protocol`). **Do not import fusedwasi in a `.pyi`**: the stub must work where fusedwasi is not installed. `tests/test_signatures.py` checks that the stubs here import nothing but `typing.Protocol`, so each class can be copied alone. To find the Protocols a module needs, look up each of its imports as `(module, name)` with `Signatures.get`. The version is part of the key (`wasi:io/streams@0.2.12`); the table is of 0.2.12 only, so matching `@0.2.6` to it is the consumer's job.
+Copy the Protocols a module needs into its own `.pyi` (with `from typing import Protocol`). **Do not import fusedwasi in a `.pyi`**: the stub must work where fusedwasi is not installed. `tests/test_signatures.py` checks that the stubs here import nothing but `typing.Protocol`, so each class can be copied alone. To find the Protocols a module needs, look up each of its imports as `(module, name)` with `Signatures.get`. The version is part of the key (`wasi:io/streams@0.2.12`); the table is of 0.2.12 only, and `find_import` (above) matches any `@0.2.N` to it.
 
 ## Regenerating
 

@@ -288,6 +288,67 @@ def test_p2_c_has_the_functions_of_the_table() -> None:
         assert len(wasm) - 1 == len(table[name].params), f"{name}: c {len(wasm) - 1}, table {len(table[name].params)}"
 
 
+def test_the_table_says_where_each_function_is_and_whether_it_takes_comp() -> None:
+    """`c_name`, `python_module`, `python_name` and `takes_comp` of the table agree with what the headers and the Python files have, read here by other means than the generator."""
+    c1, _ = p1_c_functions()
+    c2 = p2_c_functions()
+    python2 = p2_python_functions()
+    for f in signatures.load("p1").functions:
+        assert (f.c_name, f.python_module, f.python_name, f.takes_comp) == (
+            f"fusedwasi_p1_{f.name}",
+            "fusedwasi.p1.wasi_p1",
+            f.name,
+            False,
+        )
+        assert f.name in c1 and getattr(wasi_p1, f.name) is f.python_function()
+    left_out: set[tuple[str, str]] = set()
+    for f in signatures.load("p2").functions:
+        if f.key in P2_NOT_IMPLEMENTED:
+            assert (f.c_name, f.python_module, f.python_name, f.takes_comp) == (None, None, None, None)
+            with pytest.raises(LookupError):
+                f.python_function()
+            left_out.add(f.key)
+            continue
+        name = impl_name(f)
+        assert f.c_name == "fusedwasi_" + name and f.python_name == name and f.python_module is not None
+        assert f.python_module.startswith("fusedwasi.p2.wasi_p2_")
+        assert f.python_function() is python2[name]
+        in_c = any(re.search(r"\bcomp\b", p) for p in c2[name])
+        in_python = "comp" in inspect.signature(python2[name]).parameters
+        assert f.takes_comp is in_c is in_python, name
+    assert left_out == set(P2_NOT_IMPLEMENTED)
+
+
+def test_find_import_matches_any_patch_version_of_0_2() -> None:
+    find = signatures.find_import
+    base = find("wasi:io/streams@0.2.12", "[method]input-stream.read")
+    assert base is not None and base.c_name == "fusedwasi_wasi_io_streams_input_stream_read"
+    for version in ("0.2.0", "0.2.6", "0.2.99"):
+        assert find(f"wasi:io/streams@{version}", "[method]input-stream.read") is base
+    for module in (
+        "wasi:io/streams@0.3.0",
+        "wasi:io/streams@1.2.0",
+        "wasi:io/streams",
+        "wasi:io/streams@0.2",
+        "wasi:nothing/here@0.2.6",
+        "env",
+        "wasi_unstable",
+    ):
+        assert find(module, "[method]input-stream.read") is None, module
+    assert find("wasi:io/streams@0.2.6", "no-such-function") is None
+    assert find("wasi_snapshot_preview1", "fd_write") is signatures.load("p1").get("wasi_snapshot_preview1", "fd_write")
+    assert find("wasi_snapshot_preview1", "no_such") is None
+    assert find("wasi_unstable", "fd_write") is None
+
+
+def test_every_import_of_the_table_is_found_and_bound() -> None:
+    for snapshot in ("p1", "p2"):
+        for f in signatures.load(snapshot).functions:
+            assert signatures.find_import(f.module, f.name) is f
+            if f.c_name is not None:
+                assert callable(f.python_function())
+
+
 C_WASM_TYPE = {"uint32_t": "i32", "uint64_t": "i64", "float": "f32", "double": "f64"}
 
 

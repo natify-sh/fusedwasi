@@ -11,11 +11,9 @@ import importlib
 from collections.abc import Callable
 from typing import Any
 
-from neutral_binding import p2_implementation, signed, unsigned, wants_component
+from neutral_binding import implementation, signed, unsigned
 
-from fusedwasi import signatures
-from fusedwasi.p1 import wasi_p1, wasi_p1_core
-from fusedwasi.p2 import wasi_p2_core
+from fusedwasi import p1, p2
 
 wasm3: Any = importlib.import_module("wasm3")  # no types, no stubs
 P1_MODULE = "wasi_snapshot_preview1"
@@ -72,7 +70,7 @@ class Instance:
     def __init__(
         self,
         wasm: bytes,
-        state: wasi_p1_core.State | wasi_p2_core.State,
+        state: p1.State | p2.State,
         *,
         p1_signal: Callable[[int], int] | None = None,
     ) -> None:
@@ -80,11 +78,11 @@ class Instance:
         self.runtime = self.environment.new_runtime(64 * 1024)
         self.module = self.environment.parse_module(wasm)
         self.runtime.load(self.module)
-        self.guest: wasi_p1_core.Guest | wasi_p2_core.Guest
-        if isinstance(state, wasi_p1_core.State):
-            self.guest = wasi_p1_core.Guest(state, self.memory, signal=p1_signal)
+        self.guest: p1.Guest | p2.Guest
+        if isinstance(state, p1.State):
+            self.guest = p1.Guest(state, self.memory, signal=p1_signal)
         else:
-            self.guest = wasi_p2_core.Guest(state, [self.memory], realloc=self.realloc)
+            self.guest = p2.Guest(state, [self.memory], realloc=self.realloc)
         self._realloc: Any = None
         for module, name in function_imports(wasm):
             self._link(module, name)
@@ -101,16 +99,9 @@ class Instance:
         return unsigned(self._realloc(old_ptr, old_size, align, new_size), 32)
 
     def _link(self, module: str, name: str) -> None:
-        function: Callable[..., Any]
-        if module == P1_MODULE:
-            row = signatures.load("p1").get(module, name)
-            assert row is not None
-            function = getattr(wasi_p1, name)
-            call: Callable[..., Any] = lambda *arguments: function(self.guest, *arguments)
-        else:
-            function, row = p2_implementation(module, name)
-            prefix = (0,) if wants_component(function, row) else ()
-            call = lambda *arguments: function(self.guest, *prefix, *arguments)
+        function, row = implementation(module, name)
+        prefix = (0,) if row.takes_comp else ()
+        call: Callable[..., Any] = lambda *arguments: function(self.guest, *prefix, *arguments)
         widths = [64 if p.type == "i64" else 32 for p in row.params]
         result = 64 if row.results and row.results[0].type == "i64" else 32
         has_result = bool(row.results)

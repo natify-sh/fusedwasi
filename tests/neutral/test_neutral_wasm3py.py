@@ -11,17 +11,16 @@ pytest.importorskip("wasm3")
 import neutral_wasm3py as user
 from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
-from fusedwasi.p1 import wasi_p1_core
-from fusedwasi.p2 import wasi_p2_core, wasi_p2_io
+from fusedwasi import p1, p2
 
 
 def module(text: str) -> bytes:
     return bytes(wt.wat2wasm(text))
 
 
-def world_p1(root: Path) -> tuple[wasi_p1_core.State, wasi_p2_io.BufferOutput]:
-    out = wasi_p2_io.BufferOutput()
-    return wasi_p1_core.State(core=wasi_p2_core.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
+def world_p1(root: Path) -> tuple[p1.State, p2.BufferOutput]:
+    out = p2.BufferOutput()
+    return p1.State(core=p2.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
 
 
 def test_a_module_of_0_1_does_what_it_does_under_wasmtime(engine: wt.Engine, tmp_path: Path) -> None:
@@ -52,15 +51,15 @@ def test_two_instances_over_one_state_share_the_descriptors_and_nothing_else(eng
 
 def test_a_command_of_0_2_does_what_it_does_under_wasmtime(engine: wt.Engine, tmp_path: Path) -> None:
     theirs, status = wasmtime_p2(engine, tmp_path)
-    out = wasi_p2_io.BufferOutput()
-    state = wasi_p2_core.State(args=ARGS, env=ENV, stdout=out)
+    out = p2.BufferOutput()
+    state = p2.State(args=ARGS, env=ENV, stdout=out)
     assert user.Instance(module(program("p2_command.wat")), state).start("run") == (1, None) and status == 1
     assert bytes(out.data) == theirs == b"prog\na\nb\nK=V\nX=\nt\nbye\n"
 
 
 def test_a_trap_in_one_instance_leaves_the_state_to_the_next() -> None:
-    out = wasi_p2_io.BufferOutput()
-    state = wasi_p2_core.State(args=ARGS, env=ENV, stdout=out)
+    out = p2.BufferOutput()
+    state = p2.State(args=ARGS, env=ENV, stdout=out)
     trapped = user.Instance(module(program("p2_trap.wat")), state)
     code, trap = trapped.start("run")
     assert code is None and trap is not None and "bad handle" in trap and not trapped.guest.exited
@@ -68,8 +67,8 @@ def test_a_trap_in_one_instance_leaves_the_state_to_the_next() -> None:
 
 
 def test_a_memory_that_moves_in_the_middle_of_a_call_is_followed() -> None:
-    out = wasi_p2_io.BufferOutput()
-    state = wasi_p2_core.State(args=ARGS, env=ENV, stdout=out)
+    out = p2.BufferOutput()
+    state = p2.State(args=ARGS, env=ENV, stdout=out)
     assert (
         user.Instance(module(program("p2_grow.wat")), state).start("run") == (None, None)
         and bytes(out.data) == b"progab"

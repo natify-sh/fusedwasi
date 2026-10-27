@@ -15,8 +15,7 @@ from pathlib import Path
 import wasmtime as wt
 from neutral_wasmtime import Instance
 
-from fusedwasi.p1 import wasi_p1_core
-from fusedwasi.p2 import wasi_p2_core
+from fusedwasi import p1, p2
 
 
 def main(argv: list[str]) -> int:
@@ -28,8 +27,8 @@ def main(argv: list[str]) -> int:
     options = parser.parse_args(argv)
     environment = [tuple(item.split("=", 1)) for item in options.env]
     preopens = [tuple(item.split("::", 1)) for item in options.dir]
-    world = wasi_p2_core.State(args=[options.module, *options.arguments], env=[(k, v) for k, v in environment])
-    state = wasi_p1_core.State(core=world, preopens=[(host, name) for host, name in preopens])
+    world = p2.State(args=[options.module, *options.arguments], env=[(k, v) for k, v in environment])
+    state = p1.State(core=world, preopens=[(host, name) for host, name in preopens])
     instance = Instance(wt.Engine(), Path(options.module).read_bytes(), state)
     outcome = instance.start("_start")
     if outcome.trap is not None:

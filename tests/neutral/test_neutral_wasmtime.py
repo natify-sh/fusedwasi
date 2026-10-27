@@ -14,11 +14,10 @@ from pathlib import Path
 import neutral_wasmtime as user
 import pytest
 import wasmtime as wt
-from neutral_binding import p2_implementation, wants_component
+from neutral_binding import implementation
 from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
-from fusedwasi.p1 import wasi_p1_core
-from fusedwasi.p2 import wasi_p2_core, wasi_p2_io
+from fusedwasi import p1, p2
 
 HERE = Path(__file__).resolve().parent
 
@@ -26,9 +25,9 @@ HERE = Path(__file__).resolve().parent
 # ---- the same program under the functions of fusedwasi -----------------------------------------------------------------------
 
 
-def world_p1(root: Path) -> tuple[wasi_p1_core.State, wasi_p2_io.BufferOutput]:
-    out = wasi_p2_io.BufferOutput()
-    return wasi_p1_core.State(core=wasi_p2_core.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
+def world_p1(root: Path) -> tuple[p1.State, p2.BufferOutput]:
+    out = p2.BufferOutput()
+    return p1.State(core=p2.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
 
 
 # ---- WASI 0.1 ----------------------------------------------------------------------------------------------------------------
@@ -99,7 +98,7 @@ def test_proc_raise_without_a_hook_is_what_wasmtime_says(engine: wt.Engine, tmp_
     (tmp_path / "ours").mkdir()
     state, out = world_p1(tmp_path / "ours")
     assert user.Instance(engine, RAISE, state).start() == user.Outcome()
-    assert bytes(out.data) == theirs == wasi_p1_core.E_NOTSUP.to_bytes(4, "little")
+    assert bytes(out.data) == theirs == p1.E_NOTSUP.to_bytes(4, "little")
 
 
 def test_proc_raise_asks_the_hook_of_the_guest(engine: wt.Engine, tmp_path: Path) -> None:
@@ -136,9 +135,9 @@ def test_a_memory_that_grows_is_followed(engine: wt.Engine, tmp_path: Path) -> N
 # ---- WASI 0.2 ----------------------------------------------------------------------------------------------------------------
 
 
-def world_p2() -> tuple[wasi_p2_core.State, wasi_p2_io.BufferOutput]:
-    out = wasi_p2_io.BufferOutput()
-    return wasi_p2_core.State(args=ARGS, env=ENV, stdout=out), out
+def world_p2() -> tuple[p2.State, p2.BufferOutput]:
+    out = p2.BufferOutput()
+    return p2.State(args=ARGS, env=ENV, stdout=out), out
 
 
 def test_a_command_of_0_2_does_what_it_does_under_wasmtime(engine: wt.Engine, tmp_path: Path) -> None:
@@ -149,13 +148,11 @@ def test_a_command_of_0_2_does_what_it_does_under_wasmtime(engine: wt.Engine, tm
     assert bytes(out.data) == theirs == b"prog\na\nb\nK=V\nX=\nt\nbye\n"
 
 
-def test_the_imports_are_found_by_name_whatever_the_version_of_the_module(engine: wt.Engine) -> None:
-    function, row = p2_implementation("wasi:io/streams@0.2.0", "[method]output-stream.blocking-write-and-flush")
-    assert function.__name__ == "wasi_io_streams_output_stream_blocking_write_and_flush" and wants_component(
-        function, row
-    )
-    function, row = p2_implementation("wasi:io/streams@0.2.6", "[resource-drop]output-stream")
-    assert function.__name__ == "wasi_io_streams_output_stream_drop" and not wants_component(function, row)
+def test_the_imports_are_found_by_name_whatever_the_version_of_the_module() -> None:
+    function, row = implementation("wasi:io/streams@0.2.0", "[method]output-stream.blocking-write-and-flush")
+    assert function.__name__ == "wasi_io_streams_output_stream_blocking_write_and_flush" and row.takes_comp
+    function, row = implementation("wasi:io/streams@0.2.6", "[resource-drop]output-stream")
+    assert function.__name__ == "wasi_io_streams_output_stream_drop" and not row.takes_comp
 
 
 def test_two_commands_over_one_state_and_a_trap_in_a_third(engine: wt.Engine) -> None:

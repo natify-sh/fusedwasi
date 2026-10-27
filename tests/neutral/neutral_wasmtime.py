@@ -1,8 +1,8 @@
 """A user of fusedwasi over wasmtime-py: the imports of a core module are the functions of fusedwasi, one `Guest` for each instance, one `State` for as many instances as the caller wants.
 
-It knows nothing of wasm2c, wasmext or wasmhost and it touches only what fusedwasi publishes: `fusedwasi.p1.wasi_p1` and `fusedwasi.p1.wasi_p1_core` (the functions of 0.1, their
-`State`, `Guest` and `Exit`), `fusedwasi.p2.wasi_p2_*` and `fusedwasi.p2.wasi_p2_core` (the functions of 0.2, their `State` and `Guest`) and `fusedwasi.signatures` (the table of the
-imports). What it needed that is not published is listed in `docs/design_model.md`, section 11.
+It knows nothing of wasm2c, wasmext or wasmhost and it touches only what fusedwasi publishes: the family packages `fusedwasi.p1` and `fusedwasi.p2` (`State`, `Guest`, `Exit`, ...), the table of
+imports `fusedwasi.signatures` (`find_import` gives the Python function of an import and whether it takes the number of the memory) and the functions it points to. What it needed
+that is not published is listed in `docs/design_model.md`, section 11.
 
 How an engine that is not ours fits the model:
 
@@ -20,10 +20,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import wasmtime as wt
-from neutral_binding import p2_implementation, signed, unsigned, wants_component
+from neutral_binding import implementation, signed, unsigned
 
-from fusedwasi.p1 import wasi_p1, wasi_p1_core
-from fusedwasi.p2 import wasi_p2_core
+from fusedwasi import p1, p2
 
 P1_MODULE = "wasi_snapshot_preview1"
 
@@ -50,7 +49,7 @@ class Instance:
         self,
         engine: wt.Engine,
         wasm: str | bytes,
-        state: wasi_p1_core.State | wasi_p2_core.State,
+        state: p1.State | p2.State,
         *,
         p1_signal: Callable[[int], int] | None = None,
         traps: list[str] | None = None,
@@ -61,11 +60,11 @@ class Instance:
             None  # the call that is running: wasmtime-py wants it to call back into the instance
         )
         self.traps = traps if traps is not None else []
-        self.guest: wasi_p1_core.Guest | wasi_p2_core.Guest
-        if isinstance(state, wasi_p1_core.State):
-            self.guest = wasi_p1_core.Guest(state, self.memory, signal=p1_signal)
+        self.guest: p1.Guest | p2.Guest
+        if isinstance(state, p1.State):
+            self.guest = p1.Guest(state, self.memory, signal=p1_signal)
         else:
-            self.guest = wasi_p2_core.Guest(state, [self.memory], realloc=self.realloc, trap=self.traps.append)
+            self.guest = p2.Guest(state, [self.memory], realloc=self.realloc, trap=self.traps.append)
         self.instance = wt.Instance(self.store, self.module, [self._import(i) for i in self.module.imports])
         exports = self.instance.exports(self.store)
         memory = exports["memory"]
@@ -95,13 +94,8 @@ class Instance:
         func_type = item.type
         assert item.name is not None
         assert isinstance(func_type, wt.FuncType), f"{item.module}.{item.name}: only functions are imported"
-        function: Callable[..., Any]
-        if item.module == P1_MODULE:
-            function = getattr(wasi_p1, item.name)
-            call = self._call_p1(function)
-        else:
-            function, row = p2_implementation(item.module, item.name)
-            call = self._call_p2(function, wants_component(function, row))
+        function, row = implementation(item.module, item.name)
+        call = self._call(function, bool(row.takes_comp))
         widths = [64 if kind == wt.ValType.i64() else 32 for kind in func_type.params]
         results = [64 if kind == wt.ValType.i64() else 32 for kind in func_type.results]
 
@@ -115,10 +109,7 @@ class Instance:
 
         return wt.Func(self.store, func_type, host, access_caller=True)
 
-    def _call_p1(self, function: Callable[..., Any]) -> Callable[..., Any]:
-        return lambda *arguments: function(self.guest, *arguments)
-
-    def _call_p2(self, function: Callable[..., Any], component: bool) -> Callable[..., Any]:
+    def _call(self, function: Callable[..., Any], component: bool) -> Callable[..., Any]:
         if component:
             return lambda *arguments: function(self.guest, 0, *arguments)
         return lambda *arguments: function(self.guest, *arguments)
