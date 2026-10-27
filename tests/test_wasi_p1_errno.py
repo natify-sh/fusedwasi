@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cbuild import build
 
 C_P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
 CHECK = Path(__file__).parent / "data" / "wasi_p1_errno_check.c"
@@ -32,7 +33,7 @@ WASI = {
 @pytest.mark.skipif(sys.platform == "win32" or CC is None, reason="POSIX with a C compiler")
 def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> None:
     binary = tmp_path / "check"
-    subprocess.run(
+    build(
         [
             CC or "cc",
             "-std=gnu11",
@@ -45,7 +46,6 @@ def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> 
             "-o",
             str(binary),
         ],
-        check=True,
     )
     known = {name: getattr(errno, name) for name in WASI if hasattr(errno, name)}
     out = subprocess.run([str(binary), *map(str, known.values())], capture_output=True, text=True, check=True).stdout

@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from cbuild import build
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
@@ -190,9 +191,8 @@ int main(void) {
 """
     )
     binary = tmp_path / ("https.exe" if sys.platform == "win32" else "https")
-    subprocess.run(
+    build(
         [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(source), "-o", str(binary), *LIBS],
-        check=True,
     )
     out = subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.strip()
     rc, tag, message = out.split(" ", 2)

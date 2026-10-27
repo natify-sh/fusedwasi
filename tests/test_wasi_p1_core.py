@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cbuild import build
 from p1_script import run
 
 DATA = Path(__file__).parent / "data"
@@ -19,7 +20,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p1") / ("driver.exe" if sys.platform == "win32" else "driver")
-    subprocess.run(
+    build(
         [
             CC,
             "-std=gnu11",
@@ -35,7 +36,6 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
             str(binary),
             *(["-lbcrypt"] if sys.platform == "win32" else []),
         ],
-        check=True,
     )
     return binary
 

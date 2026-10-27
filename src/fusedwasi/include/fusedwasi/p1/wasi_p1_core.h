@@ -1019,6 +1019,7 @@ static inline int fusedwasi_p1_dirlist_add(fusedwasi_p1_dirlist *list, const cha
 
 /* the fdflags as flags of the system (the ones it has) */
 static inline int fusedwasi_p1_native_fdflags(uint32_t fdflags) {
+    (void)fdflags; /* unused where no flag is taken over (Windows without O_DSYNC and O_RSYNC) */
     int flags = 0;
 #ifndef _WIN32  /* the C library of Windows cannot take it off again: fd_write does it by seeking to the end */
     if (fdflags & FUSEDWASI_P1_FD_APPEND) flags |= O_APPEND;

@@ -2,11 +2,11 @@
 
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from cbuild import build
 
 P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
 SOURCE = (
@@ -20,7 +20,7 @@ COMPILERS = [c for c in ("gcc", "clang", "cc") if shutil.which(c)]
 def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path: Path) -> None:
     source = tmp_path / "check.c"
     source.write_text(SOURCE)
-    subprocess.run(
+    build(
         [
             compiler,
             "-std=c11",
@@ -32,7 +32,6 @@ def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path:
             f"-I{P1.parent / 'p2'}",
             str(source),
         ],
-        check=True,
     )
 
 
@@ -67,7 +66,7 @@ def test_the_headers_are_found_by_the_published_include_path_alone(compiler: str
     source.write_text(
         "#include <fusedwasi/p1/wasi_p1.h>\n#include <fusedwasi/p1/wasi_p1_unstable.h>\nint main(void) { return 0; }\n"
     )
-    subprocess.run(
+    build(
         [
             compiler,
             "-std=c11",
@@ -78,5 +77,4 @@ def test_the_headers_are_found_by_the_published_include_path_alone(compiler: str
             f"-I{P1.parent.parent}",
             str(source),
         ],
-        check=True,
     )

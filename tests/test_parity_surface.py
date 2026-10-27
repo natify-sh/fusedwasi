@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cbuild import build
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_core
 from fusedwasi.p1.wasi_p1_core import Guest as P1Guest
@@ -34,7 +35,7 @@ def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:
     path = tmp_path / f"{name}.c"
     path.write_text(source)
     binary = tmp_path / name
-    subprocess.run(
+    build(
         [
             CC,
             "-std=gnu11",
@@ -49,7 +50,6 @@ def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:
             "-o",
             str(binary),
         ],
-        check=True,
     )
     return subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout
 

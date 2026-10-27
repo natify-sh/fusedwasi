@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cbuild import build
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
@@ -719,9 +720,8 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2http") / ("driver.exe" if sys.platform == "win32" else "driver")
-    subprocess.run(
+    build(
         [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
-        check=True,
     )
     return binary
 

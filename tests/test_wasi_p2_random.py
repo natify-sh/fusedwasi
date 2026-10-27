@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from cbuild import build
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_random as rnd
@@ -95,9 +96,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None or sys.platform == "win32":
         pytest.skip("no C compiler of the POSIX kind")
     binary = tmp_path_factory.mktemp("p2random") / "driver"
-    subprocess.run(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)], check=True
-    )
+    build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
     return binary
 
 
