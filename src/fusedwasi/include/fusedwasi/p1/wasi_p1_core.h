@@ -1373,7 +1373,6 @@ static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_
     uint8_t *types;
     uint32_t count;
     int code = fusedwasi_p2_sys_list(&e->d, &names, &types, &count);
-    if (code == FUSEDWASI_P2_SYS_NOMEM) g->core.trap(&g->core, "out of memory");
     if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
     uint32_t rc = FUSEDWASI_P1_E_SUCCESS;
     for (uint32_t i = 0; i < count + 2 && rc == FUSEDWASI_P1_E_SUCCESS; i++) {  /* "." and "..", then the names */

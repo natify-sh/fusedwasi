@@ -194,8 +194,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_names_free(char **names, uint32_t count) {
     free(names);
 }
 
-/* the names of a directory, sorted, without . and .., with their types; the caller frees them. No memory for the list is FUSEDWASI_P2_SYS_NOMEM (nothing is kept); the function that
-   has the guest traps with "out of memory". */
+/* the names of a directory, sorted, without . and .., with their types; the caller frees them. No memory for the list is FUSEDWASI_P2_E_INSUFFICIENT_MEMORY (nothing is kept). */
 FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out) {
     int dupfd = dup(d->fd);
     DIR *dir = dupfd < 0 ? NULL : fdopendir(dupfd);
@@ -209,7 +208,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
     char **names = (char **)malloc(capacity * sizeof *names);
     if (!names) {
         closedir(dir);
-        return FUSEDWASI_P2_SYS_NOMEM;
+        return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
     }
     struct dirent *e;
     while ((e = readdir(dir)) != NULL) {
@@ -220,7 +219,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
             if (!bigger) {
                 fusedwasi_p2_names_free(names, count);
                 closedir(dir);
-                return FUSEDWASI_P2_SYS_NOMEM;
+                return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
             }
             names = bigger;
         }
@@ -228,7 +227,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
         if (!names[count]) {
             fusedwasi_p2_names_free(names, count);
             closedir(dir);
-            return FUSEDWASI_P2_SYS_NOMEM;
+            return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
         }
         count++;
     }
@@ -237,7 +236,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
     uint8_t *types = (uint8_t *)malloc(count ? count : 1);
     if (!types) {
         fusedwasi_p2_names_free(names, count);
-        return FUSEDWASI_P2_SYS_NOMEM;
+        return FUSEDWASI_P2_E_INSUFFICIENT_MEMORY;
     }
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; i++) {

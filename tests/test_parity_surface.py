@@ -574,9 +574,13 @@ int main(void) {
     fusedwasi_p2_state world;
     fusedwasi_p2_init(&world);
     /* no guest yet: the streams are made and given to the state while it is configured */
-    uint32_t hin = fusedwasi_p2_memory_input_new(&world, (const uint8_t *)"in!", 3), hout;
+    fusedwasi_p2_memory_input mi; /* the owner of a stream has its pointer; the public *_add puts it in the table of the state */
+    memset(&mi, 0, sizeof mi);
+    mi.base.read = fusedwasi_p2_memory_input_read, mi.base.ready = fusedwasi_p2_always_ready;
+    mi.data = (const uint8_t *)"in!", mi.len = 3;
+    uint32_t hin = fusedwasi_p2_input_stream_add(&world, &mi.base), hout;
     fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 100, &hout);
-    world.std[0] = (fusedwasi_p2_stream *)world.slots[hin & FUSEDWASI_P2_INDEX_MASK].obj;
+    world.std[0] = &mi.base;
     world.std[1] = &bo->base;
     fusedwasi_p2_fd_stream *fd = fusedwasi_p2_fd_output_new(&world, 2);
     world.std[2] = &fd->base;

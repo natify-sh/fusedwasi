@@ -21,7 +21,6 @@ enum {
     FUSEDWASI_P2_E_NOT_PERMITTED, FUSEDWASI_P2_E_PIPE, FUSEDWASI_P2_E_READ_ONLY, FUSEDWASI_P2_E_INVALID_SEEK, FUSEDWASI_P2_E_TEXT_FILE_BUSY, FUSEDWASI_P2_E_CROSS_DEVICE
 };
 #define FUSEDWASI_P2_OK (-1) /* what the functions of this file return when nothing failed; an error-code otherwise */
-#define FUSEDWASI_P2_SYS_NOMEM (-2) /* no memory in a function of the system layer: not an error-code, the function that has the guest traps */
 
 /* descriptor-flags, path-flags, open-flags */
 enum { FUSEDWASI_P2_READ = 1, FUSEDWASI_P2_WRITE = 2, FUSEDWASI_P2_FILE_SYNC = 4, FUSEDWASI_P2_DATA_SYNC = 8, FUSEDWASI_P2_REQUESTED_SYNC = 16, FUSEDWASI_P2_MUTATE = 32 };
@@ -457,7 +456,6 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read_directory(f
     uint8_t *types;
     uint32_t count;
     int rc = fusedwasi_p2_sys_list(d, &names, &types, &count);
-    if (rc == FUSEDWASI_P2_SYS_NOMEM) g->trap(g, "out of memory");
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_handle_result(g, comp, retptr, rc, 0);
         return;
