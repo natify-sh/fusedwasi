@@ -130,6 +130,31 @@ Rules for both: they include only the public headers and import only the public 
 
 Where it fits in the order (section 7, item 5): after the split (step 1) and 0.1 over 0.2 (step 2), before the public/private marks are frozen and before `0.1.0a1`. The first user (Python over `wasmtime-py`) can start as soon as the split is pushed and is the quickest check that the split is neutral.
 
+### What runs (2026-10-27)
+
+All in `tests/neutral/`, run by `.github/workflows/neutral.yml` (ubuntu-latest). Each user has its own commit, its own tests and its own job; none of them is imported by the library or by another user.
+
+| User | Engine | What it does | Where |
+| --- | --- | --- | --- |
+| Python over `wasmtime-py` (50.0.1) | Wasmtime | A `State` and a `Guest` per instance. Runs WASI 0.1 core modules and a WASI 0.2 command given as a core module with `cabi_realloc`; compares what the program wrote, its status and its files with the same program under Wasmtime's own WASI (the module with `define_wasi`, the command as a component, `programs/p2_command.component.wat`). Two instances over one state (0.1 and 0.2), one instance's exit or trap leaves the other alone. Runs the official wasi-testsuite for 0.1 as the runtime of the runner | `neutral_wasmtime.py` (the user), `neutral_wasmtime_run.py` (command line), `wasi_testsuite_adapter.py`, `test_neutral_wasmtime.py`, `programs/` |
+
+The testsuite is `WebAssembly/wasi-testsuite`, branch `prod/testsuite-base`, pinned by commit `9dfd4867f12498bd6411a57739c24b4880668683` in `neutral.yml`: 72 tests of `wasm32-wasip1` pass (AssemblyScript 12, Rust 46, C 14), 0 fail; the suites for `wasm32-wasip3` are skipped by the runner because the adapter says it answers for 0.1 only. It runs in the CI job and locally with `WASI_TESTSUITE=<checkout> pytest tests/neutral`.
+
+How the engine fits the model, as the user wrote it: the memory of the guest is a function (`Instance.memory`, a view of `Memory.data_ptr`, built at each access, so `memory.grow` is followed); `realloc` is a call of the export `cabi_realloc` through the `Caller` of the call in progress; a trap is an exception (wasmtime-py unwinds and raises the same exception out of the call); the end of a program is read from `guest.exited` and `guest.exit_code`, which the user clears before each call.
+
+What the Python user needed that the API does not give (each is a leak or a gap, reported, none worked around inside `src/`):
+
+1. **The name of the function for an import is not public.** `(module, name)` of the table to `fusedwasi.p2.wasi_p2_<package>.wasi_<package>_<interface>[_<resource>]_<function>` is a rule that lives in `tests/test_signatures.py` (`impl_name`); the user wrote it again (`p2_function_name`). A row of `fusedwasi.signatures` could carry the name (Python and C), or `fusedwasi.p2` could have a lookup.
+2. **Whether a function of 0.2 takes `comp` is not in the table.** The table has no `comp` (it is not a parameter of the import), the Python functions that touch memory have it after the guest and those that do not (`subscribe`, `drop`) have not. The user reads `inspect.signature` and compares the count with the table.
+3. **The Python memory must be a `memoryview` of format `B`.** A view of a `ctypes` array (the natural way to give an engine's pointer) has the format `<B` and `Guest.store` / `store_bytes` fail on it (`NotImplementedError: memoryview: unsupported format <B`), though "any writable buffer" is what the docstrings promise. The user casts (`.cast("B")`); the library could.
+4. **Integers are unsigned, and that is not written for Python.** wasmtime-py gives `i32` and `i64` signed; the functions take offsets and lengths as unsigned (as the C does with `uint32_t`). The user masks every argument by the width the import declares and turns a result back.
+5. **`fusedwasi.p1` and `fusedwasi.p2` export nothing.** The names that matter are in submodules (`wasi_p1_core.State`, `Guest`, `Exit`; `wasi_p2_core.State`, `Guest`, `Exit`, `Trap`), and `fusedwasi.State` / `Guest` / `Exit` are those of 0.2. A user of both has two classes of each name and two `Exit`s; this one avoids `Exit` by reading the guest.
+6. **A State of 0.1 cannot be given the arguments, the environment or the standard streams**: they are the `core` State of 0.2 (`wasi_p1_core.State(core=wasi_p2_core.State(args=..., env=..., stdout=...), preopens=...)`), so a user of 0.1 builds two objects. Step 2 of the order (0.1 over 0.2) is expected to change it.
+7. **The Python `Guest` of 0.1 has no `trap` and no `realloc` hook** (a function of 0.1 answers an errno; only the C guest of 0.1 carries those of its embedded guest of 0.2). Not a problem for this user; noted because a user that wants to see the messages of traps in 0.1 cannot.
+8. **Versions of the imports**: the table is of `0.2.12`, the module imports `0.2.6`; the user cuts the version (as `signatures.md` says). A helper for it is the same wish as item 1.
+
+Choices the document did not fix and the user made: one `Store` for each instance (the shared thing is the `State`, not the engine's store); a trap hook that only records the message; the status of a process is the code of the exit, 0 for a return, 1 for a trap.
+
 ## 11. Step 1: what was learned (done 2026-10-27)
 
 The split is made in C and in Python in one change: `fusedwasi_p2_state` / `fusedwasi_p2_guest` (Python `State` / `Guest` of `fusedwasi.p2.wasi_p2_core`) and `fusedwasi_p1_state` / `fusedwasi_p1_guest` (Python `State` / `Guest` of `fusedwasi.p1.wasi_p1_core`). The 0.1 and 0.2 states are still two; the 0.1 guest is built so that step 2 can drop it. Things the doc did not say:

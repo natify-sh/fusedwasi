@@ -1,0 +1,26 @@
+;; The first of two WASI 0.1 programs that run over one world: it creates "shared.txt" in the preopened directory (descriptor 3), writes "from A" to it, leaves it open
+;; (descriptor 4) and ends with proc_exit(7). It also has "AAAA" in its memory at 5000, which the other program must not see.
+(module
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_open" (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "shared.txt")
+  (data (i32.const 32) "from A")
+  (data (i32.const 48) "A: ")
+  (data (i32.const 5000) "AAAA")
+  (func (export "_start")
+    (local $fd i32)
+    (drop (call $path_open (i32.const 3) (i32.const 0) (i32.const 8) (i32.const 10) (i32.const 1)
+      (i64.const 0x1fffffff) (i64.const 0x1fffffff) (i32.const 0) (i32.const 540)))
+    (local.set $fd (i32.load (i32.const 540)))
+    (i32.store (i32.const 0) (i32.const 32))
+    (i32.store (i32.const 4) (i32.const 6))
+    (drop (call $fd_write (local.get $fd) (i32.const 0) (i32.const 1) (i32.const 548)))
+    ;; "A: " and the number of the descriptor, as a byte, to standard output
+    (i32.store8 (i32.const 51) (i32.add (local.get $fd) (i32.const 48)))
+    (i32.store8 (i32.const 52) (i32.const 10))
+    (i32.store (i32.const 0) (i32.const 48))
+    (i32.store (i32.const 4) (i32.const 5))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 548)))
+    (call $proc_exit (i32.const 7))))
