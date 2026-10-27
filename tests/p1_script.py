@@ -8,6 +8,8 @@ import struct
 from pathlib import Path
 from typing import Any
 
+from fake_memory import OutOfProcessMemory
+
 from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
 from fusedwasi.p1.wasi_p1_core import E_PERM, E_SUCCESS, Exit, Guest, State
 from fusedwasi.p2.wasi_p2_io import InputStream, OutputStream, StreamFailed
@@ -35,22 +37,6 @@ def tokens(line: str) -> list[bytes]:
 
 class Ended(Exception):
     """What the hook `signal` raises to end the program (the C driver does it with a trap of the guest)."""
-
-
-class Remote:
-    """A memory that is not a buffer, as an engine keeps it out of this process: `read`, `write` and `len` only."""
-
-    def __init__(self, data: bytearray) -> None:
-        self.data = data
-
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def read(self, offset: int, length: int) -> bytes:
-        return bytes(self.data[offset : offset + length])
-
-    def write(self, offset: int, data: bytes) -> None:
-        self.data[offset : offset + len(data)] = data
 
 
 def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
@@ -129,7 +115,7 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             if hooks_on:
                 state.clock, state.random_bytes, state.sleep = hook_clock, hook_random, hook_sleep
                 state.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
-            guest = Guest(state, Remote(memory) if remote else memory)
+            guest = Guest(state, OutOfProcessMemory(memory) if remote else memory)
         elif word == "signal":
             assert guest is not None
             guest.signal = hook_signal if t[1] == b"on" else None

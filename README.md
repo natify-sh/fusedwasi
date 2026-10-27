@@ -65,7 +65,7 @@ from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C hea
 state = State(args=["prog"])  # the world: files, sockets, the clocks
 guest = Guest(
     state, [memory], realloc=my_cabi_realloc
-)  # a memory is any writable buffer, or a function of no arguments that gives it (followed when it moves)
+)  # a memory is any writable buffer, or a function of no arguments that gives it (followed when it moves), or an object with read(offset, length) / write(offset, data) / len() for an engine that keeps its memory out of the process (JavaScript, Pyodide): a call then copies only the bytes it touches
 cli.wasi_cli_environment_get_arguments(guest, 0, ptr)
 ```
 
@@ -80,7 +80,7 @@ For 0.1 the same two parts, the same types: a function is `fusedwasi_p1_<name>(&
 
 | Part | What the host gives | What the library does |
 |---|---|---|
-| memory (of the guest) | a base and a size for each component, bound by pointer (`fusedwasi_p2_bind_memory`, primary: read at each access, so a moved base is followed) or set by value (`fusedwasi_p2_set_memory`, the convenience) | checked, little-endian loads and stores; a pointer outside is a trap |
+| memory (of the guest) | a base and a size for each component, bound by pointer (`fusedwasi_p2_bind_memory`, primary: read at each access, so a moved base is followed) or set by value (`fusedwasi_p2_set_memory`, the convenience) | checked, little-endian loads and stores; a pointer outside is a trap. (Python only: a memory that lives outside the process is an object with `read`/`write`/`len`, copied per access; C keeps its memory by pointers.) |
 | handles | nothing | the table of `own` and `borrow` (generation + index), `[resource-drop]` |
 | lists and strings it returns | `realloc` of the guest (the `cabi_realloc` of the component) | placing them in the guest's memory |
 | files | the preopened directories (`path`, `name`, `writable`); Python: optionally `filesystem=` | paths confined below the preopen (POSIX and Windows) |

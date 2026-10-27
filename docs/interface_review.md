@@ -104,7 +104,7 @@ Same name, same meaning, unless stated. "gap" is a place where a host written ag
 
 | C field | Python `Host` | Parity |
 | --- | --- | --- |
-| `memory[8]`, `memories` (pointers to base and size; `fusedwasi_p2_bind_memory` binds them, `fusedwasi_p2_set_memory` writes cells of the state and binds those) | `memories` list of any writable buffer or a function of no arguments that gives it | same model since the bind by pointer (as 0.1's `fusedwasi_p1_bind` and `memory=`). Python has no limit of 8. |
+| `memory[8]`, `memories` (pointers to base and size; `fusedwasi_p2_bind_memory` binds them, `fusedwasi_p2_set_memory` writes cells of the state and binds those) | `memories` list of any writable buffer, a function of no arguments that gives it, or an object with `read(offset, length)` / `write(offset, data)` / a size for a memory outside the process (round 4: implemented for both families; before it was only in the docstring and in 0.1) | same model since the bind by pointer (as 0.1's `fusedwasi_p1_bind` and `memory=`). Python has no limit of 8. |
 | `trap` hook | none: a bad handle raises `Trap` | **gap (by design)**: Python has no hook to replace; an exception is the trap. Neither is wrong, but a Python host cannot turn a trap into something else without catching. |
 | `realloc(s, comp, ...)` | `realloc(comp, ...)` | same |
 | `wait(s)` | `wait()` | same |
@@ -132,7 +132,7 @@ Same name, same meaning, unless stated. "gap" is a place where a host written ag
 | `fusedwasi_p1_state.core` | `State.core` | same |
 | `user` | none | gap as above |
 | `finished`, `end_value` | `finished`, `end_value` | same, plus Python raises `Signal`/`Exit` and C sets `*trapped` |
-| `memory_data` / `memory_size` (by pointer) | `memory` (buffer, callable, or object with `read/write/len`) | **gap**: the Python is the more general. Only the C is tied to one layout. |
+| `memory_data` / `memory_size` (by pointer) | `memory` (buffer, callable, or object with `read/write/len`; the object form copies only what a call touches) | **gap**: the Python is the more general. Only the C is tied to one layout (pointers: an engine whose memory is out of process writes a copy in and out around the call itself). |
 | trap | `*trapped = 1` and the host knows why | Python raises |
 | `entries`, `nentries` | `entries` | internal |
 | `fusedwasi_p1_create(&cfg, core, &err, &bad)` | `State(..., preopens=...)` raising `PreopenError(.index)` | same |
@@ -314,3 +314,7 @@ The names of this file up to here are those of their day. Every name that was no
 * C fields: `state.slots`, `slot_count`, `slot_capacity`, `std_default`, `p1_table`; `guest.memory`, `memory_cell`, `memories`; `stream.dead` get two underscores at the end. Use `fusedwasi_p2_bind_memory` / `set_memory` for the memory.
 * C, removed: `fusedwasi_p2_http_fields_find`, `fusedwasi_p2_walk_path` (use `fusedwasi_p2__walk_path_with`), `fusedwasi_p2_error_new`, `fusedwasi_p2_error_new_code` (use `fusedwasi_p2_error_add` with the state, or the private `fusedwasi_p2__error_new_codes` with the guest).
 * Python: the helpers of `wasi_p1_core` (`put_u32`, `get_u32`, `load`, `store`, `iov`, `path_at`, `read_bytes`, `Stat`, `Entry`, `Fds`, ...), of `wasi_p2_core` (`table_new / get / alive / drop`, `load_*`, `store_*`, `alloc`, `trap`, `Slot`, `INDEX_*`), of `wasi_p2_io` (`Error`, `error_new`, `input_stream_new`, `output_stream_new`), of `wasi_p2_cli` (`FdInput`, `FdOutput`, `SysInput`, `SysOutput`), the classes and constants of `wasi_p2_sockets`, the internal classes of `wasi_p2_http` and `wasi_p2_filesystem` get a leading underscore; `State.slots` -> `_slots`, `State.p1` -> `_p1`, `Guest.memories` -> `_memories`; `wasi_p1.filestat_of_fd` / `_path`, `PATH_MAX`, `LINK_MAX`, `INT64_MAX` too. `fusedwasi.signatures.P1_MODULE` -> `_P1_MODULE`; `Snapshot` is public (it was missing from `__all__`).
+
+### Round 4: three fixes found by an adapter whose memory is outside the process (2026-10-27)
+
+* **A memory that is an object with `read(offset, length)`, `write(offset, data)` and a size works for 0.2 as well as for 0.1** (Python only; `TypeError` before). No name changes: the private helpers of `wasi_p2_core` (`_locate`, `_load_*`, `_store_*`) and of `wasi_p1_core` (`_buffer`, `_load`, `_store`) do it, and 0.1 goes through the same function (`wasi_p2_core._memory_pair`) as 0.2. A call copies what it touches. C: no change (pointers); a C user whose memory is out of the process copies around the call.

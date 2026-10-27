@@ -18,7 +18,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..p2.wasi_p2_cli import _FdInput, _FdOutput, std
-from ..p2.wasi_p2_core import _INDEX_BITS, _INDEX_MASK, KIND_DESCRIPTOR, Guest, State, flat_view, table_add
+from ..p2.wasi_p2_core import (
+    _INDEX_BITS,
+    _INDEX_MASK,
+    KIND_DESCRIPTOR,
+    Guest,
+    State,
+    _memory_pair,
+    _remote_read,
+    _size_of,
+    table_add,
+)
 from ..p2.wasi_p2_core import Exit as Exit  # noqa: PLC0414 (one class of exit for both families, re-exported)
 from ..p2.wasi_p2_filesystem import MUTATE, READ, FsError
 from ..p2.wasi_p2_io import StreamClosed, StreamFailed
@@ -377,31 +387,21 @@ def _fds_of(guest: Guest) -> _Fds | int:
 
 
 def _buffer(guest: Guest) -> tuple[memoryview | None, Any]:
-    """(a view of the memory, else None; the memory as the host gave it). The memory is a buffer (a `bytearray`, a `memoryview`, `mmap`) or, for an engine
-    that keeps it out of this process, an object with `read(offset, length)`, `write(offset, data)` and `len()` (what a call then costs is a copy of what it touches)."""
-    if not guest._memories:
-        return None, None
-    memory = guest._memories[0]
-    if callable(memory):
-        memory = memory()
-    if memory is None:
-        return None, None
-    try:
-        return flat_view(memory), memory
-    except TypeError:
-        return None, memory
+    """(a view of the memory, else None; the memory as the host gave it): memory 0 of the guest, as the functions of 0.2 see it (`wasi_p2_core._memory_pair`). A buffer is seen in place; an
+    object with `read(offset, length)`, `write(offset, data)` and a size (an engine that keeps the memory out of this process) is read and written per access: what a call costs is a copy of what it touches."""
+    return _memory_pair(guest, 0) or (None, None)
 
 
 def _mem_size(guest: Guest) -> int:
     view, memory = _buffer(guest)
-    return len(view) if view is not None else len(memory) if memory is not None else 0
+    return _size_of(view, memory) if view is not None or memory is not None else 0
 
 
 def _load(guest: Guest, ptr: int, length: int) -> bytes:
     view, memory = _buffer(guest)
     if view is not None:
         return bytes(view[ptr : ptr + length])
-    return bytes(memory.read(ptr, length)) if length else b""
+    return _remote_read(memory, ptr, length) if length else b""
 
 
 def _store(guest: Guest, ptr: int, data: bytes) -> None:
@@ -409,7 +409,7 @@ def _store(guest: Guest, ptr: int, data: bytes) -> None:
     if view is not None:
         view[ptr : ptr + len(data)] = data
     elif data:
-        memory.write(ptr, data)
+        memory.write(ptr, bytes(data))
 
 
 def _in_memory(guest: Guest, ptr: int, length: int) -> bool:

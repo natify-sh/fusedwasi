@@ -64,8 +64,28 @@ def function_imports(data: bytes) -> list[tuple[str, str]]:
     return found
 
 
+class ReadWriteMemory:
+    """The memory of an instance as an engine that keeps it out of this process gives it: `read(offset, length)`, `write(offset, data)` and a size, no buffer. It asks pywasm3 for the memory at each access
+    (so a memory that grew is followed) and counts the bytes that cross."""
+
+    def __init__(self, runtime: Any) -> None:
+        self.runtime = runtime
+        self.bytes_read = self.bytes_written = 0
+
+    def __len__(self) -> int:
+        return len(self.runtime.get_memory(0))
+
+    def read(self, offset: int, length: int) -> bytes:
+        self.bytes_read += length
+        return bytes(self.runtime.get_memory(0)[offset : offset + length])
+
+    def write(self, offset: int, data: bytes) -> None:
+        self.bytes_written += len(data)
+        self.runtime.get_memory(0)[offset : offset + len(data)] = data
+
+
 class Instance:
-    """One instance of a core module, with its `Guest`."""
+    """One instance of a core module, with its `Guest`. With `out_of_process` the guest gets a `ReadWriteMemory` instead of the buffer of pywasm3."""
 
     def __init__(
         self,
@@ -73,13 +93,15 @@ class Instance:
         state: p2.State,
         *,
         p1_signal: Callable[[int], int] | None = None,
+        out_of_process: bool = False,
     ) -> None:
         self.environment = wasm3.Environment()
         self.runtime = self.environment.new_runtime(64 * 1024)
         self.module = self.environment.parse_module(wasm)
         self.runtime.load(self.module)
+        self.remote = ReadWriteMemory(self.runtime) if out_of_process else None
         self.guest = p2.Guest(
-            state, [self.memory], realloc=self.realloc, signal=p1_signal
+            state, [self.remote or self.memory], realloc=self.realloc, signal=p1_signal
         )  # one guest for both families
         self._realloc: Any = None
         for module, name in function_imports(wasm):

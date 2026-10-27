@@ -1,8 +1,10 @@
 """The state of a host of WASI 0.2 and the helpers of the canonical ABI that every package uses (the twin of `include/fusedwasi/p2/wasi_p2_core.h`).
 
 No mutable state at the level of the module: everything that changes is in a `Host`, which is passed as the first argument of every function of the packages.
-A memory is any writable buffer (`bytearray`, `memoryview`, a `ctypes` array, `mmap`: seen as flat bytes by `flat_view`) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
+A memory is any writable buffer (`bytearray`, `memoryview`, a `ctypes` array, `mmap`: seen as flat bytes by `flat_view`, in place, no copy) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
 that moves is followed: the twin of `fusedwasi_p2_bind_memory`); a module fused from components has one for each component, and a function takes the number of its own.
+A memory that lives outside this process (a JavaScript engine, Pyodide) is an object with `read(offset, length)`, `write(offset, data)` and a size (`len(memory)`, or a method `len()`), or a function that gives one: every load, store, string, list
+and allocation then reads or writes only the range it touches, in one call for each access (never the whole memory); the bounds and the traps are the ones of a buffer. The C twin keeps its memory by pointers and has no such form.
 
 Integers are unsigned, in the parameters and in the results: an offset, a length or a handle is 0 to 2**32 - 1, an `i64` is 0 to 2**64 - 1, as the `uint32_t` and `uint64_t` of the C twin. An engine
 that hands a program's `i32` and `i64` over as signed Python integers (wasmtime-py, pywasm3) masks every argument by its width (`x & 0xFFFFFFFF`, `x & 0xFFFFFFFFFFFFFFFF`) and, if it wants the
@@ -209,7 +211,8 @@ class Guest:
 
     One for each instance, made once; many guests may point to one state, and nothing is rebound per call. `memories` is a list of memories (a module fused from components has one for
     each component), or one memory for an instance of 0.1 (which has memory 0 only): a writable buffer, a function of no arguments that gives it, or an object with `read(offset, length)`,
-    `write(offset, data)` and `len()` (an engine that keeps its memory out of this process; what a call then costs is a copy of what it touches). The hooks are callables of no `Guest`
+    `write(offset, data)` and a size, `len(memory)` or a method `len()` (an engine that keeps its memory out of this process: each access reads or writes only the bytes it touches, so what a call costs is a copy of
+    what it touches, never of the memory; the same for 0.1 and 0.2). The hooks are callables of no `Guest`
     argument (a closure carries its own data): `trap(message)` is called before the exception `Trap` is raised (it may raise another); `exit(code)` replaces the default, which records
     `exited` and `exit_code` and raises `Exit` (`wasi:cli/exit` and `proc_exit` of 0.1 both come to it); `wait()` is what a blocking call does between two looks at a pollable;
     `signal(number) -> errno` is asked by `proc_raise` of 0.1 (it returns the errno of WASI for the call, or ends the program by raising; without it the answer is NOTSUP and the program goes on).
@@ -312,48 +315,107 @@ def flat_view(memory: object) -> memoryview:
     return view
 
 
-def _check(guest: Guest, comp: int, ptr: int, size: int) -> memoryview:
+def _split(memory: object) -> tuple[memoryview | None, Any]:
+    """(a flat view, the memory) for a buffer; (None, the memory) for an object of an engine that keeps its memory out of this process (`read(offset, length)`,
+    `write(offset, data)` and a size: `len(memory)`, or a method `len()`). Anything else is a `TypeError`."""
+    try:
+        return flat_view(memory), memory
+    except TypeError:
+        if callable(getattr(memory, "read", None)) and callable(getattr(memory, "write", None)):
+            return None, memory
+        raise
+
+
+def _memory_pair(guest: Guest, comp: int) -> tuple[memoryview | None, Any] | None:
+    """The memory `comp` of the guest as `_split` says (a function that gives it is called, so a memory that moves is followed); None when there is none (or the function gave None)."""
     if comp >= len(guest._memories):
-        _trap(guest, f"no memory {comp}")
+        return None
     memory = guest._memories[comp]
-    if callable(memory):  # a function that gives the buffer: a memory that moves is followed
+    if callable(memory):
         memory = memory()
-    view = flat_view(memory)
-    if ptr < 0 or ptr + size > len(view):
+    return None if memory is None else _split(memory)
+
+
+def _size_of(view: memoryview | None, memory: Any) -> int:
+    """The size in bytes: of the view, else what the object says (one call; nothing is copied)."""
+    if view is not None:
+        return len(view)
+    try:
+        return len(memory)
+    except TypeError:  # an object that is not a sequence: the size is a method
+        return int(memory.len())
+
+
+def _remote_read(memory: Any, ptr: int, size: int) -> bytes:
+    data = bytes(memory.read(ptr, size))
+    if len(data) != size:
+        raise Trap(f"the memory gave {len(data)} bytes for {size}")
+    return data
+
+
+def _locate(guest: Guest, comp: int, ptr: int, size: int) -> tuple[memoryview | None, Any]:
+    """Checks that `size` bytes at `ptr` are inside memory `comp` and gives it as `_split` does: a view, or (None, the object) to be read and written per access."""
+    pair = _memory_pair(guest, comp)
+    if pair is None:
+        _trap(guest, f"no memory {comp}")
+    view, memory = pair
+    if ptr < 0 or ptr + size > _size_of(view, memory):
         _trap(guest, f"pointer {ptr:#x}+{size} is outside the memory")
-    return view
+    return view, memory
+
+
+def _load_fmt(guest: Guest, comp: int, ptr: int, fmt: str, size: int) -> int:
+    view, memory = _locate(guest, comp, ptr, size)
+    if view is not None:
+        return struct.unpack_from(fmt, view, ptr)[0]  # type: ignore[no-any-return]
+    return struct.unpack(fmt, _remote_read(memory, ptr, size))[0]  # type: ignore[no-any-return]
+
+
+def _store_fmt(guest: Guest, comp: int, ptr: int, fmt: str, size: int, value: int) -> None:
+    view, memory = _locate(guest, comp, ptr, size)
+    if view is not None:
+        struct.pack_into(fmt, view, ptr, value)
+    else:
+        memory.write(ptr, struct.pack(fmt, value))
 
 
 def _store_u8(guest: Guest, comp: int, ptr: int, value: int) -> None:
-    _check(guest, comp, ptr, 1)[ptr] = value & 0xFF
+    _store_fmt(guest, comp, ptr, "<B", 1, value & 0xFF)
 
 
 def _store_u16(guest: Guest, comp: int, ptr: int, value: int) -> None:
-    struct.pack_into("<H", _check(guest, comp, ptr, 2), ptr, value & 0xFFFF)
+    _store_fmt(guest, comp, ptr, "<H", 2, value & 0xFFFF)
 
 
 def _load_u8(guest: Guest, comp: int, ptr: int) -> int:
-    return _check(guest, comp, ptr, 1)[ptr]
+    return _load_fmt(guest, comp, ptr, "<B", 1)
 
 
 def _load_u16(guest: Guest, comp: int, ptr: int) -> int:
-    return struct.unpack_from("<H", _check(guest, comp, ptr, 2), ptr)[0]
+    return _load_fmt(guest, comp, ptr, "<H", 2)
 
 
 def _store_u32(guest: Guest, comp: int, ptr: int, value: int) -> None:
-    struct.pack_into("<I", _check(guest, comp, ptr, 4), ptr, value & 0xFFFFFFFF)
+    _store_fmt(guest, comp, ptr, "<I", 4, value & 0xFFFFFFFF)
 
 
 def _store_u64(guest: Guest, comp: int, ptr: int, value: int) -> None:
-    struct.pack_into("<Q", _check(guest, comp, ptr, 8), ptr, value & 0xFFFFFFFFFFFFFFFF)
+    _store_fmt(guest, comp, ptr, "<Q", 8, value & 0xFFFFFFFFFFFFFFFF)
 
 
 def _store_bytes(guest: Guest, comp: int, ptr: int, data: bytes) -> None:
-    _check(guest, comp, ptr, len(data))[ptr : ptr + len(data)] = data
+    view, memory = _locate(guest, comp, ptr, len(data))
+    if view is not None:
+        view[ptr : ptr + len(data)] = data
+    elif data:
+        memory.write(ptr, bytes(data))
 
 
 def _load_bytes(guest: Guest, comp: int, ptr: int, size: int) -> bytes:
-    return bytes(_check(guest, comp, ptr, size)[ptr : ptr + size])
+    view, memory = _locate(guest, comp, ptr, size)
+    if view is not None:
+        return bytes(view[ptr : ptr + size])
+    return _remote_read(memory, ptr, size) if size else b""
 
 
 def _alloc(guest: Guest, comp: int, align: int, size: int) -> int:
@@ -373,4 +435,4 @@ def _alloc(guest: Guest, comp: int, align: int, size: int) -> int:
 
 
 def _load_u32(guest: Guest, comp: int, ptr: int) -> int:
-    return struct.unpack_from("<I", _check(guest, comp, ptr, 4), ptr)[0]
+    return _load_fmt(guest, comp, ptr, "<I", 4)

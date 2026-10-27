@@ -73,3 +73,26 @@ def test_a_memory_that_moves_in_the_middle_of_a_call_is_followed() -> None:
         user.Instance(module(program("p2_grow.wat")), state).start("run") == (None, None)
         and bytes(out.data) == b"progab"
     )
+
+
+@pytest.mark.parametrize("wat", ["p1_report.wat", "p2_command.wat", "p2_grow.wat"])
+def test_a_memory_that_is_not_a_buffer_gives_the_same_bytes(wat: str, tmp_path: Path) -> None:
+    """The memory handed over as `read` / `write` / a size (an engine that keeps it out of this process): the same output, and what crossed is far less than the memory."""
+    export = "_start" if wat.startswith("p1") else "run"
+    outputs: list[tuple[tuple[int | None, str | None], bytes]] = []
+    remote_instance = None
+    for out_of_process in (False, True):
+        root = tmp_path / str(out_of_process)
+        root.mkdir()
+        if wat.startswith("p1"):
+            state, out = world_p1(root)
+        else:
+            out = p2.BufferOutput()
+            state = p2.State(args=ARGS, env=ENV, stdout=out)
+        instance = user.Instance(module(program(wat)), state, out_of_process=out_of_process)
+        outputs.append((instance.start(export), bytes(out.data)))
+        remote_instance = instance if out_of_process else remote_instance
+    assert outputs[0] == outputs[1] and outputs[0][1]
+    assert remote_instance is not None and remote_instance.remote is not None
+    remote = remote_instance.remote
+    assert 0 < remote.bytes_read + remote.bytes_written < len(remote_instance.memory()) // 4
