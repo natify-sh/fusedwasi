@@ -21,6 +21,7 @@ enum {
     FUSEDWASI_P2_E_NOT_PERMITTED, FUSEDWASI_P2_E_PIPE, FUSEDWASI_P2_E_READ_ONLY, FUSEDWASI_P2_E_INVALID_SEEK, FUSEDWASI_P2_E_TEXT_FILE_BUSY, FUSEDWASI_P2_E_CROSS_DEVICE
 };
 #define FUSEDWASI_P2_OK (-1) /* what the functions of this file return when nothing failed; an error-code otherwise */
+#define FUSEDWASI_P2_SYS_NOMEM (-2) /* no memory in a function of the system layer: not an error-code, the function that has the guest traps */
 
 /* descriptor-flags, path-flags, open-flags */
 enum { FUSEDWASI_P2_READ = 1, FUSEDWASI_P2_WRITE = 2, FUSEDWASI_P2_FILE_SYNC = 4, FUSEDWASI_P2_DATA_SYNC = 8, FUSEDWASI_P2_REQUESTED_SYNC = 16, FUSEDWASI_P2_MUTATE = 32 };
@@ -154,13 +155,15 @@ FUSEDWASI_P2_FN int fusedwasi_p2_need(const fusedwasi_p2_descriptor *d, uint32_t
     return flag == FUSEDWASI_P2_MUTATE ? FUSEDWASI_P2_E_READ_ONLY : FUSEDWASI_P2_E_BAD_DESCRIPTOR; /* `mutate-directory` unset: read-only (the WIT says so) */
 }
 
-/* a handle on a descriptor that the system call filled (`d` is copied) */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_descriptor_new(fusedwasi_p2_guest *g, const fusedwasi_p2_descriptor *made, uint32_t flags) {
+/* a handle on a descriptor that the system call filled (`made` is copied); 0 when there is no memory or the table is full (the function that has the guest traps: `fusedwasi_p2_handle_or_trap`) */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_descriptor_new(fusedwasi_p2_state *state, const fusedwasi_p2_descriptor *made, uint32_t flags) {
     fusedwasi_p2_descriptor *d = (fusedwasi_p2_descriptor *)malloc(sizeof *d);
-    if (!d) g->trap(g, "out of memory");
+    if (!d) return 0;
     *d = *made;
     d->flags = flags;
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_DESCRIPTOR, d, fusedwasi_p2_descriptor_destroy);
+    uint32_t handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_DESCRIPTOR, d, fusedwasi_p2_descriptor_destroy);
+    if (!handle) free(d);
+    return handle;
 }
 
 /* results */
@@ -208,9 +211,9 @@ FUSEDWASI_P2_FN void fusedwasi_p2_file_stream_set_failure(fusedwasi_p2_stream *s
     st->failure_code = code;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_file_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_file_read(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     fusedwasi_p2_file_stream *f = (fusedwasi_p2_file_stream *)st;
-    (void)g;
+    (void)state;
     *got = 0;
     if (len == 0) return FUSEDWASI_P2_STREAM_OK;
     int rc = FUSEDWASI_P2_OK;
@@ -225,15 +228,15 @@ FUSEDWASI_P2_FN int fusedwasi_p2_file_read(fusedwasi_p2_guest *g, fusedwasi_p2_s
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_file_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
-    (void)g, (void)st;
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_file_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
+    (void)state, (void)st;
     *status = FUSEDWASI_P2_STREAM_OK;
     return FUSEDWASI_P2_STREAM_CHUNK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_file_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_file_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_file_stream *f = (fusedwasi_p2_file_stream *)st;
-    (void)g;
+    (void)state;
     uint64_t at = f->pos;
     if (f->append) {
         int rc = fusedwasi_p2_sys_size(f->fd, &at);
@@ -256,8 +259,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_file_write(fusedwasi_p2_guest *g, fusedwasi_p2_
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_file_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g, (void)st;
+FUSEDWASI_P2_FN int fusedwasi_p2_file_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state, (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
@@ -267,22 +270,26 @@ FUSEDWASI_P2_FN void fusedwasi_p2_file_stream_destroy(fusedwasi_p2_state *state,
 }
 
 /* a handle on a new stream over `fd` (dup-ed); `output`: 0 reads from `pos`, 1 writes at `pos`, 2 appends */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_file_stream_new(fusedwasi_p2_guest *g, int fd, uint64_t pos, int output) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_file_stream_new(fusedwasi_p2_state *state, int fd, uint64_t pos, int output) {
     fusedwasi_p2_file_stream *f = (fusedwasi_p2_file_stream *)calloc(1, sizeof *f);
-    if (!f) g->trap(g, "out of memory");
+    if (!f) return 0;
     f->fd = fd >= 0 ? fusedwasi_p2_sys_dup(fd) : -1;
     f->pos = pos;
     f->append = output == 2;
+    uint32_t handle;
     f->base.ready = fusedwasi_p2_always_ready;
     f->base.destroy = fusedwasi_p2_file_stream_destroy;
     if (output) {
         f->base.check_write = fusedwasi_p2_file_check_write;
         f->base.write = fusedwasi_p2_file_write;
         f->base.flush = fusedwasi_p2_file_flush;
-        return fusedwasi_p2_output_stream_new(g, &f->base);
+        handle = fusedwasi_p2_output_stream_add(state, &f->base);
+    } else {
+        f->base.read = fusedwasi_p2_file_read;
+        handle = fusedwasi_p2_input_stream_add(state, &f->base);
     }
-    f->base.read = fusedwasi_p2_file_read;
-    return fusedwasi_p2_input_stream_new(g, &f->base);
+    if (!handle) fusedwasi_p2_file_stream_destroy(state, &f->base); /* closes the dup-ed descriptor */
+    return handle;
 }
 
 /* preopens */
@@ -292,7 +299,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_preopens_get_directories(fusedwas
     for (uint32_t i = 0; i < g->state->preopen_count; i++) {
         fusedwasi_p2_descriptor made;
         if (fusedwasi_p2_sys_open_directory(g->state->preopens[i].path, &made) != FUSEDWASI_P2_OK) g->trap(g, "cannot open a preopened directory");
-        uint32_t handle = fusedwasi_p2_descriptor_new(g, &made, FUSEDWASI_P2_READ | (g->state->preopens[i].writable ? FUSEDWASI_P2_MUTATE : 0));
+        uint32_t handle = fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_descriptor_new(g->state, &made, FUSEDWASI_P2_READ | (g->state->preopens[i].writable ? FUSEDWASI_P2_MUTATE : 0)));
         fusedwasi_p2_store_u32(g, comp, ptr + 12 * i, handle);
         fusedwasi_p2_string(g, comp, g->state->preopens[i].name, ptr + 12 * i + 4);
     }
@@ -325,7 +332,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_handle_result(fusedwasi_p2_guest *g, uint32_t 
 FUSEDWASI_P2_FN void fusedwasi_p2_stream_of(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, uint32_t self, uint64_t pos, int output) {
     fusedwasi_p2_descriptor *d = fusedwasi_p2_descriptor_get(g, self);
     int rc = fusedwasi_p2_need(d, output ? FUSEDWASI_P2_WRITE : FUSEDWASI_P2_READ);
-    fusedwasi_p2_handle_result(g, comp, retptr, rc, rc == FUSEDWASI_P2_OK ? fusedwasi_p2_file_stream_new(g, d->fd, pos, output) : 0);
+    fusedwasi_p2_handle_result(g, comp, retptr, rc, rc == FUSEDWASI_P2_OK ? fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_file_stream_new(g->state, d->fd, pos, output)) : 0);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read_via_stream(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t offset, uint32_t retptr) {
@@ -449,7 +456,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read_directory(f
     char **names;
     uint8_t *types;
     uint32_t count;
-    int rc = fusedwasi_p2_sys_list(d, &names, &types, &count, g);
+    int rc = fusedwasi_p2_sys_list(d, &names, &types, &count);
+    if (rc == FUSEDWASI_P2_SYS_NOMEM) g->trap(g, "out of memory");
     if (rc != FUSEDWASI_P2_OK) {
         fusedwasi_p2_handle_result(g, comp, retptr, rc, 0);
         return;
@@ -579,7 +587,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_open_at(fusedwas
             rc = fusedwasi_p2_sys_open_at(w.dir, w.leaf, open_flags, flags, &made);
             /* what a directory may do is what the directory it was opened under may do (as in Wasmtime, where a child directory gets the permissions of the preopen), and not
                what was asked for: a program of WASI 0.1 opens a directory with the rights it needs to read it and then creates files in it */
-            if (rc == FUSEDWASI_P2_OK) handle = fusedwasi_p2_descriptor_new(g, &made, made.is_dir ? (d->flags & (FUSEDWASI_P2_READ | FUSEDWASI_P2_MUTATE)) : flags);
+            if (rc == FUSEDWASI_P2_OK) handle = fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_descriptor_new(g->state, &made, made.is_dir ? (d->flags & (FUSEDWASI_P2_READ | FUSEDWASI_P2_MUTATE)) : flags));
             fusedwasi_p2_walk_close(&w);
         }
     }

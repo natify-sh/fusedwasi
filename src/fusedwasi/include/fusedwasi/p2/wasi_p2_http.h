@@ -11,6 +11,8 @@
 #include "wasi_p2_net.h"
 #include <limits.h>
 
+#include <errno.h>
+
 #include "wasi_p2_io.h"
 
 #define FUSEDWASI_P2_HTTP_MAX_BODY (1ULL << 28)
@@ -331,9 +333,14 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_fields(fusedwasi_p2_state *state,
 }
 
 /* a new handle of fields; the table has the reference the caller had */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_fields_register(fusedwasi_p2_state *state, fusedwasi_p2_http_fields *f) {
+    if (!f) return 0; /* no memory for the fields */
+    return fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_FIELDS, f, fusedwasi_p2_http_destroy_fields); /* 0 when the table is full: the caller still has its reference */
+}
+
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_fields_handle(fusedwasi_p2_guest *g, fusedwasi_p2_http_fields *f) {
     if (!f) g->trap(g, "out of memory");
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_FIELDS, f, fusedwasi_p2_http_destroy_fields);
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_http_fields_register(g->state, f));
 }
 
 FUSEDWASI_P2_FN fusedwasi_p2_http_fields *fusedwasi_p2_http_fields_get_obj(fusedwasi_p2_guest *g, uint32_t handle) {
@@ -645,19 +652,24 @@ typedef struct {
     fusedwasi_p2_http_obody *body;
 } fusedwasi_p2_http_ostream;
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_http_ostream_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
-    (void)g;
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_http_ostream_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
+    (void)state;
     *status = FUSEDWASI_P2_STREAM_OK;
     return FUSEDWASI_P2_HTTP_MAX_BODY - ((fusedwasi_p2_http_ostream *)st)->body->len;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+    (void)state;
     fusedwasi_p2_http_obody *b = ((fusedwasi_p2_http_ostream *)st)->body;
     if (b->len + len > b->capacity) {
         uint64_t cap = b->capacity ? b->capacity : 64;
         while (cap < b->len + len) cap *= 2;
         uint8_t *grown = (uint8_t *)realloc(b->buf, (size_t)cap);
-        if (!grown) g->trap(g, "out of memory");
+        if (!grown) {
+            st->failure = "out of memory";
+            st->failure_errno = ENOMEM;
+            return FUSEDWASI_P2_STREAM_FAILED;
+        }
         b->buf = grown;
         b->capacity = cap;
     }
@@ -666,15 +678,15 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_guest *g, fused
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g;
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
     (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_ready(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
     int status;
-    return fusedwasi_p2_http_ostream_check_write(g, st, &status) > 0;
+    return fusedwasi_p2_http_ostream_check_write(state, st, &status) > 0;
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_http_ostream_destroy(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
@@ -1020,8 +1032,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_drop(fusedwasi_p2_g
     fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_INCOMING_BODY);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ready_always(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
-    (void)g;
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ready_always(fusedwasi_p2_state *state, fusedwasi_p2_pollable *p) {
+    (void)state;
     (void)p;
     return 1;
 }
@@ -1713,8 +1725,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_future_fail(fusedwasi_p2_http_future *f, 
     f->failed = 1;
 }
 
-/* Sends the request if it is time to. Returns 1 when the answer (or the failure) is there. */
-FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_guest *g, fusedwasi_p2_http_future *f) {
+/* Sends the request if it is time to. Returns 1 when the answer (or the failure) is there, 0 when not yet, -1 when there is no memory to keep the answer. */
+FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_state *state, fusedwasi_p2_http_future *f) {
     if (f->done) return 1;
     fusedwasi_p2_http_obody *body = f->request->body;
     if (body && !(body->finished || body->abandoned)) return 0;
@@ -1740,7 +1752,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_guest *g, fuse
     memset(&resp, 0, sizeof resp);
     fusedwasi_p2_http_error err;
     fusedwasi_p2_http_error_init(&err, 0);
-    int rc = (g->state->http_send ? g->state->http_send : fusedwasi_p2_http_default_send)(g->state, &req, &resp, &err);
+    int rc = (state->http_send ? state->http_send : fusedwasi_p2_http_default_send)(state, &req, &resp, &err);
     if (rc != 0) {
         fusedwasi_p2_http_error_free(&f->error);
         f->error = err;
@@ -1749,7 +1761,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_guest *g, fuse
     }
     fusedwasi_p2_http_error_free(&err);
     fusedwasi_p2_http_iresponse *r = (fusedwasi_p2_http_iresponse *)calloc(1, sizeof *r);
-    if (!r) g->trap(g, "out of memory");
+    if (!r) return -1;
     r->status = resp.status;
     r->headers = resp.headers;
     r->headers->immutable = 1;
@@ -1760,7 +1772,11 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_guest *g, fuse
     return 1;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_future_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) { return fusedwasi_p2_http_future_advance(g, (fusedwasi_p2_http_future *)p->ctx); }
+FUSEDWASI_P2_FN int fusedwasi_p2_http_future_ready(fusedwasi_p2_state *state, fusedwasi_p2_pollable *p) {
+    int r = fusedwasi_p2_http_future_advance(state, (fusedwasi_p2_http_future *)p->ctx);
+    if (r < 0) p->failure = "out of memory";
+    return r;
+}
 
 FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future_pollable(fusedwasi_p2_state *state, void *obj) {
     (void)state;
@@ -1820,7 +1836,9 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_future_incoming_response_subs
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_incoming_response_get(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_http_future *f = fusedwasi_p2_http_future_get(g, self);
-    if (!fusedwasi_p2_http_future_advance(g, f)) {
+    int advanced = fusedwasi_p2_http_future_advance(g->state, f);
+    if (advanced < 0) g->trap(g, "out of memory");
+    if (!advanced) {
         fusedwasi_p2_store_u8(g, comp, retptr, 0);
         return;
     }
@@ -1884,12 +1902,12 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_irequest(fusedwasi_p2_state *stat
     free(r);
 }
 
-/* A request for the guest (its handle). `path`, `scheme` and `authority` may be NULL; `scheme` is "http", "https" or another text. The strings and the body are copied; `headers`
+/* A request for the guests of a state (its handle in the table of the state; 0 when there is no memory or the table is full, nothing is kept then). `path`, `scheme` and `authority` may be NULL; `scheme` is "http", "https" or another text. The strings and the body are copied; `headers`
    and `trailers` (may be NULL) are fields the caller made with fusedwasi_p2_http_fields_new: the request takes a reference of its own and makes them immutable. */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_guest *g, const char *method, const char *path, const char *scheme, const char *authority,
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_state *state, const char *method, const char *path, const char *scheme, const char *authority,
                                                       fusedwasi_p2_http_fields *headers, const void *body, uint64_t body_len, fusedwasi_p2_http_fields *trailers) {
     fusedwasi_p2_http_irequest *r = (fusedwasi_p2_http_irequest *)calloc(1, sizeof *r);
-    if (!r) g->trap(g, "out of memory");
+    if (!r) return 0;
     r->method = fusedwasi_p2_http_dup(method, strlen(method));
     r->path = path ? fusedwasi_p2_http_dup(path, strlen(path)) : NULL;
     r->scheme = scheme ? fusedwasi_p2_http_dup(scheme, strlen(scheme)) : NULL;
@@ -1900,7 +1918,9 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_gue
     r->payload.blob = fusedwasi_p2_http_blob_new(body, body_len);
     r->payload.trailers = trailers;
     if (trailers) fusedwasi_p2_http_fields_ref(trailers), trailers->immutable = 1;
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_INCOMING_REQUEST, r, fusedwasi_p2_http_destroy_irequest);
+    uint32_t handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_INCOMING_REQUEST, r, fusedwasi_p2_http_destroy_irequest);
+    if (!handle) fusedwasi_p2_http_destroy_irequest(state, r); /* releases what the request took */
+    return handle;
 }
 
 FUSEDWASI_P2_FN fusedwasi_p2_http_irequest *fusedwasi_p2_http_irequest_get(fusedwasi_p2_guest *g, uint32_t handle) {
@@ -1983,12 +2003,18 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_outparam(fusedwasi_p2_state *stat
     fusedwasi_p2_http_outparam_release(p);
 }
 
-/* makes the place for an answer; returns it (the caller releases it with fusedwasi_p2_http_outparam_release) and gives the handle for the guest */
-FUSEDWASI_P2_FN fusedwasi_p2_http_outparam *fusedwasi_p2_http_outparam_new(fusedwasi_p2_guest *g, uint32_t *handle) {
+/* makes the place for an answer; returns it (the caller releases it with fusedwasi_p2_http_outparam_release) and gives the handle for the guest. NULL (and `*handle` 0) when there is
+   no memory or the table is full. */
+FUSEDWASI_P2_FN fusedwasi_p2_http_outparam *fusedwasi_p2_http_outparam_new(fusedwasi_p2_state *state, uint32_t *handle) {
     fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)calloc(1, sizeof *p);
-    if (!p) g->trap(g, "out of memory");
+    *handle = 0;
+    if (!p) return NULL;
     p->refs = 2; /* the caller and the handle */
-    *handle = fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM, p, fusedwasi_p2_http_destroy_outparam);
+    *handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM, p, fusedwasi_p2_http_destroy_outparam);
+    if (!*handle) {
+        free(p);
+        return NULL;
+    }
     return p;
 }
 

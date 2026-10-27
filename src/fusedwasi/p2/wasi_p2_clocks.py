@@ -6,7 +6,7 @@ argument (the canonical ABI); `datetime` is a record `{seconds: u64, nanoseconds
 
 from __future__ import annotations
 
-from .wasi_p2_core import KIND_POLLABLE, Guest, Pollable, store_u32, store_u64, table_new
+from .wasi_p2_core import KIND_POLLABLE, Guest, Pollable, State, store_u32, store_u64, table_new
 
 _NS = 1_000_000_000
 _MAX_U64 = (1 << 64) - 1
@@ -41,8 +41,8 @@ class DeadlinePollable(Pollable):
     def __init__(self, deadline: int) -> None:
         self.deadline = deadline
 
-    def ready(self, guest: Guest) -> bool:
-        return guest.state.clock(1) >= self.deadline
+    def ready(self, state: State) -> bool:
+        return state.clock(1) >= self.deadline
 
 
 def wasi_clocks_monotonic_clock_subscribe_instant(guest: Guest, when: int) -> int:

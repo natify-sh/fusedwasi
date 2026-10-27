@@ -67,6 +67,13 @@ guest = Guest(
 cli.wasi_cli_environment_get_arguments(guest, 0, ptr)
 ```
 
+The streams and pollables belong to the state: they take the state, never a guest, and never trap (a failure is a return value), so they can be made while the state is configured, before any guest exists:
+
+```c
+fusedwasi_p2_fd_stream *out = fusedwasi_p2_fd_output_new(&state, 1);   /* NULL when there is no memory */
+state.std[1] = &out->base;
+```
+
 For 0.1 the same two parts: `fusedwasi_p1_state` (made by `fusedwasi_p1_create` over a state of 0.2) and `fusedwasi_p1_guest` (`fusedwasi_p1_guest_init(&g, p1_state)`; its guest of 0.2 is `g.core`, and `fusedwasi_p1_bind(&g, &m->data, &m->size)` binds the memory); in Python `fusedwasi.p1.wasi_p1_core.State` and `Guest`.
 
 | Part | What the host gives | What the library does |

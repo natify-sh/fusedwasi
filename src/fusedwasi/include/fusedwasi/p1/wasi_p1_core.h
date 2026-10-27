@@ -707,7 +707,7 @@ static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_guest *g, uint32_t fd
         fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
         if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
         if (len == 0) continue;
-        int result = st->write(&g->core, st, FUSEDWASI_P1_MEM(g) + base, len);
+        int result = st->write(g->state->core, st, FUSEDWASI_P1_MEM(g) + base, len);
         if (result != FUSEDWASI_P2_STREAM_OK) {
             if (total == 0) return fusedwasi_p1_stream_status(result, st);
             break;
@@ -734,7 +734,7 @@ static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_guest *g, uint32_t iov
     if (len) {
         fusedwasi_p2_stream *st = fusedwasi_p2_std(&g->core, 0);
         for (;;) {  /* a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end */
-            int result = st->read(&g->core, st, FUSEDWASI_P1_MEM(g) + base, len, &got);
+            int result = st->read(g->state->core, st, FUSEDWASI_P1_MEM(g) + base, len, &got);
             if (result == FUSEDWASI_P2_STREAM_FAILED) return fusedwasi_p1_stream_status(result, st);
             if (result == FUSEDWASI_P2_STREAM_CLOSED) {
                 got = 0;
@@ -1372,7 +1372,8 @@ static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_
     char **names;
     uint8_t *types;
     uint32_t count;
-    int code = fusedwasi_p2_sys_list(&e->d, &names, &types, &count, &g->core);
+    int code = fusedwasi_p2_sys_list(&e->d, &names, &types, &count);
+    if (code == FUSEDWASI_P2_SYS_NOMEM) g->core.trap(&g->core, "out of memory");
     if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
     uint32_t rc = FUSEDWASI_P1_E_SUCCESS;
     for (uint32_t i = 0; i < count + 2 && rc == FUSEDWASI_P1_E_SUCCESS; i++) {  /* "." and "..", then the names */

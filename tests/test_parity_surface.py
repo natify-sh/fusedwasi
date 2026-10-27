@@ -561,3 +561,57 @@ def test_the_hooks_of_the_guest_in_python() -> None:
     assert [wasi_p1.proc_raise(p1, n) for n in (0, 9, 31)] == [0, wasi_p1_core.E_PERM, wasi_p1_core.E_INVAL]
     assert asked == [9]
     assert wasi_p1.proc_raise(P1Guest(P1State(), bytearray(16)), 9) == wasi_p1_core.E_NOTSUP
+
+
+# ---- the objects of the world need no guest --------------------------------------------------------------------------------------
+
+BARE_STATE_C = """#include <stdio.h>
+#include "wasi_p2_cli.h"
+static void on_trap(fusedwasi_p2_guest *g, const char *m) { (void)g; printf("TRAP %s\\n", m); exit(0); }
+static uint32_t at_44(fusedwasi_p2_guest *g, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) { (void)g, (void)comp, (void)old_ptr, (void)old_size, (void)align, (void)new_size; return 44; }
+int main(void) {
+    static uint8_t memory[64];
+    fusedwasi_p2_state world;
+    fusedwasi_p2_init(&world);
+    /* no guest yet: the streams are made and given to the state while it is configured */
+    uint32_t hin = fusedwasi_p2_memory_input_new(&world, (const uint8_t *)"in!", 3), hout;
+    fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 100, &hout);
+    world.std[0] = (fusedwasi_p2_stream *)world.slots[hin & FUSEDWASI_P2_INDEX_MASK].obj;
+    world.std[1] = &bo->base;
+    fusedwasi_p2_fd_stream *fd = fusedwasi_p2_fd_output_new(&world, 2);
+    world.std[2] = &fd->base;
+    printf("made %d %d %d\\n", hin != 0, hout != 0, bo != NULL && fd != NULL);
+    fusedwasi_p2_guest g;
+    fusedwasi_p2_guest_init(&g, &world);
+    g.trap = on_trap;
+    g.realloc = at_44;
+    fusedwasi_p2_set_memory(&g, 0, memory, sizeof memory);
+    memcpy(memory, "hi", 2);
+    uint32_t in = fusedwasi_wasi_cli_stdin_get_stdin(&g), out = fusedwasi_wasi_cli_stdout_get_stdout(&g);
+    fusedwasi_wasi_io_streams_output_stream_write(&g, 0, out, 0, 2, 16);
+    fusedwasi_wasi_io_streams_input_stream_read(&g, 0, in, 10, 32);
+    printf("tag %d len %u data %.3s\\n", memory[32], (unsigned)fusedwasi_p2_load_u32(&g, 0, 40), (const char *)memory + 44);
+    printf("stdout %.*s\\n", (int)bo->len, bo->buf);
+    fusedwasi_p2_free(&world);
+    fusedwasi_p2_buffer_output_release(bo);
+    free(fd);
+    return 0;
+}
+"""
+
+
+def test_streams_are_made_and_given_to_a_bare_state_with_no_guest(tmp_path: Path) -> None:
+    out = build_and_run(tmp_path, BARE_STATE_C).splitlines()
+    assert out[0] == "made 1 1 1"
+    stdin, stdout = io.MemoryInput(b"in!"), io.BufferOutput(100)
+    state = State(stdin=stdin, stdout=stdout)  # no guest: only the world
+    assert io.input_stream_add(state, io.MemoryInput(b"x")) != 0 and io.output_stream_add(state, io.BufferOutput()) != 0
+    memory = bytearray(64)
+    memory[0:2] = b"hi"
+    guest = Guest(state, [memory], realloc=lambda comp, old_ptr, old_size, align, size: 44)
+    h_in, h_out = cli.wasi_cli_stdin_get_stdin(guest), cli.wasi_cli_stdout_get_stdout(guest)
+    io.wasi_io_streams_output_stream_write(guest, 0, h_out, 0, 2, 16)
+    io.wasi_io_streams_input_stream_read(guest, 0, h_in, 10, 32)
+    assert out[2] == f"stdout {bytes(stdout.data).decode()}" == "stdout hi"
+    assert memory[16] == 0 and memory[32] == 0 and bytes(memory[44:47]) == b"in!"
+    assert out[1] == "tag 0 len 3 data in!"

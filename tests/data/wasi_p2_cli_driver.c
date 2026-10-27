@@ -44,8 +44,8 @@ int main(int argc, char **argv) {
     int out_pipe[2] = {-1, -1};
     if (!strcmp(scenario, "main")) {
         world.terminals = FUSEDWASI_P2_TERMINAL_STDOUT;
-        uint32_t hi = fusedwasi_p2_memory_input_new(&s, (const uint8_t *)"in!", 3), ho;
-        fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&s, 100, &ho);
+        uint32_t hi = fusedwasi_p2_memory_input_new(&world, (const uint8_t *)"in!", 3), ho;
+        fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 100, &ho);
         world.std[0] = fusedwasi_p2_table_get(&s, hi, FUSEDWASI_P2_KIND_INPUT_STREAM)->obj;
         world.std[1] = &bo->base;
         printf("handles %u %u\n", hi, ho);
@@ -75,8 +75,8 @@ int main(int argc, char **argv) {
         if (pipe(in_pipe) || pipe(out_pipe)) return 2;
         if (write(in_pipe[1], "pipe!", 5) != 5) return 2;
         close(in_pipe[1]);
-        fin = fusedwasi_p2_fd_input_new(&s, in_pipe[0]);
-        fout = fusedwasi_p2_fd_output_new(&s, out_pipe[1]);
+        fin = fusedwasi_p2_fd_input_new(&world, in_pipe[0]);
+        fout = fusedwasi_p2_fd_output_new(&world, out_pipe[1]);
         world.std[0] = &fin->base, world.std[1] = &fout->base;
         uint32_t a = fusedwasi_wasi_cli_stdin_get_stdin(&s), b = fusedwasi_wasi_cli_stdout_get_stdout(&s);
         printf("std handles %u %u\n", a, b);

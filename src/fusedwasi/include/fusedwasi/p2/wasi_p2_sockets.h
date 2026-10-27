@@ -337,9 +337,9 @@ FUSEDWASI_P2_FN void fusedwasi_p2_sock_fail(fusedwasi_p2_stream *st, int e, cons
     st->failure_network_code = fusedwasi_p2_net_errno(e);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)g;
+    (void)state;
     *got = 0;
     if (t->recv_shut || t->state == FUSEDWASI_P2_SS_CLOSED) return FUSEDWASI_P2_STREAM_CLOSED;
     if (len == 0) return FUSEDWASI_P2_STREAM_OK;
@@ -354,22 +354,22 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_guest *g, fusedwasi_p2_s
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_in_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_in_ready(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)g;
+    (void)state;
     return t->recv_shut || t->state == FUSEDWASI_P2_SS_CLOSED || fusedwasi_p2_poll_fd(t->fd, POLLIN);
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_sock_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_sock_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)g;
+    (void)state;
     *status = t->send_shut || t->state == FUSEDWASI_P2_SS_CLOSED ? FUSEDWASI_P2_STREAM_CLOSED : FUSEDWASI_P2_STREAM_OK;
     return *status == FUSEDWASI_P2_STREAM_OK ? FUSEDWASI_P2_SOCK_CHUNK : 0;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)g;
+    (void)state;
     while (len) {
         fusedwasi_p2_ssize n = FUSEDWASI_P2_SEND(t->fd, data, (size_t)len, FUSEDWASI_P2_MSG_NOSIGNAL);
         if (n < 0) {
@@ -388,40 +388,49 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_guest *g, fusedwasi_p2_
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g, (void)st;
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state, (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_out_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_out_ready(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)g;
+    (void)state;
     return t->send_shut || t->state == FUSEDWASI_P2_SS_CLOSED || fusedwasi_p2_poll_fd(t->fd, POLLOUT);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_stream_new(fusedwasi_p2_guest *g, fusedwasi_p2_tcp *t, int output) {
+/* a handle on a new stream of the socket, in the table of the state: 0 when there is no memory or the table is full (nothing is changed) */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_stream_new(fusedwasi_p2_state *state, fusedwasi_p2_tcp *t, int output) {
     fusedwasi_p2_sock_stream *st = (fusedwasi_p2_sock_stream *)calloc(1, sizeof *st);
-    if (!st) g->trap(g, "out of memory");
+    uint32_t handle;
+    if (!st) return 0;
     st->t = t;
-    t->refs++;
     st->base.destroy = fusedwasi_p2_sock_stream_destroy;
     if (output) {
         st->base.check_write = fusedwasi_p2_sock_check_write;
         st->base.write = fusedwasi_p2_sock_write;
         st->base.flush = fusedwasi_p2_sock_flush;
         st->base.ready = fusedwasi_p2_sock_out_ready;
-        return fusedwasi_p2_output_stream_new(g, &st->base);
+        handle = fusedwasi_p2_output_stream_add(state, &st->base);
+    } else {
+        st->base.read = fusedwasi_p2_sock_read;
+        st->base.ready = fusedwasi_p2_sock_in_ready;
+        handle = fusedwasi_p2_input_stream_add(state, &st->base);
     }
-    st->base.read = fusedwasi_p2_sock_read;
-    st->base.ready = fusedwasi_p2_sock_in_ready;
-    return fusedwasi_p2_input_stream_new(g, &st->base);
+    if (!handle) {
+        free(st);
+        return 0;
+    }
+    t->refs++;
+    return handle;
 }
 
 /* tcp-create-socket */
 
-FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_make(fusedwasi_p2_guest *g, int family, int fd, int state) {
+/* NULL when there is no memory */
+FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_make(int family, int fd, int state) {
     fusedwasi_p2_tcp *t = (fusedwasi_p2_tcp *)calloc(1, sizeof *t);
-    if (!t) g->trap(g, "out of memory");
+    if (!t) return NULL;
     t->fd = fd, t->family = family, t->state = state, t->backlog = 128, t->refs = 1;
     return t;
 }
@@ -434,8 +443,9 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_create_socket_create_tcp_socket(
         return;
     }
     fusedwasi_p2_ok(g, comp, retptr);
-    fusedwasi_p2_store_u32(g, comp, retptr + 4,
-                      fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, fusedwasi_p2_tcp_make(g, (int)address_family, fd, FUSEDWASI_P2_SS_UNBOUND), fusedwasi_p2_tcp_destroy));
+    fusedwasi_p2_tcp *made = fusedwasi_p2_tcp_make((int)address_family, fd, FUSEDWASI_P2_SS_UNBOUND);
+    if (!made) g->trap(g, "out of memory");
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, made, fusedwasi_p2_tcp_destroy));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_drop(fusedwasi_p2_guest *g, uint32_t h) {
@@ -526,8 +536,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_connect(fusedw
         return;
     }
     fusedwasi_p2_ok(g, comp, retptr);
-    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_sock_stream_new(g, t, 0));
-    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_sock_stream_new(g, t, 1));
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_stream_new(g->state, t, 0)));
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_stream_new(g->state, t, 1)));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_listen(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -563,11 +573,12 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_g
         return;
     }
     FUSEDWASI_P2_CLOEXEC(fd);
-    fusedwasi_p2_tcp *conn = fusedwasi_p2_tcp_make(g, t->family, fd, FUSEDWASI_P2_SS_CONNECTED);
+    fusedwasi_p2_tcp *conn = fusedwasi_p2_tcp_make(t->family, fd, FUSEDWASI_P2_SS_CONNECTED);
+    if (!conn) g->trap(g, "out of memory");
     fusedwasi_p2_ok(g, comp, retptr);
     fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, conn, fusedwasi_p2_tcp_destroy));
-    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_sock_stream_new(g, conn, 0));
-    fusedwasi_p2_store_u32(g, comp, retptr + 12, fusedwasi_p2_sock_stream_new(g, conn, 1));
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_stream_new(g->state, conn, 0)));
+    fusedwasi_p2_store_u32(g, comp, retptr + 12, fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_stream_new(g->state, conn, 1)));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_address_result(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, int rc, const fusedwasi_p2_addr *a) {
@@ -781,9 +792,9 @@ typedef struct {
     fusedwasi_p2_udp *u;
 } fusedwasi_p2_sock_poll;
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_poll_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_poll_ready(fusedwasi_p2_state *state, fusedwasi_p2_pollable *p) {
     fusedwasi_p2_sock_poll *sp = (fusedwasi_p2_sock_poll *)p->ctx;
-    (void)g;
+    (void)state;
     switch (sp->kind) {
     case 0:
         if (sp->t->state == FUSEDWASI_P2_SS_CONNECT_IN_PROGRESS) return fusedwasi_p2_poll_fd(sp->t->fd, POLLOUT);
@@ -806,20 +817,29 @@ FUSEDWASI_P2_FN void fusedwasi_p2_sock_poll_destroy(fusedwasi_p2_state *state, v
     free(p);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_pollable(fusedwasi_p2_guest *g, int kind, fusedwasi_p2_tcp *t, fusedwasi_p2_udp *u) {
+/* a pollable on the socket, in the table of the state: 0 when there is no memory or the table is full (nothing is changed) */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_pollable(fusedwasi_p2_state *state, int kind, fusedwasi_p2_tcp *t, fusedwasi_p2_udp *u) {
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
     fusedwasi_p2_sock_poll *sp = (fusedwasi_p2_sock_poll *)calloc(1, sizeof *sp);
-    if (!p || !sp) g->trap(g, "out of memory");
-    sp->kind = kind, sp->t = t, sp->u = u;
+    uint32_t handle = 0;
+    if (p && sp) {
+        sp->kind = kind, sp->t = t, sp->u = u;
+        p->ready = fusedwasi_p2_sock_poll_ready;
+        p->ctx = sp;
+        handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_sock_poll_destroy);
+    }
+    if (!handle) {
+        free(p);
+        free(sp);
+        return 0;
+    }
     if (t) t->refs++;
     if (u) u->refs++;
-    p->ready = fusedwasi_p2_sock_poll_ready;
-    p->ctx = sp;
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_sock_poll_destroy);
+    return handle;
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(g, 0, fusedwasi_p2_tcp_get(g, self), NULL);
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_pollable(g->state, 0, fusedwasi_p2_tcp_get(g, self), NULL));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_shutdown(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t shutdown_type, uint32_t retptr) {
@@ -904,12 +924,18 @@ FUSEDWASI_P2_FN void fusedwasi_p2_dgram_destroy(fusedwasi_p2_state *state, void 
     free(d);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_dgram_stream_new(fusedwasi_p2_guest *g, fusedwasi_p2_udp *u, uint32_t kind) {
+/* 0 when there is no memory or the table is full (nothing is changed) */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_dgram_stream_new(fusedwasi_p2_state *state, fusedwasi_p2_udp *u, uint32_t kind) {
     fusedwasi_p2_dgram_stream *d = (fusedwasi_p2_dgram_stream *)calloc(1, sizeof *d);
-    if (!d) g->trap(g, "out of memory");
+    if (!d) return 0;
     d->u = u;
+    uint32_t handle = fusedwasi_p2_table_add(state, kind, d, fusedwasi_p2_dgram_destroy);
+    if (!handle) {
+        free(d);
+        return 0;
+    }
     u->refs++;
-    return fusedwasi_p2_table_new(g, kind, d, fusedwasi_p2_dgram_destroy);
+    return handle;
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_stream(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t remote_tag, uint32_t tag, uint32_t p1, uint32_t p2,
@@ -929,8 +955,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_stream(fusedwasi_p2_g
     if (u->has_remote) u->remote = a;
     fusedwasi_p2_ok(g, comp, retptr);
     /* the handles of the two streams; their kinds free them with a reference to the socket */
-    uint32_t in = fusedwasi_p2_dgram_stream_new(g, u, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM);
-    uint32_t out = fusedwasi_p2_dgram_stream_new(g, u, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM);
+    uint32_t in = fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_dgram_stream_new(g->state, u, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM));
+    uint32_t out = fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_dgram_stream_new(g->state, u, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM));
     fusedwasi_p2_store_u32(g, comp, retptr + 4, in);
     fusedwasi_p2_store_u32(g, comp, retptr + 8, out);
 }
@@ -989,7 +1015,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_send_buffer_size(
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_udp_socket_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(g, 3, NULL, fusedwasi_p2_udp_get(g, self));
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_pollable(g->state, 3, NULL, fusedwasi_p2_udp_get(g, self)));
 }
 
 FUSEDWASI_P2_FN fusedwasi_p2_dgram_stream *fusedwasi_p2_incoming_get(fusedwasi_p2_guest *g, uint32_t h) {
@@ -1069,7 +1095,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_incoming_datagram_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(g, 1, NULL, fusedwasi_p2_incoming_get(g, self)->u);
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_pollable(g->state, 1, NULL, fusedwasi_p2_incoming_get(g, self)->u));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -1137,7 +1163,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(fu
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(g, 2, NULL, fusedwasi_p2_outgoing_get(g, self)->u);
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_pollable(g->state, 2, NULL, fusedwasi_p2_outgoing_get(g, self)->u));
 }
 
 /* ip-name-lookup */
@@ -1250,7 +1276,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_strea
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
     fusedwasi_p2_table_get(g, self, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
-    return fusedwasi_p2_sock_pollable(g, 4, NULL, NULL);
+    return fusedwasi_p2_handle_or_trap(g, fusedwasi_p2_sock_pollable(g->state, 4, NULL, NULL));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_drop(fusedwasi_p2_guest *g, uint32_t h) {

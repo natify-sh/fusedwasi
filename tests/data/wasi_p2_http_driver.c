@@ -547,7 +547,7 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "server")) {
         fusedwasi_p2_http_fields *h = fusedwasi_p2_http_fields_new(1), *t = fusedwasi_p2_http_fields_new(1);
         fusedwasi_p2_http_fields_add(h, "A", 1, "1", 1), fusedwasi_p2_http_fields_add(h, "a", 1, "2", 1), fusedwasi_p2_http_fields_add(t, "t", 1, "v", 1);
-        uint32_t req = fusedwasi_p2_http_incoming_request_new(&s, "PUT", "/x?y=1", "https", "svc.test", h, "payload", 7, t);
+        uint32_t req = fusedwasi_p2_http_incoming_request_new(&world, "PUT", "/x?y=1", "https", "svc.test", h, "payload", 7, t);
         fusedwasi_p2_http_fields_unref(h), fusedwasi_p2_http_fields_unref(t);
         clear();
         fusedwasi_wasi_http_types_incoming_request_method(&s, 0, req, R);
@@ -582,7 +582,7 @@ int main(int argc, char **argv) {
         fusedwasi_wasi_http_types_future_trailers_get(&s, 0, trailers, R);
         show_entries("trailer", u32(R + 28));
         uint32_t param;
-        fusedwasi_p2_http_outparam *out = fusedwasi_p2_http_outparam_new(&s, &param);
+        fusedwasi_p2_http_outparam *out = fusedwasi_p2_http_outparam_new(&world, &param);
         uint32_t resp_h = fusedwasi_wasi_http_types_outgoing_response_new(&s, fields((struct kv[]){{"Content-Type", "text/plain"}, {NULL, NULL}}));
         printf("set-status %u\n", fusedwasi_wasi_http_types_outgoing_response_set_status_code(&s, resp_h, 418));
         clear();
@@ -610,7 +610,7 @@ int main(int argc, char **argv) {
         for (uint32_t i = 0; i < r->headers->count; i++) printf("  %s: %.*s\n", r->headers->e[i].name, (int)r->headers->e[i].len, r->headers->e[i].value);
         fusedwasi_p2_http_outparam_release(out);
         uint32_t param2;
-        fusedwasi_p2_http_outparam *out2 = fusedwasi_p2_http_outparam_new(&s, &param2);
+        fusedwasi_p2_http_outparam *out2 = fusedwasi_p2_http_outparam_new(&world, &param2);
         fusedwasi_wasi_http_types_response_outparam_drop(&s, param2);
         printf("dropped without a response: "), describe(&out2->error), printf("\n");
         fusedwasi_p2_http_outparam_release(out2);
@@ -631,7 +631,7 @@ int main(int argc, char **argv) {
         };
         for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
             uint32_t param;
-            fusedwasi_p2_http_outparam *o = fusedwasi_p2_http_outparam_new(&s, &param);
+            fusedwasi_p2_http_outparam *o = fusedwasi_p2_http_outparam_new(&world, &param);
             uint64_t *c = cases[i];
             fusedwasi_wasi_http_types_response_outparam_set(&s, 0, param, 1, c[0], c[1], c[2], c[3], c[4], c[5], c[6]);
             printf("%u: ", (unsigned)c[0]), describe(&o->error), printf("\n");

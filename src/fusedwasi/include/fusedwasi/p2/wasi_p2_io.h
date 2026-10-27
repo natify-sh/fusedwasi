@@ -6,18 +6,22 @@
 #ifndef FUSEDWASI_P2_IO_H
 #define FUSEDWASI_P2_IO_H
 
+#include <errno.h>
+
 #include "wasi_p2_clocks.h" /* the deadline pollables share the table and fusedwasi_p2_free_obj */
 
 #define FUSEDWASI_P2_READ_CAP 65536u
 
 enum { FUSEDWASI_P2_STREAM_OK = 0, FUSEDWASI_P2_STREAM_CLOSED = 1, FUSEDWASI_P2_STREAM_FAILED = 2 };
 
+/* The callbacks are the world's, not the guest's: they take the state, never trap, and tell a failure by their return value (FUSEDWASI_P2_STREAM_FAILED with `failure`, also for
+   an allocation that failed: "out of memory"). The WASI function that called has the guest and decides what the guest sees. */
 typedef struct fusedwasi_p2_stream {
-    int (*read)(fusedwasi_p2_guest *g, struct fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got);
-    uint64_t (*check_write)(fusedwasi_p2_guest *g, struct fusedwasi_p2_stream *st, int *status);
-    int (*write)(fusedwasi_p2_guest *g, struct fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len);
-    int (*flush)(fusedwasi_p2_guest *g, struct fusedwasi_p2_stream *st);
-    int (*ready)(fusedwasi_p2_guest *g, struct fusedwasi_p2_stream *st);
+    int (*read)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got);
+    uint64_t (*check_write)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st, int *status);
+    int (*write)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len);
+    int (*flush)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st);
+    int (*ready)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st);
     void (*destroy)(fusedwasi_p2_state *state, struct fusedwasi_p2_stream *st); /* when the handle is dropped, or the state is freed; may be NULL */
     const char *failure;
     int failure_has_code, failure_code; /* the error-code of wasi:filesystem, when the failure came from a file */
@@ -36,48 +40,58 @@ typedef struct {
 } fusedwasi_p2_error;
 
 /* The calls of a stream under the rule of `stream-error`: after FAILED the stream is closed. */
-FUSEDWASI_P2_FN int fusedwasi_p2_s_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_s_read(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     *got = 0;
     if (st->dead) return FUSEDWASI_P2_STREAM_CLOSED;
-    int r = st->read(g, st, buf, len, got);
+    int r = st->read(state, st, buf, len, got);
     if (r == FUSEDWASI_P2_STREAM_FAILED) st->dead = 1;
     return r;
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_s_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_s_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
     if (st->dead) {
         *status = FUSEDWASI_P2_STREAM_CLOSED;
         return 0;
     }
-    uint64_t n = st->check_write(g, st, status);
+    uint64_t n = st->check_write(state, st, status);
     if (*status == FUSEDWASI_P2_STREAM_FAILED) st->dead = 1;
     return n;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_s_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_s_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     if (st->dead) return FUSEDWASI_P2_STREAM_CLOSED;
-    int r = st->write(g, st, data, len);
+    int r = st->write(state, st, data, len);
     if (r == FUSEDWASI_P2_STREAM_FAILED) st->dead = 1;
     return r;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_s_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_s_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
     if (st->dead) return FUSEDWASI_P2_STREAM_CLOSED;
-    int r = st->flush(g, st);
+    int r = st->flush(state, st);
     if (r == FUSEDWASI_P2_STREAM_FAILED) st->dead = 1;
     return r;
 }
 
 /* making resources for the guest */
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_error_new_codes(fusedwasi_p2_guest *g, const char *message, int code, int network_code) {
+/* An `error` resource in the table of the state: the handle, or 0 when there is no memory (nothing is changed). */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_error_add(fusedwasi_p2_state *state, const char *message, int code, int network_code) {
     size_t n = strlen(message) + 1;
     fusedwasi_p2_error *e = (fusedwasi_p2_error *)malloc(sizeof *e + n);
-    if (!e) g->trap(g, "out of memory");
+    if (!e) return 0;
     e->code = code;
     e->network_code = network_code;
     memcpy(e->message, message, n);
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_ERROR, e, fusedwasi_p2_free_obj);
+    uint32_t handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_ERROR, e, fusedwasi_p2_free_obj);
+    if (!handle) free(e);
+    return handle;
+}
+
+/* The same in a WASI function: no memory or a full table is a trap. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_error_new_codes(fusedwasi_p2_guest *g, const char *message, int code, int network_code) {
+    uint32_t handle = fusedwasi_p2_error_add(g->state, message, code, network_code);
+    if (!handle) g->trap(g, g->state->slot_count > FUSEDWASI_P2_INDEX_MASK ? "table of handles is full" : "out of memory");
+    return handle;
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_error_new_code(fusedwasi_p2_guest *g, const char *message, int code) { return fusedwasi_p2_error_new_codes(g, message, code, -1); }
@@ -87,6 +101,16 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_error_new(fusedwasi_p2_guest *g, const cha
 FUSEDWASI_P2_FN void fusedwasi_p2_stream_destroy(fusedwasi_p2_state *state, void *obj) {
     fusedwasi_p2_stream *st = (fusedwasi_p2_stream *)obj;
     if (st->destroy) st->destroy(state, st);
+}
+
+/* A stream of the caller in the table of the state, as an input or an output stream: the handle, or 0 when the table is full or there is no memory (the stream is not touched). No guest
+   is needed, so a state can be given its streams while it is configured. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_input_stream_add(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    return fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_INPUT_STREAM, st, fusedwasi_p2_stream_destroy);
+}
+
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_output_stream_add(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    return fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_OUTPUT_STREAM, st, fusedwasi_p2_stream_destroy);
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_input_stream_new(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
@@ -104,9 +128,9 @@ typedef struct {
     uint64_t len, pos;
 } fusedwasi_p2_memory_input;
 
-FUSEDWASI_P2_FN int fusedwasi_p2_memory_input_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_memory_input_read(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     fusedwasi_p2_memory_input *m = (fusedwasi_p2_memory_input *)st;
-    (void)g;
+    (void)state;
     if (m->pos >= m->len && len) return FUSEDWASI_P2_STREAM_CLOSED;
     uint64_t n = m->len - m->pos < len ? m->len - m->pos : len;
     memcpy(buf, m->data + m->pos, (size_t)n);
@@ -115,8 +139,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_memory_input_read(fusedwasi_p2_guest *g, fusedw
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_always_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g;
+FUSEDWASI_P2_FN int fusedwasi_p2_always_ready(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
     (void)st;
     return 1;
 }
@@ -126,15 +150,18 @@ FUSEDWASI_P2_FN void fusedwasi_p2_stream_free(fusedwasi_p2_state *state, fusedwa
     free(st);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_memory_input_new(fusedwasi_p2_guest *g, const uint8_t *data, uint64_t len) {
+/* The handle of a new input stream over `data` in the table of the state, or 0 when there is no memory or the table is full. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_memory_input_new(fusedwasi_p2_state *state, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_memory_input *m = (fusedwasi_p2_memory_input *)calloc(1, sizeof *m);
-    if (!m) g->trap(g, "out of memory");
+    if (!m) return 0;
     m->base.read = fusedwasi_p2_memory_input_read;
     m->base.ready = fusedwasi_p2_always_ready;
     m->base.destroy = fusedwasi_p2_stream_free;
     m->data = data;
     m->len = len;
-    return fusedwasi_p2_input_stream_new(g, &m->base);
+    uint32_t handle = fusedwasi_p2_input_stream_add(state, &m->base);
+    if (!handle) free(m);
+    return handle;
 }
 
 /* a stream that collects what is written (up to `limit` bytes in all); freed with the state, read `buf` and `len` before that */
@@ -144,20 +171,25 @@ typedef struct {
     uint64_t len, capacity, limit;
 } fusedwasi_p2_buffer_output;
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_buffer_output_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_buffer_output_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
     fusedwasi_p2_buffer_output *b = (fusedwasi_p2_buffer_output *)st;
-    (void)g;
+    (void)state;
     *status = FUSEDWASI_P2_STREAM_OK;
     return b->limit - b->len;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+    (void)state;
     fusedwasi_p2_buffer_output *b = (fusedwasi_p2_buffer_output *)st;
     if (b->len + len > b->capacity) {
         uint64_t cap = b->capacity ? b->capacity : 64;
         while (cap < b->len + len) cap *= 2;
         uint8_t *grown = (uint8_t *)realloc(b->buf, (size_t)cap);
-        if (!grown) g->trap(g, "out of memory");
+        if (!grown) {
+            st->failure = "out of memory";
+            st->failure_errno = ENOMEM;
+            return FUSEDWASI_P2_STREAM_FAILED;
+        }
         b->buf = grown;
         b->capacity = cap;
     }
@@ -166,27 +198,32 @@ FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_write(fusedwasi_p2_guest *g, fuse
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g;
+FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
     (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_buffer_output_ready(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
     int status;
-    return fusedwasi_p2_buffer_output_check_write(g, st, &status) > 0;
+    return fusedwasi_p2_buffer_output_check_write(state, st, &status) > 0;
 }
 
-/* the buffer is released by the caller with `fusedwasi_p2_buffer_output_release` after the handle is dropped or the state freed */
-FUSEDWASI_P2_FN fusedwasi_p2_buffer_output *fusedwasi_p2_buffer_output_new(fusedwasi_p2_guest *g, uint64_t limit, uint32_t *handle) {
+/* the buffer is released by the caller with `fusedwasi_p2_buffer_output_release` after the handle is dropped or the state freed. NULL (and `*handle` 0) when there is no memory or the table is full. */
+FUSEDWASI_P2_FN fusedwasi_p2_buffer_output *fusedwasi_p2_buffer_output_new(fusedwasi_p2_state *state, uint64_t limit, uint32_t *handle) {
     fusedwasi_p2_buffer_output *b = (fusedwasi_p2_buffer_output *)calloc(1, sizeof *b);
-    if (!b) g->trap(g, "out of memory");
+    *handle = 0;
+    if (!b) return NULL;
     b->base.check_write = fusedwasi_p2_buffer_output_check_write;
     b->base.write = fusedwasi_p2_buffer_output_write;
     b->base.flush = fusedwasi_p2_buffer_output_flush;
     b->base.ready = fusedwasi_p2_buffer_output_ready;
     b->limit = limit;
-    *handle = fusedwasi_p2_output_stream_new(g, &b->base);
+    *handle = fusedwasi_p2_output_stream_add(state, &b->base);
+    if (!*handle) {
+        free(b);
+        return NULL;
+    }
     return b;
 }
 
@@ -231,14 +268,21 @@ FUSEDWASI_P2_FN fusedwasi_p2_pollable *fusedwasi_p2_pollable_get(fusedwasi_p2_gu
     return (fusedwasi_p2_pollable *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_POLLABLE)->obj;
 }
 
+/* asks a pollable on behalf of a guest: 1 or 0; a pollable that cannot tell is a trap, with the reason it gave */
+FUSEDWASI_P2_FN int fusedwasi_p2_pollable_ask(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
+    int r = p->ready(g->state, p);
+    if (r < 0) g->trap(g, p->failure ? p->failure : "a pollable cannot be checked");
+    return r;
+}
+
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_io_poll_pollable_ready(fusedwasi_p2_guest *g, uint32_t self) {
     fusedwasi_p2_pollable *p = fusedwasi_p2_pollable_get(g, self);
-    return (uint32_t)(p->ready(g, p) != 0);
+    return (uint32_t)(fusedwasi_p2_pollable_ask(g, p) != 0);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_io_poll_pollable_block(fusedwasi_p2_guest *g, uint32_t self) {
     fusedwasi_p2_pollable *p = fusedwasi_p2_pollable_get(g, self);
-    while (!p->ready(g, p)) g->wait(g);
+    while (!fusedwasi_p2_pollable_ask(g, p)) g->wait(g);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_io_poll_pollable_drop(fusedwasi_p2_guest *g, uint32_t handle) { fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_POLLABLE); }
@@ -253,7 +297,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_io_poll_poll(fusedwasi_p2_guest *g, uint32_t
     uint32_t count = 0;
     for (;;) {
         for (uint32_t i = 0; i < in_len; i++)
-            if (list[i]->ready(g, list[i])) ready[count++] = i;
+            if (fusedwasi_p2_pollable_ask(g, list[i])) ready[count++] = i;
         if (count) break;
         g->wait(g);
     }
@@ -282,7 +326,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream
     if (!buf) g->trap(g, "out of memory");
     for (;;) {
         *got = 0;
-        int status = fusedwasi_p2_s_read(g, st, buf, n, got);
+        int status = fusedwasi_p2_s_read(g->state, st, buf, n, got);
         if (status != FUSEDWASI_P2_STREAM_OK || *got || !block || n == 0) {
             *out = buf;
             return status;
@@ -336,17 +380,26 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_input_stream_blocking_skip(fusedw
     fusedwasi_p2_skip(g, comp, self, len, retptr, 1);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_stream_pollable_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
+FUSEDWASI_P2_FN int fusedwasi_p2_stream_pollable_ready(fusedwasi_p2_state *state, fusedwasi_p2_pollable *p) {
     fusedwasi_p2_stream *st = (fusedwasi_p2_stream *)p->ctx;
-    return st->dead || !st->ready || st->ready(g, st); /* a closed stream is always ready */
+    return st->dead || !st->ready || st->ready(state, st); /* a closed stream is always ready */
+}
+
+/* A pollable on a stream in the table of the state: the handle, or 0 when there is no memory or the table is full. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_stream_pollable_add(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
+    if (!p) return 0;
+    p->ready = fusedwasi_p2_stream_pollable_ready;
+    p->ctx = st;
+    uint32_t handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
+    if (!handle) free(p);
+    return handle;
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_stream_pollable(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
-    if (!p) g->trap(g, "out of memory");
-    p->ready = fusedwasi_p2_stream_pollable_ready;
-    p->ctx = st;
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
+    uint32_t handle = fusedwasi_p2_stream_pollable_add(g->state, st);
+    if (!handle) g->trap(g, g->state->slot_count > FUSEDWASI_P2_INDEX_MASK ? "table of handles is full" : "out of memory");
+    return handle;
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_io_streams_input_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
@@ -361,7 +414,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_input_stream_drop(fusedwasi_p2_gu
 FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_output_stream_check_write(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_stream *st = fusedwasi_p2_output_get(g, self);
     int status = FUSEDWASI_P2_STREAM_OK;
-    uint64_t budget = fusedwasi_p2_s_check_write(g, st, &status);
+    uint64_t budget = fusedwasi_p2_s_check_write(g->state, st, &status);
     if (status != FUSEDWASI_P2_STREAM_OK) {
         fusedwasi_p2_stream_err(g, comp, retptr, retptr + 8, status, st);
         return;
@@ -373,10 +426,10 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_output_stream_check_write(fusedwa
 /* One write, limited by the budget (a bigger one traps); returns 0 and writes the error if it failed. */
 FUSEDWASI_P2_FN int fusedwasi_p2_write(fusedwasi_p2_guest *g, uint32_t comp, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len, uint32_t retptr) {
     int status = FUSEDWASI_P2_STREAM_OK;
-    uint64_t budget = fusedwasi_p2_s_check_write(g, st, &status);
+    uint64_t budget = fusedwasi_p2_s_check_write(g->state, st, &status);
     if (status == FUSEDWASI_P2_STREAM_OK) {
         if (len > budget) g->trap(g, "write of more than check-write allows");
-        status = fusedwasi_p2_s_write(g, st, data, len);
+        status = fusedwasi_p2_s_write(g->state, st, data, len);
     }
     if (status != FUSEDWASI_P2_STREAM_OK) {
         fusedwasi_p2_stream_err(g, comp, retptr, retptr + 4, status, st);
@@ -396,7 +449,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_write_all_and_flush(fusedwasi_p2_guest *g, uin
     static const uint8_t zeroes[4096] = {0};
     int status = FUSEDWASI_P2_STREAM_OK;
     while (len) {
-        uint64_t budget = fusedwasi_p2_s_check_write(g, st, &status);
+        uint64_t budget = fusedwasi_p2_s_check_write(g->state, st, &status);
         if (status != FUSEDWASI_P2_STREAM_OK) break;
         if (budget == 0) {
             g->wait(g);
@@ -404,12 +457,12 @@ FUSEDWASI_P2_FN void fusedwasi_p2_write_all_and_flush(fusedwasi_p2_guest *g, uin
         }
         uint64_t n = len < budget ? len : budget;
         if (!data && n > sizeof zeroes) n = sizeof zeroes;
-        status = fusedwasi_p2_s_write(g, st, data ? data : zeroes, n);
+        status = fusedwasi_p2_s_write(g->state, st, data ? data : zeroes, n);
         if (status != FUSEDWASI_P2_STREAM_OK) break;
         if (data) data += n;
         len -= n;
     }
-    if (status == FUSEDWASI_P2_STREAM_OK) status = fusedwasi_p2_s_flush(g, st);
+    if (status == FUSEDWASI_P2_STREAM_OK) status = fusedwasi_p2_s_flush(g->state, st);
     if (status != FUSEDWASI_P2_STREAM_OK) {
         fusedwasi_p2_stream_err(g, comp, retptr, retptr + 4, status, st);
         return;
@@ -439,7 +492,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_output_stream_blocking_write_zero
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_io_streams_output_stream_flush(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2_stream *st = fusedwasi_p2_output_get(g, self);
-    int status = fusedwasi_p2_s_flush(g, st);
+    int status = fusedwasi_p2_s_flush(g->state, st);
     if (status != FUSEDWASI_P2_STREAM_OK) {
         fusedwasi_p2_stream_err(g, comp, retptr, retptr + 4, status, st);
         return;
@@ -459,7 +512,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_splice(fusedwasi_p2_guest *g, uint32_t comp, u
     int status = FUSEDWASI_P2_STREAM_OK;
     fusedwasi_p2_stream *failed = NULL; /* the stream that failed, for the error */
     for (;;) {
-        uint64_t budget = fusedwasi_p2_s_check_write(g, out, &status);
+        uint64_t budget = fusedwasi_p2_s_check_write(g->state, out, &status);
         if (status != FUSEDWASI_P2_STREAM_OK) {
             failed = out;
             break;
@@ -474,7 +527,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_splice(fusedwasi_p2_guest *g, uint32_t comp, u
                 failed = in;
                 break;
             }
-            status = fusedwasi_p2_s_write(g, out, buf, got);
+            status = fusedwasi_p2_s_write(g->state, out, buf, got);
             if (status != FUSEDWASI_P2_STREAM_OK) failed = out;
         }
         break;

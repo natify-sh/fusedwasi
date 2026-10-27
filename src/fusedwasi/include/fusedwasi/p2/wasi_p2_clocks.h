@@ -24,20 +24,36 @@ FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_now(fusedwasi_p2_
 
 FUSEDWASI_P2_FN uint64_t fusedwasi_wasi_clocks_monotonic_clock_resolution(fusedwasi_p2_guest *g) { return g->state->resolution_ns[1]; }
 
-/* a pollable that is ready at an instant of the monotonic clock */
-FUSEDWASI_P2_FN int fusedwasi_p2_deadline_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) { return fusedwasi_p2_clock_ns(g, 1) >= p->deadline; }
+/* a pollable that is ready at an instant of the monotonic clock; a clock that cannot be read is -1 ("the clock cannot be read": the WASI function that asked traps with it) */
+FUSEDWASI_P2_FN int fusedwasi_p2_deadline_ready(fusedwasi_p2_state *state, fusedwasi_p2_pollable *p) {
+    uint64_t now = 0;
+    if (state->clock(state, 1, &now) != 0) {
+        p->failure = "the clock cannot be read";
+        return -1;
+    }
+    return now >= p->deadline;
+}
 
 FUSEDWASI_P2_FN void fusedwasi_p2_free_obj(fusedwasi_p2_state *state, void *obj) {
     (void)state;
     free(obj);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_deadline_pollable(fusedwasi_p2_guest *g, uint64_t deadline) {
+/* A deadline pollable in the table of the state: the handle, or 0 when there is no memory or the table is full. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_deadline_pollable_add(fusedwasi_p2_state *state, uint64_t deadline) {
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
-    if (!p) g->trap(g, "out of memory");
+    if (!p) return 0;
     p->ready = fusedwasi_p2_deadline_ready;
     p->deadline = deadline;
-    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
+    uint32_t handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
+    if (!handle) free(p);
+    return handle;
+}
+
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_deadline_pollable(fusedwasi_p2_guest *g, uint64_t deadline) {
+    uint32_t handle = fusedwasi_p2_deadline_pollable_add(g->state, deadline);
+    if (!handle) g->trap(g, g->state->slot_count > FUSEDWASI_P2_INDEX_MASK ? "table of handles is full" : "out of memory");
+    return handle;
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_clocks_monotonic_clock_subscribe_instant(fusedwasi_p2_guest *g, uint64_t when) {

@@ -46,6 +46,7 @@ from .wasi_p2_core import (
     KIND_RESPONSE_OUTPARAM,
     Guest,
     Pollable,
+    State,
     alloc,
     load_bytes,
     load_u32,
@@ -655,7 +656,7 @@ class IncomingBody:
 
 
 class ReadyPollable(Pollable):
-    def ready(self, guest: Guest) -> bool:
+    def ready(self, state: State) -> bool:
         return True
 
 
@@ -1053,7 +1054,7 @@ class FutureIncomingResponse:
         self.result: IncomingResponse | ErrorCode | None = None
         self.taken = False
 
-    def advance(self, guest: Guest) -> bool:
+    def advance(self, state: State) -> bool:
         if self.result is not None:
             return True
         body = self.request.body
@@ -1066,7 +1067,7 @@ class FutureIncomingResponse:
             self.prepared.body = body.data()
             if body.trailers is not None:
                 self.prepared.trailers = list(body.trailers.entries)
-        send = guest.state.http_send or default_send
+        send = state.http_send or default_send
         try:
             response = send(self.prepared)
         except ErrorCode as e:
@@ -1087,8 +1088,8 @@ class FuturePollable(Pollable):
     def __init__(self, future: FutureIncomingResponse) -> None:
         self.future = future
 
-    def ready(self, guest: Guest) -> bool:
-        return self.future.advance(guest)
+    def ready(self, state: State) -> bool:
+        return self.future.advance(state)
 
 
 def _future(guest: Guest, handle: int) -> FutureIncomingResponse:
@@ -1148,7 +1149,7 @@ def wasi_http_types_future_incoming_response_subscribe(guest: Guest, self: int) 
 
 def wasi_http_types_future_incoming_response_get(guest: Guest, comp: int, self: int, retptr: int) -> None:
     future = _future(guest, self)
-    if not future.advance(guest):
+    if not future.advance(guest.state):
         store_u8(guest, comp, retptr, 0)
         return
     store_u8(guest, comp, retptr, 1)

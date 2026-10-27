@@ -15,19 +15,19 @@ static uint32_t bump(fusedwasi_p2_guest *s, uint32_t comp, uint32_t old_ptr, uin
 static uint8_t memory[256];
 
 /* streams that fail: the first call is an error with a message, and then the stream is closed (the rule of stream-error) */
-static int failing_read(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream, uint8_t *buf, uint64_t len, uint64_t *got) {
+static int failing_read(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream, uint8_t *buf, uint64_t len, uint64_t *got) {
     (void)st, (void)buf, (void)len;
     *got = 0;
     stream->failure = "boom";
     return FUSEDWASI_P2_STREAM_FAILED;
 }
-static uint64_t failing_check_write(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream, int *status) {
+static uint64_t failing_check_write(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream, int *status) {
     (void)st;
     stream->failure = "boom";
     *status = FUSEDWASI_P2_STREAM_FAILED;
     return 0;
 }
-static int never_ready(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream) { (void)st, (void)stream; return 0; }
+static int never_ready(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream) { (void)st, (void)stream; return 0; }
 
 static void dump(const char *what) {
     printf("%s ", what);
@@ -58,9 +58,9 @@ int main(int argc, char **argv) {
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     memcpy(memory + 100, "hello", 5);
     static const uint8_t abc[] = "abcdefghij", xyz[] = "xyz";
-    uint32_t i = fusedwasi_p2_memory_input_new(&s, abc, 10), j = fusedwasi_p2_memory_input_new(&s, xyz, 3), o, o2;
-    fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&s, 8, &o);
-    fusedwasi_p2_buffer_output *bo2 = fusedwasi_p2_buffer_output_new(&s, 100, &o2);
+    uint32_t i = fusedwasi_p2_memory_input_new(&world, abc, 10), j = fusedwasi_p2_memory_input_new(&world, xyz, 3), o, o2;
+    fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&world, 8, &o);
+    fusedwasi_p2_buffer_output *bo2 = fusedwasi_p2_buffer_output_new(&world, 100, &o2);
     printf("handles %u %u %u %u\n", i, j, o, o2);
     if (!strcmp(scenario, "streams")) {
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, i, 4, 0), dump("read");

@@ -23,8 +23,8 @@ typedef struct {
     int fd;
 } fusedwasi_p2_fd_stream;
 
-FUSEDWASI_P2_FN int fusedwasi_p2_fd_ready_in(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g;
+FUSEDWASI_P2_FN int fusedwasi_p2_fd_ready_in(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
 #ifdef _WIN32
     (void)st;
     return 1;
@@ -34,10 +34,10 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fd_ready_in(fusedwasi_p2_guest *g, fusedwasi_p2
 #endif
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_fd_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_fd_read(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     fusedwasi_p2_fd_stream *f = (fusedwasi_p2_fd_stream *)st;
     *got = 0;
-    if (len == 0 || !fusedwasi_p2_fd_ready_in(g, st)) return FUSEDWASI_P2_STREAM_OK;
+    if (len == 0 || !fusedwasi_p2_fd_ready_in(state, st)) return FUSEDWASI_P2_STREAM_OK;
 #ifdef _WIN32
     int n = _read(f->fd, buf, (unsigned)len);
 #else
@@ -55,15 +55,15 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fd_read(fusedwasi_p2_guest *g, fusedwasi_p2_str
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_fd_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
-    (void)g, (void)st;
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_fd_check_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, int *status) {
+    (void)state, (void)st;
     *status = FUSEDWASI_P2_STREAM_OK;
     return FUSEDWASI_P2_STD_CHUNK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_fd_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_fd_write(fusedwasi_p2_state *state, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_fd_stream *f = (fusedwasi_p2_fd_stream *)st;
-    (void)g;
+    (void)state;
     while (len) {
 #ifdef _WIN32
         int n = _write(f->fd, data, (unsigned)len);
@@ -82,24 +82,27 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fd_write(fusedwasi_p2_guest *g, fusedwasi_p2_st
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_fd_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
-    (void)g, (void)st;
+FUSEDWASI_P2_FN int fusedwasi_p2_fd_flush(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state, (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
 /* Streams on descriptors, owned by the caller (`free` them after the state): for the standard streams of a state, or for tests. */
-FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_input_new(fusedwasi_p2_guest *g, int fd) {
+/* A stream over a descriptor of the process, to give to `std[i]` or `fusedwasi_p2_input_stream_add`; NULL when there is no memory. No guest is needed. Free it after the state. */
+FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_input_new(fusedwasi_p2_state *state, int fd) {
     fusedwasi_p2_fd_stream *f = (fusedwasi_p2_fd_stream *)calloc(1, sizeof *f);
-    if (!f) g->trap(g, "out of memory");
+    (void)state;
+    if (!f) return NULL;
     f->fd = fd;
     f->base.read = fusedwasi_p2_fd_read;
     f->base.ready = fusedwasi_p2_fd_ready_in;
     return f;
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_output_new(fusedwasi_p2_guest *g, int fd) {
+FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_output_new(fusedwasi_p2_state *state, int fd) {
     fusedwasi_p2_fd_stream *f = (fusedwasi_p2_fd_stream *)calloc(1, sizeof *f);
-    if (!f) g->trap(g, "out of memory");
+    (void)state;
+    if (!f) return NULL;
     f->fd = fd;
     f->base.check_write = fusedwasi_p2_fd_check_write;
     f->base.write = fusedwasi_p2_fd_write;
@@ -108,11 +111,18 @@ FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_output_new(fusedwasi_p2_
     return f;
 }
 
-/* the standard stream i (0 stdin, 1 stdout, 2 stderr) */
+/* the standard stream i (0 stdin, 1 stdout, 2 stderr); NULL when the default one cannot be made (no memory) */
+FUSEDWASI_P2_FN fusedwasi_p2_stream *fusedwasi_p2_std_get(fusedwasi_p2_state *state, int i) {
+    if (state->std[i]) return state->std[i];
+    if (!state->std_default[i]) state->std_default[i] = i == 0 ? (void *)fusedwasi_p2_fd_input_new(state, 0) : (void *)fusedwasi_p2_fd_output_new(state, i);
+    return (fusedwasi_p2_stream *)state->std_default[i];
+}
+
+/* the same in a function that has the guest: no memory for the default stream is a trap */
 FUSEDWASI_P2_FN fusedwasi_p2_stream *fusedwasi_p2_std(fusedwasi_p2_guest *g, int i) {
-    if (g->state->std[i]) return g->state->std[i];
-    if (!g->state->std_default[i]) g->state->std_default[i] = i == 0 ? (void *)fusedwasi_p2_fd_input_new(g, 0) : (void *)fusedwasi_p2_fd_output_new(g, i);
-    return (fusedwasi_p2_stream *)g->state->std_default[i];
+    fusedwasi_p2_stream *st = fusedwasi_p2_std_get(g->state, i);
+    if (!st) g->trap(g, "out of memory");
+    return st;
 }
 
 /* environment */

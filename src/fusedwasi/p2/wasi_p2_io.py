@@ -23,6 +23,7 @@ from .wasi_p2_core import (
     KIND_POLLABLE,
     Guest,
     Pollable,
+    State,
     alloc,
     load_bytes,
     load_u32,
@@ -30,6 +31,7 @@ from .wasi_p2_core import (
     store_u8,
     store_u32,
     store_u64,
+    table_add,
     table_drop,
     table_get,
     table_new,
@@ -131,7 +133,7 @@ class StreamPollable(Pollable):
     def __init__(self, stream: InputStream | OutputStream) -> None:
         self.stream = stream
 
-    def ready(self, guest: Guest) -> bool:
+    def ready(self, state: State) -> bool:
         return bool(getattr(self.stream, "dead", False)) or self.stream.ready()  # a closed stream is always ready
 
 
@@ -151,6 +153,20 @@ class Error:
 
 def error_new(guest: Guest, message: str, code: int | None = None, network_code: int | None = None) -> int:
     return table_new(guest, KIND_ERROR, Error(message, code, network_code))
+
+
+def error_add(state: State, message: str, code: int | None = None, network_code: int | None = None) -> int:
+    """An `error` resource in the table of the state (no guest needed): the handle, or 0 when the table is full."""
+    return table_add(state, KIND_ERROR, Error(message, code, network_code))
+
+
+def input_stream_add(state: State, stream: InputStream) -> int:
+    """A stream of the caller in the table of the state as an input stream (no guest needed): the handle, or 0 when the table is full."""
+    return table_add(state, KIND_INPUT_STREAM, stream)
+
+
+def output_stream_add(state: State, stream: OutputStream) -> int:
+    return table_add(state, KIND_OUTPUT_STREAM, stream)
 
 
 def input_stream_new(guest: Guest, stream: InputStream) -> int:
@@ -185,12 +201,12 @@ def _pollable(guest: Guest, handle: int) -> Pollable:
 
 
 def wasi_io_poll_pollable_ready(guest: Guest, self: int) -> int:
-    return int(_pollable(guest, self).ready(guest))
+    return int(_pollable(guest, self).ready(guest.state))
 
 
 def wasi_io_poll_pollable_block(guest: Guest, self: int) -> None:
     pollable = _pollable(guest, self)
-    while not pollable.ready(guest):
+    while not pollable.ready(guest.state):
         guest.wait()
 
 
@@ -203,7 +219,7 @@ def wasi_io_poll_poll(guest: Guest, comp: int, in_ptr: int, in_len: int, retptr:
     if in_len == 0:
         trap(guest, "poll of an empty list")
     pollables = [_pollable(guest, load_u32(guest, comp, in_ptr + 4 * i)) for i in range(in_len)]
-    while not (ready := [i for i, p in enumerate(pollables) if p.ready(guest)]):
+    while not (ready := [i for i, p in enumerate(pollables) if p.ready(guest.state)]):
         guest.wait()
     ptr = alloc(guest, comp, 4, 4 * len(ready))
     for k, i in enumerate(ready):

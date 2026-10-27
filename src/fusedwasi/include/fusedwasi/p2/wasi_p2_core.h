@@ -97,11 +97,13 @@ typedef struct {
     uint64_t size;
 } fusedwasi_p2_memory_cell;
 
-/* Something a guest can wait for; wasi:clocks and wasi:io make the kinds. `ctx` is the owner's, `deadline` is for the clocks. */
+/* Something a guest can wait for; wasi:clocks and wasi:io make the kinds. `ctx` is the owner's, `deadline` is for the clocks. An object of the world: `ready` takes the state, never traps;
+   it returns 1 (ready), 0 (not yet), or -1 when it cannot tell, with the reason in `failure` (a C string that outlives the call): the WASI function that asked has the guest and traps with it. */
 typedef struct fusedwasi_p2_pollable {
-    int (*ready)(struct fusedwasi_p2_guest *g, struct fusedwasi_p2_pollable *p);
+    int (*ready)(struct fusedwasi_p2_state *state, struct fusedwasi_p2_pollable *p);
     void *ctx;
     uint64_t deadline;
+    const char *failure;
 } fusedwasi_p2_pollable;
 
 typedef struct {
@@ -340,33 +342,52 @@ FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_guest *g, uint32_t comp
 
 /* the table of handles (own and borrow share it; a handle is an i32 for the guest) */
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_new(fusedwasi_p2_guest *g, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
+/* Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). Returns the handle, or 0 when the table is full or there is no memory;
+   nothing is changed then. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_add(fusedwasi_p2_state *state, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
     uint32_t index = 0;
-    for (uint32_t i = 1; i < g->state->slot_count; i++)
-        if (!g->state->slots[i].live) {
+    for (uint32_t i = 1; i < state->slot_count; i++)
+        if (!state->slots[i].live) {
             index = i;
             break;
         }
     if (!index) {
-        if (g->state->slot_count == 0) g->state->slot_count = 1; /* slot 0 */
-        if (g->state->slot_count > FUSEDWASI_P2_INDEX_MASK) g->trap(g, "table of handles is full");
-        if (g->state->slot_count >= g->state->slot_capacity) {
-            uint32_t cap = g->state->slot_capacity ? g->state->slot_capacity * 2 : 16;
-            fusedwasi_p2_slot *grown = (fusedwasi_p2_slot *)realloc(g->state->slots, cap * sizeof *grown);
-            if (!grown) g->trap(g, "out of memory");
-            memset(grown + g->state->slot_capacity, 0, (cap - g->state->slot_capacity) * sizeof *grown);
-            g->state->slots = grown;
-            g->state->slot_capacity = cap;
+        uint32_t used = state->slot_count ? state->slot_count : 1; /* slot 0 */
+        if (used > FUSEDWASI_P2_INDEX_MASK) return 0;
+        if (used >= state->slot_capacity) {
+            uint32_t cap = state->slot_capacity ? state->slot_capacity * 2 : 16;
+            fusedwasi_p2_slot *grown = (fusedwasi_p2_slot *)realloc(state->slots, cap * sizeof *grown);
+            if (!grown) return 0;
+            memset(grown + state->slot_capacity, 0, (cap - state->slot_capacity) * sizeof *grown);
+            state->slots = grown;
+            state->slot_capacity = cap;
         }
-        index = g->state->slot_count++;
+        state->slot_count = used + 1;
+        index = used;
     }
-    fusedwasi_p2_slot *slot = &g->state->slots[index];
+    fusedwasi_p2_slot *slot = &state->slots[index];
     slot->generation = (slot->generation + 1) & FUSEDWASI_P2_GENERATION_MASK;
     slot->kind = kind;
     slot->live = 1;
     slot->obj = obj;
     slot->destroy = destroy;
     return (slot->generation << FUSEDWASI_P2_INDEX_BITS) | index;
+}
+
+/* The same for a function that has the guest: a full table or no memory is a trap. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_new(fusedwasi_p2_guest *g, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
+    uint32_t handle = fusedwasi_p2_table_add(g->state, kind, obj, destroy);
+    if (!handle) {
+        if (g->state->slot_count > FUSEDWASI_P2_INDEX_MASK) g->trap(g, "table of handles is full");
+        g->trap(g, "out of memory");
+    }
+    return handle;
+}
+
+/* For a function that has the guest, after a constructor of the state that gave 0 for a full table or no memory: the trap. */
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_handle_or_trap(fusedwasi_p2_guest *g, uint32_t handle) {
+    if (!handle) g->trap(g, g->state->slot_count > FUSEDWASI_P2_INDEX_MASK ? "table of handles is full" : "out of memory");
+    return handle;
 }
 
 /* The slot of a live handle of the given kind; anything else is a trap. */

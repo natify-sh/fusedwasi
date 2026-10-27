@@ -20,7 +20,7 @@ static struct {
 } host;
 
 /* the standard streams of the state of 0.2: the input is the bytes the script gave, the outputs print what is written */
-static int stream_stdin(fusedwasi_p2_guest *core, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t cap, uint64_t *got) {
+static int stream_stdin(fusedwasi_p2_state *core, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t cap, uint64_t *got) {
     (void)core, (void)st;
     uint64_t left = host.stdin_len - host.stdin_pos, n = left < cap ? left : cap;
     memcpy(buf, host.stdin_data + host.stdin_pos, (size_t)n);
@@ -33,7 +33,7 @@ static void hex(const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; i++) printf("%02x", p[i]);
 }
 
-static int stream_stdout(fusedwasi_p2_guest *core, fusedwasi_p2_stream *st, const uint8_t *buf, uint64_t n) {
+static int stream_stdout(fusedwasi_p2_state *core, fusedwasi_p2_stream *st, const uint8_t *buf, uint64_t n) {
     (void)core;
     if (host.stdout_status) {
         st->failure_errno = host.stdout_status;

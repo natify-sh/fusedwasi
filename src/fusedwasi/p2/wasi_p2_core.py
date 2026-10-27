@@ -70,9 +70,10 @@ class Exit(Exception):
 
 
 class Pollable:
-    """Something a guest can wait for; `wasi:clocks` and `wasi:io` make the kinds."""
+    """Something a guest can wait for; `wasi:clocks` and `wasi:io` make the kinds. An object of the world: `ready` takes the state, never a guest; a failure is an exception (the
+    function that asked has the guest and the exception is the trap), as a hook of the state that raises."""
 
-    def ready(self, guest: Guest) -> bool:
+    def ready(self, state: State) -> bool:
         raise NotImplementedError
 
 
@@ -213,19 +214,28 @@ def trap(guest: Guest, message: str) -> NoReturn:
 # the table of handles (own and borrow share it; a handle is an i32 for the guest)
 
 
-def table_new(guest: Guest, kind: int, obj: object) -> int:
-    for index, slot in enumerate(guest.state.slots):
+def table_add(state: State, kind: int, obj: object) -> int:
+    """Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). The handle, or 0 when the table is full."""
+    for index, slot in enumerate(state.slots):
         if index and not slot.live:
             break
     else:
-        index = len(guest.state.slots)
+        index = len(state.slots)
         if index > INDEX_MASK:
-            trap(guest, "table of handles is full")
-        guest.state.slots.append(Slot())
-        slot = guest.state.slots[index]
+            return 0
+        state.slots.append(Slot())
+        slot = state.slots[index]
     slot.generation = (slot.generation + 1) & GENERATION_MASK
     slot.kind, slot.live, slot.obj = kind, True, obj
     return (slot.generation << INDEX_BITS) | index
+
+
+def table_new(guest: Guest, kind: int, obj: object) -> int:
+    """The same in a function that has the guest: a full table is a trap."""
+    handle = table_add(guest.state, kind, obj)
+    if not handle:
+        trap(guest, "table of handles is full")
+    return handle
 
 
 def table_get(guest: Guest, handle: int, kind: int) -> object:

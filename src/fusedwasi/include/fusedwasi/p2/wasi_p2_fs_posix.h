@@ -189,8 +189,14 @@ FUSEDWASI_P2_FN int fusedwasi_p2_name_cmp(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b); /* the names are sorted with their types: see below */
 }
 
-/* the names of a directory, sorted, without . and .., with their types; the caller frees them */
-FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out, fusedwasi_p2_guest *g) {
+FUSEDWASI_P2_FN void fusedwasi_p2_names_free(char **names, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) free(names[i]);
+    free(names);
+}
+
+/* the names of a directory, sorted, without . and .., with their types; the caller frees them. No memory for the list is FUSEDWASI_P2_SYS_NOMEM (nothing is kept); the function that
+   has the guest traps with "out of memory". */
+FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out) {
     int dupfd = dup(d->fd);
     DIR *dir = dupfd < 0 ? NULL : fdopendir(dupfd);
     if (!dir) {
@@ -201,23 +207,38 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
     rewinddir(dir);
     uint32_t count = 0, capacity = 16;
     char **names = (char **)malloc(capacity * sizeof *names);
-    if (!names) g->trap(g, "out of memory");
+    if (!names) {
+        closedir(dir);
+        return FUSEDWASI_P2_SYS_NOMEM;
+    }
     struct dirent *e;
     while ((e = readdir(dir)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (count == capacity) {
             capacity *= 2;
-            names = (char **)realloc(names, capacity * sizeof *names);
-            if (!names) g->trap(g, "out of memory");
+            char **bigger = (char **)realloc(names, capacity * sizeof *names);
+            if (!bigger) {
+                fusedwasi_p2_names_free(names, count);
+                closedir(dir);
+                return FUSEDWASI_P2_SYS_NOMEM;
+            }
+            names = bigger;
         }
         names[count] = strdup(e->d_name);
-        if (!names[count]) g->trap(g, "out of memory");
+        if (!names[count]) {
+            fusedwasi_p2_names_free(names, count);
+            closedir(dir);
+            return FUSEDWASI_P2_SYS_NOMEM;
+        }
         count++;
     }
     closedir(dir);
     qsort(names, count, sizeof *names, fusedwasi_p2_name_cmp);
     uint8_t *types = (uint8_t *)malloc(count ? count : 1);
-    if (!types) g->trap(g, "out of memory");
+    if (!types) {
+        fusedwasi_p2_names_free(names, count);
+        return FUSEDWASI_P2_SYS_NOMEM;
+    }
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; i++) {
         fusedwasi_p2_stat st;

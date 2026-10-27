@@ -43,6 +43,7 @@ from .wasi_p2_core import (
     USE_UDP_OUTGOING,
     Guest,
     Pollable,
+    State,
     alloc,
     load_bytes,
     load_u8,
@@ -241,7 +242,7 @@ class SocketPollable(Pollable):
     def __init__(self, ready: Callable[[], bool]) -> None:
         self.check = ready
 
-    def ready(self, guest: Guest) -> bool:
+    def ready(self, state: State) -> bool:
         return self.check()
 
 
