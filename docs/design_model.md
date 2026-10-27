@@ -152,14 +152,19 @@ Anything else that shows up while the code is written is added here before it is
 
 (1) this document; (2) the operations of 0.2 for the filesystem, in C and in Python, with the functions of 0.2 unchanged and their tests green; (3) one State and one Guest, the map, and arguments, environment, clocks, random, standard streams, preopens and `proc_*` on them; (4) files and directories over the operations; (5) `poll_oneoff` and the rest; (6) the old implementation of 0.1 removed (it was kept working until the new one passed everything); (7) README, `interface_review.md`, `signatures.md`, `release_checklist.md` section 5, the neutral users.
 
-## 5. Public and private
+## 5. Public and private (done 2026-10-27, step 5)
 
-Written once, kept (section 4 of `interface_review.md` has the list; this draft only adds the rule):
+**The list is data**: `src/fusedwasi/public_api.json` (it travels with the wheel and is installed by CMake), with a line of purpose for each name or group, for C and for Python separately; `docs/public_api.md` is made from it (`tools/public_api.py doc`). It was decided from evidence: the names the three neutral users call (`tests/neutral/`), the table of signatures (`c_name`, `python_module`, `python_name`), the configuration and hooks of `interface_review.md` section 4, and what the README documents.
 
-* **Public**: the configuration fields, the hooks, the guest's memory and hooks, the end of the program (`exited`, `exit_code`, `finished`, `end_value`, the host clears the flags before the next call), the constants, the functions.
-* **Private**: the tables and their layout (handles, slots, entries), every `*_sys_*`, `*_walk_*`, `*_default_*`. A private name carries a mark (a double underscore or a `_private` tail); a comment block "Host API" at the top of each header lists the public ones.
+**The rule.** A name is public only if it is in the list (or is a function of the tables of signatures: the 46 and 201 functions keep their names, the generators bind by them). Everything else is private and carries a mark:
 
-Dead names go: `FUSEDWASI_P1_HOOK_TRAP`; `FUSEDWASI_P1_END_EXIT` is set by `proc_exit` or removed; the macros `MALLOC`, `CALLOC`, `FREE` become private (the caller owns its strings, `create` copies).
+* **C**: a double underscore right after the prefix of the library: `fusedwasi_p2__table_get`, `FUSEDWASI_P2__KIND_P1_FDS`, `fusedwasi_p1__entry`, `FUSEDWASI__H`. The include guards are private too. A private **field of a public struct** ends with two underscores (`state.slots__`, `guest.memory__`); a private struct (`fusedwasi_p2__slot`) needs no mark on its fields. No public name has `__` in it.
+* **Python**: a leading underscore, for a module-level name (`_table_get`, `_Slot`) and for a member of a class (`State._slots`, `State._p1`, `Guest._memories`). A module has no name without an underscore that is not in the list.
+* **The top of each header** has a "Host API" block with the public names defined in it (made by `tools/public_api.py headers`).
+
+**Keeping it.** `tools/public_api.py mark` (C) and `mark-python` rename the unmarked private names mechanically, so a change that adds a name is: list it (it becomes public, with its purpose) or run the tool (it becomes private). `tests/test_public_api.py` fails until one of the two is done, shows that it notices, and checks that the neutral users use public names only. pyright's `reportPrivateUsage`, `reportUnusedFunction` and `reportUnusedClass` are off, because the package uses its own private helpers across modules.
+
+**Dead names removed**: `FUSEDWASI_P1_HOOK_TRAP`, `FUSEDWASI_P1_END_*`, `FUSEDWASI_P1_MALLOC / CALLOC / REALLOC / FREE` (already gone with stage B), and now `fusedwasi_p2_http_fields_find`, `fusedwasi_p2_walk_path` (a wrapper, both systems), `fusedwasi_p2_error_new`, `fusedwasi_p2_error_new_code`. A search for definitions with no use (a unit that refers to every public function and every function of the tables, with the functions `static`: the compiler lists the rest) finds nothing else in C; vulture finds nothing in Python.
 
 ## 6. The Python twin
 

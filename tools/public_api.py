@@ -870,7 +870,7 @@ def check_headers(api: dict[str, Any], *, write: bool = False) -> list[str]:
     for name in {n for n in listed if listed.count(n) > 1}:
         problems.append(f"`{name}` is in the block of two headers")
     for header in headers():
-        relative = str(header.relative_to(INCLUDE))
+        relative = header.relative_to(INCLUDE).as_posix()
         text = header.read_text(encoding="utf-8")
         if relative == "fusedwasi.h":
             continue
