@@ -1283,10 +1283,11 @@ class _Waiter:
     def ask(self) -> None:
         """Asks once, without waiting."""
         if self.native_fd >= 0:
-            poller = select.poll()
-            poller.register(self.native_fd, self.events)
-            found = poller.poll(0)
-            self.revents = found[0][1] if found else 0
+            if sys.platform != "win32":
+                poller = select.poll()
+                poller.register(self.native_fd, self.events)
+                found = poller.poll(0)
+                self.revents = found[0][1] if found else 0
             self.ready = bool(self.revents & (_POLLIN | _POLLOUT | _POLLHUP | _POLLERR | _POLLNVAL))
         else:
             self.ready = bool(getattr(self.stream, "dead", False)) or bool(self.stream.ready())  # type: ignore[attr-defined]

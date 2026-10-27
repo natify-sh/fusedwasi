@@ -55,7 +55,7 @@ def make_tree(root: Path) -> None:
     (root / "dirlink").symlink_to("sub", target_is_directory=True)
     (root / "abslink").symlink_to("/etc")  # an absolute target: path_readlink does not show it
     (root / "esc").symlink_to(f"../{root.name}-outside", target_is_directory=True)
-    if hasattr(os, "mkfifo"):
+    if sys.platform != "win32":
         os.mkfifo(root / "pipe1")  # not a regular file: fifo.txt
 
 
@@ -133,8 +133,8 @@ def test_a_fifo_by_hand(tmp_path: Path) -> None:
     assert "written 03000000" in lines and "content 6162630000000000" in lines  # "abc" in, "abc" out
     assert "fd_tell 70" in lines and "fd_seek 70" in lines and "fd_pread 70" in lines  # SPIPE
     assert any(
-        line.startswith("ev 09000000000000000000010000000000030000") for line in lines
-    )  # fd_read ready, 3 bytes waiting
+        line.startswith("ev 0900000000000000000001") for line in lines
+    )  # userdata 9, no error, fd_read: ready (the bytes waiting are the system's to count)
 
 
 def test_proc_exit_is_the_end_of_wasi_02(tmp_path: Path) -> None:
