@@ -73,9 +73,7 @@ def wasmtime_lines(script: Path, base: Path) -> list[str]:
     cfg.preopen_dir(str(script.parent), str(script.parent), False)
     store.set_wasi(cfg)
     instance = linker.instantiate(store, component)
-    run = instance.get_func(
-        store, instance.get_export_index(store, "run", instance.get_export_index(store, "wasi:cli/run@0.2.4"))
-    )
+    run = instance.get_func(store, instance.get_export_index(store, "run", instance.get_export_index(store, "wasi:cli/run@0.2.4")))
     assert run is not None
     run(store)
     return out.read_text().splitlines()
@@ -91,16 +89,8 @@ def ours_c_lines(script: Path, base: Path) -> list[str]:
     rw, ro = fresh(base)
     exe = base.parent / "ours_c"
     include = HERE.parents[1] / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
-    subprocess.run(
-        ["cc", "-O1", "-g", "-fsanitize=address,undefined", "-I", str(include), "-o", str(exe), str(HERE / "ours_c.c")],
-        check=True,
-    )
-    done = subprocess.run(
-        [str(exe), str(script), str(rw), str(ro)],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"},
-    )
+    subprocess.run(["cc", "-O1", "-g", "-fsanitize=address,undefined", "-I", str(include), "-o", str(exe), str(HERE / "ours_c.c")], check=True)
+    done = subprocess.run([str(exe), str(script), str(rw), str(ro)], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
     if done.returncode:
         print(f"ours_c exited {done.returncode}: {done.stderr[-2000:]}", file=sys.stderr)
     return done.stdout.splitlines()
@@ -115,29 +105,11 @@ def ours_c_http_lines(script: Path, base: Path) -> list[str]:
     base.mkdir(parents=True, exist_ok=True)
     exe = base / "ours_http_c"
     include = HERE.parents[1] / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
-    subprocess.run(
-        [
-            "cc",
-            "-O1",
-            "-g",
-            "-fsanitize=address,undefined",
-            "-I",
-            str(include),
-            "-o",
-            str(exe),
-            str(HERE / "ours_http_c.c"),
-        ],
-        check=True,
-    )
-    done = subprocess.run(
-        [str(exe), str(script)], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"}
-    )
+    subprocess.run(["cc", "-O1", "-g", "-fsanitize=address,undefined", "-I", str(include), "-o", str(exe), str(HERE / "ours_http_c.c")], check=True)
+    done = subprocess.run([str(exe), str(script)], capture_output=True, text=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
     if done.returncode:
         print(f"ours_http_c exited {done.returncode}: {done.stderr[-2000:]}", file=sys.stderr)
-    return [
-        re.sub(r"err=#(\d+)", lambda m: "err=" + H.CASES[int(m.group(1))][0].lower().replace("-", ""), x)
-        for x in done.stdout.splitlines()
-    ]
+    return [re.sub(r"err=#(\d+)", lambda m: "err=" + H.CASES[int(m.group(1))][0].lower().replace("-", ""), x) for x in done.stdout.splitlines()]
 
 
 def wasmtime_http_lines(script: Path, base: Path) -> list[str]:
@@ -156,9 +128,7 @@ def wasmtime_http_lines(script: Path, base: Path) -> list[str]:
     store.set_wasi(cfg)
     store.set_wasi_http()
     instance = linker.instantiate(store, component)
-    run = instance.get_func(
-        store, instance.get_export_index(store, "run", instance.get_export_index(store, "wasi:cli/run@0.2.4"))
-    )
+    run = instance.get_func(store, instance.get_export_index(store, "run", instance.get_export_index(store, "wasi:cli/run@0.2.4")))
     assert run is not None
     run(store)
     return out.read_text().splitlines()
@@ -183,9 +153,7 @@ def main() -> int:
             server.kill()
     else:
         theirs = wasmtime_lines(script, work / "wasmtime")
-        mine = (
-            ours_c_lines(script, work / "ours") if os.environ.get("HOST") == "c" else ours_lines(script, work / "ours")
-        )
+        mine = ours_c_lines(script, work / "ours") if os.environ.get("HOST") == "c" else ours_lines(script, work / "ours")
     source = [x.strip() for x in script.read_text().splitlines() if x.strip() and not x.strip().startswith("#")]
     bad = known = 0
     for i, (a, b) in enumerate(zip(theirs, mine, strict=False)):
