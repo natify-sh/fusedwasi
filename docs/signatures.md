@@ -64,13 +64,23 @@ Fetched from `https://github.com/WebAssembly/WASI` with a clone over HTTPS and c
 | WASI 0.1 | `v0.2.9` | `34c0258951fbd31b2e7591c5d4cdc5ebc760bcfc` | `legacy/preview1/witx/typenames.witx`, `wasi_snapshot_preview1.witx` (to `wasi_p1/`) |
 | WASI 0.2 | `v0.2.12` | `281ba75fafcd50961ef55f9e52747afcc9b71ede` | `proposals/{cli,clocks,filesystem,http,io,random,sockets}/wit/*.wit` (to `wasi_p2/<package>/`) |
 
-The witx files are not in the tag `v0.2.12` (nor in `main`): they were moved to the `wasi-0.1` branch after `v0.2.9`, the last tag that carries them. The text of 0.1 is frozen, so the two tags differ by design. The first snapshot, `wasi_unstable`, has no table of its own: its functions have the names and the number of parameters of `wasi_snapshot_preview1` (five differ in the layout of what they write: `fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`; `sock_accept` is not in it), so the table of `p1` serves both.
+The witx files are not in the tag `v0.2.12` (nor in `main`): they were moved to the `wasi-0.1` branch after `v0.2.9`, the last tag that carries them. The two tags are two different sources, not two versions of one: 0.1 and 0.2 are described in different languages (witx and WIT). The interface of `wasi_snapshot_preview1` is stable, but the **text** of its witx was not frozen: see "Checked against other copies" below. The first snapshot, `wasi_unstable`, has no table of its own: its functions have the names and the number of parameters of `wasi_snapshot_preview1` (five differ in the layout of what they write: `fd_seek`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `poll_oneoff`; `sock_accept` is not in it), so the table of `p1` serves both.
 
 To move to another version: replace the files of `tools/spec_sources/`, change `sources.json`, run the generator and the tests.
 
 Left out on purpose: the two exports (`wasi:cli/run#run`, `wasi:http/incoming-handler#handle`), which are not imports; worlds; `[resource-new]`/`[resource-rep]` (a host imports only `[resource-drop]`).
 
 Checked once by hand, not part of the tests: the output for 0.2 was compared with `wasm-tools component wit --json` of the same files and the flattening of `audit_sigs.py`. Same 200 stable functions and the same flat types for each (the first run differed in the result of the four `[constructor]`s of `wasi:http`, which return the resource; fixed).
+
+## Checked against other copies (2026-10-27)
+
+The committed witx of 0.1 (`v0.2.9`) was compared by hand, outside the tests, with two other copies and with a header generated from the same files:
+
+- **The text changed between versions.** `snapshot-01` (`phases/snapshot/witx/`, the original place) and `v0.2.0` (`legacy/preview1/witx/`) are not byte-equal to `v0.2.9`: the syntax of witx was modernised (`(enum (@witx tag u32)`, `(expected ...)` for results), the comments were extended, and `$sock_accept` was added to the rights of a descriptor. The functions of the interface and their parameters are the same apart from that; the claim that the text of 0.1 is frozen was wrong, and the generator reads `v0.2.9` only.
+- **`wasi/api.h` of wasi-libc** (`wasi-sdk-25`, written from the same witx and used by real compilers) agrees with the table: the same functions (45 of the 46; see below), 20 functions with identical parameter names, 15 that differ only in `retptr` (the table) against `retptr0` (libc), and the `path_*` functions, where libc takes a C string `path` and the table, as the core module sees it, takes `path` and `path_len` (10 functions: this is the lowering of a string, not a difference).
+- **`proc_raise`** is the one function the table has and the header of libc does not declare. It is in the witx of all three versions (`snapshot-01`, `v0.2.0`, `v0.2.9`) and is part of `wasi_snapshot_preview1`; libc simply has no wrapper for it in `api.h` (it has `proc_exit` and `sched_yield`).
+
+Not compared: the byte text of the three versions function by function (their syntax differs), and the types of the parameters against libc (only names and counts).
 
 ## What the tests compare (`tests/test_signatures.py`)
 
