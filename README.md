@@ -55,7 +55,7 @@ fusedwasi_p2_bind_memory(&g, 0, &m->data, &m->size);  /* once for each component
 /* the body of an import of the module: the first argument is the guest, then the component whose memory it is */
 fusedwasi_wasi_cli_environment_get_arguments(&g, /*comp*/ 0, /*retptr*/ ptr);
 
-fusedwasi_p2_free(&state);           /* after the guests are done with it */
+fusedwasi_p2_free(&state);           /* after the guests are done with it; the state is then closed (fusedwasi_p2_state_closed): no handle alive, none made, 0.1 answers BADF for every descriptor */
 ```
 
 ```python

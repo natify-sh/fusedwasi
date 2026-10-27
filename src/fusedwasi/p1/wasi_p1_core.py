@@ -342,7 +342,10 @@ def _descriptor_of(state: State, entry: _Entry) -> Any:
 
 def open_descriptors(state: State) -> _Fds:
     """Makes the descriptors of 0.1 of the state now (the functions of 0.1 do it at their first call when this was not called): 0, 1 and 2 are the standard streams, 3 and up the preopens in
-    order. Raises `PreopenError` (`index` is the place of the directory in `preopens`) when a directory cannot be opened; nothing is made then."""
+    order. Raises `PreopenError` (`index` is the place of the directory in `preopens`) when a directory cannot be opened; nothing is made then. A closed state (`State.closed`) has no
+    descriptors and makes none: it raises `PreopenError` with `errno` EBADF and `index` -1 (the C twin answers -1 with EBADF)."""
+    if state._closed:
+        raise PreopenError(_errno.EBADF, "the state is closed")
     if state._p1 is not None:
         return state._p1
     fds = _Fds()
@@ -375,6 +378,8 @@ def open_descriptors(state: State) -> _Fds:
 
 def _fds_of(guest: Guest) -> _Fds | int:
     """The descriptors of the state of the guest, made if they were not; or the errno of WASI of the failure to make them."""
+    if guest.state._closed:
+        return E_BADF  # every descriptor, 0 to 2 too, is bad, and the map is not made again
     if guest.state._p1 is not None:
         return guest.state._p1
     try:

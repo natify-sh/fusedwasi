@@ -295,6 +295,10 @@ int main(int argc, char **argv) {
             fusedwasi_p2_guest_init(&guest, &core);
             guest.trap = hook_trap;
             fusedwasi_p2_bind_memory(&guest, 0, &memory_base, &memory_size);
+        } else if (!strcmp(t[0], "close")) {  /* the state is freed (closed); the calls that follow see a closed state */
+            fusedwasi_p2_free(&core);
+        } else if (!strcmp(t[0], "closed")) {  /* closed <label> */
+            printf("closed %s %d\n", t[1], fusedwasi_p2_state_closed(&core));
         } else if (!strcmp(t[0], "signal")) {
             guest.signal = !strcmp(t[1], "on") ? hook_signal : NULL;
         } else if (!strcmp(t[0], "stdin")) {

@@ -13,7 +13,8 @@
           "fusedwasi_p2_guest": "the caller: memories, trap, realloc, wait, exit, signal, the end of a call; one for each instance, over one state",
           "fusedwasi_p2_preopen": "a directory of the host that the guest sees under a name: {path, name, writable} (the same struct for both families)",
           "fusedwasi_p2_init": "makes a state: all zero, with the system's clocks, random source and sleep",
-          "fusedwasi_p2_free": "frees what the state holds; the guests over it must not be used afterwards",
+          "fusedwasi_p2_free": "frees what the state holds and closes it; the guests over it must not be used afterwards, except to see what a closed state answers",
+          "fusedwasi_p2_state_closed": "whether the state is closed (`fusedwasi_p2_free` was called): no handle is alive, none is made, every descriptor of 0.1 is BADF",
           "fusedwasi_p2_guest_init": "makes a guest over a state: all zero, with the default trap (aborts), wait and exit",
           "fusedwasi_p2_bind_memory": "binds memory number `comp` of a guest by pointer (base and size read at each access, so a memory that moves is followed)",
           "fusedwasi_p2_set_memory": "binds memory number `comp` by value (the guest keeps a copy; set it again when the memory grows)",
@@ -179,7 +180,8 @@
           "slot_count",
           "slot_capacity",
           "std_default",
-          "p1_table"
+          "p1_table",
+          "closed"
         ]
       },
       "fusedwasi_p2_guest": {
@@ -271,6 +273,7 @@
         "fusedwasi_p2_preopen",
         "fusedwasi_p2_init",
         "fusedwasi_p2_free",
+        "fusedwasi_p2_state_closed",
         "fusedwasi_p2_guest_init",
         "fusedwasi_p2_bind_memory",
         "fusedwasi_p2_set_memory",
@@ -564,7 +567,8 @@
           "clock": "hook",
           "resolution_ns": "the resolutions",
           "sleep": "hook",
-          "close_all": "closes what the state holds open"
+          "close_all": "closes what the state holds open, and closes the state (`closed`)",
+          "closed": "read only: whether `close_all()` was called; a closed state has no live handle, makes none, and every descriptor of 0.1 is BADF"
         },
         "private": [
           "slots",

@@ -185,9 +185,19 @@ class State:
         self.resolution_ns = list(resolution_ns) if resolution_ns is not None else list(_RESOLUTIONS)
         self.sleep = sleep or self._sleep
         self._p1: Any = None  # private: the descriptors of WASI 0.1 (`fusedwasi.p1`), made by the first function of 0.1 on the state
+        self._closed = False
+
+    @property
+    def closed(self) -> bool:
+        """Whether `close_all()` has been called (the twin of `fusedwasi_p2_state_closed`; read only). A closed state holds no handle and makes none: every handle is dead (a function of 0.2 that is given
+        one traps, as for any dead handle; one that would make a resource traps with "the state is closed"), and every descriptor of 0.1, 0 to 2 included, answers BADF (the map is not made again, so the
+        preopens do not come back). The configuration (arguments, environment, clocks, random bytes) is still read. There is no way to open it again: make another `State`."""
+        return self._closed
 
     def close_all(self) -> None:
-        """Closes what the state holds open: the descriptors (files and directories, of 0.2 and of 0.1), the streams of files. The streams the caller gave are the caller's."""
+        """Closes what the state holds open: the descriptors (files and directories, of 0.2 and of 0.1), the streams of files, and closes the state (`closed`): nothing is made in it again. The streams the
+        caller gave are the caller's. Calling it twice does no harm (`fusedwasi_p2_free` in C)."""
+        self._closed = True
         for slot in self._slots:
             if not slot.live:
                 continue
@@ -255,7 +265,9 @@ def _trap(guest: Guest, message: str) -> NoReturn:
 
 
 def table_add(state: State, kind: int, obj: object) -> int:
-    """Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). The handle, or 0 when the table is full."""
+    """Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). The handle, or 0 when the table is full or the state is closed."""
+    if state._closed:
+        return 0
     for index, slot in enumerate(state._slots):
         if index and not slot.live:
             break
@@ -274,7 +286,7 @@ def _table_new(guest: Guest, kind: int, obj: object) -> int:
     """The same in a function that has the guest: a full table is a trap."""
     handle = table_add(guest.state, kind, obj)
     if not handle:
-        _trap(guest, "table of handles is full")
+        _trap(guest, "the state is closed" if guest.state._closed else "table of handles is full")
     return handle
 
 

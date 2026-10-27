@@ -22,7 +22,7 @@ DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 LIBS: list[str] = ["-lbcrypt"] if sys.platform == "win32" else []  # the random bytes of the core
 
-SCENARIOS = ["main", "child_dir", "bad_handle", "outside"]
+SCENARIOS = ["main", "child_dir", "bad_handle", "outside", "closed_handle", "closed_new"]
 
 
 def make_tree(root: Path) -> None:
@@ -347,6 +347,19 @@ def python_output(scenario: str, root: Path) -> str:
             n = r.path(b"made")
             fsc("descriptor_create_directory_at", d2, 1000, n, 250)
             r.show("create in it", 250, 8)
+        elif scenario in ("closed_handle", "closed_new"):
+            fs.wasi_filesystem_preopens_get_directories(host, 0, 0)
+            hd = r.u32(r.u32(0))
+            fsc("descriptor_get_flags", hd, 240)
+            r.show("flags before", 240, 4)
+            r.lines.append(f"closed {int(host.state.closed)}")
+            host.state.close_all()
+            r.lines.append(f"closed {int(host.state.closed)}")
+            if scenario == "closed_handle":
+                fsc("descriptor_get_flags", hd, 240)
+            else:
+                fs.wasi_filesystem_preopens_get_directories(host, 0, 0)
+            r.lines.append("not reached")
         elif scenario == "bad_handle":
             fsc("descriptor_get_flags", 12345, 0)
         elif scenario == "outside":

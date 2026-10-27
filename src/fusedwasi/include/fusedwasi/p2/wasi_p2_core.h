@@ -9,10 +9,11 @@
  * POSIX clocks need `clock_gettime` (a GNU or POSIX mode of the compiler).
  *
  * Host API (docs/public_api.md): no function of an import, and
- *   fusedwasi_p2_state, fusedwasi_p2_guest, fusedwasi_p2_preopen, fusedwasi_p2_init, fusedwasi_p2_free, fusedwasi_p2_guest_init,
- *   fusedwasi_p2_bind_memory, fusedwasi_p2_set_memory, FUSEDWASI_P2_MAX_MEMORIES, FUSEDWASI_P2_USE_TCP_BIND, FUSEDWASI_P2_USE_TCP_CONNECT,
- *   FUSEDWASI_P2_USE_UDP_BIND, FUSEDWASI_P2_USE_UDP_CONNECT, FUSEDWASI_P2_USE_UDP_OUTGOING, fusedwasi_p2_use_name, FUSEDWASI_P2_TERMINAL_STDIN,
- *   FUSEDWASI_P2_TERMINAL_STDOUT, FUSEDWASI_P2_TERMINAL_STDERR, FUSEDWASI_P2_FN, fusedwasi_p2_table_add, FUSEDWASI_P2_KIND_*, fusedwasi_p2_pollable.
+ *   fusedwasi_p2_state, fusedwasi_p2_guest, fusedwasi_p2_preopen, fusedwasi_p2_init, fusedwasi_p2_free, fusedwasi_p2_state_closed,
+ *   fusedwasi_p2_guest_init, fusedwasi_p2_bind_memory, fusedwasi_p2_set_memory, FUSEDWASI_P2_MAX_MEMORIES, FUSEDWASI_P2_USE_TCP_BIND,
+ *   FUSEDWASI_P2_USE_TCP_CONNECT, FUSEDWASI_P2_USE_UDP_BIND, FUSEDWASI_P2_USE_UDP_CONNECT, FUSEDWASI_P2_USE_UDP_OUTGOING, fusedwasi_p2_use_name,
+ *   FUSEDWASI_P2_TERMINAL_STDIN, FUSEDWASI_P2_TERMINAL_STDOUT, FUSEDWASI_P2_TERMINAL_STDERR, FUSEDWASI_P2_FN, fusedwasi_p2_table_add,
+ *   FUSEDWASI_P2_KIND_*, fusedwasi_p2_pollable.
  * Every other name in this file is private: a double underscore after the prefix (`fusedwasi_p2__x`, `FUSEDWASI_P2__X`), and a private field ends with two underscores (`x__`). */
 #ifndef FUSEDWASI_P2__CORE_H
 #define FUSEDWASI_P2__CORE_H
@@ -162,6 +163,7 @@ typedef struct fusedwasi_p2_state {
     int (*sleep)(struct fusedwasi_p2_state *state, uint64_t ns);
     void *user; /* the pointer of whoever made the state, given back to its hooks: the library never reads, writes or frees it (`fusedwasi_p2_init` makes it NULL); `State.user` in Python */
     uint32_t p1_table__; /* private: the handle of the descriptors of WASI 0.1, made by the first function of 0.1 (p1/wasi_p1_core.h); 0 until then */
+    uint32_t closed__; /* private: set by `fusedwasi_p2_free`; read it with `fusedwasi_p2_state_closed`. Last in the struct, as a field that a later version adds */
 } fusedwasi_p2_state;
 
 /* The caller: one for each instance, made once (`fusedwasi_p2_guest_init`), never rewritten per call. */
@@ -323,7 +325,15 @@ FUSEDWASI_P2_FN void fusedwasi_p2_guest_init(fusedwasi_p2_guest *g, fusedwasi_p2
     g->exit = fusedwasi_p2__default_exit;
 }
 
-/* frees what the state holds: every live handle is destroyed (there is no guest then), and the table. The guests that point to it must not be used afterwards. */
+/* Whether the state is closed, that is, `fusedwasi_p2_free` has been called on it (`State.closed` in Python). A closed state holds no handle and makes none: every handle is dead (a function of 0.2 that is given
+   one traps, as for any dead handle; one that would make a resource traps with "the state is closed"), and every descriptor of 0.1, 0 to 2 included, answers BADF (the descriptors are not made again, so the
+   preopens do not come back). The configuration (arguments, environment, clocks, random bytes) is still read. `fusedwasi_p2_init` makes the struct open again. */
+FUSEDWASI_P2_FN int fusedwasi_p2_state_closed(const fusedwasi_p2_state *state) {
+    return state->closed__ != 0;
+}
+
+/* frees what the state holds: every live handle is destroyed (there is no guest then), and the table, and the state is closed (`fusedwasi_p2_state_closed`): nothing is made in it again until
+   `fusedwasi_p2_init`. The guests that point to it must not be used afterwards, except to see the BADF and the traps that a closed state gives. Calling it twice does no harm. */
 FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *state) {
     for (uint32_t i = 1; i < state->slot_count__; i++)
         if (state->slots__[i].live) { /* not live while it is destroyed: a destroy that drops other handles (the descriptors of 0.1) finds the ones already gone */
@@ -334,6 +344,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *state) {
     free(state->slots__);
     state->slots__ = NULL;
     state->slot_count__ = state->slot_capacity__ = 0;
+    state->p1_table__ = 0;
+    state->closed__ = 1;
 }
 
 /* Binds memory number `comp` by pointer: `*data` is the base and `*size` the size in bytes, both owned by the caller and read at each access, so a base that moves
@@ -360,6 +372,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_guest *g, uint32_t comp
 /* Adds an object to the table of the state (no guest needed: the streams of a state are made while it is configured). Returns the handle, or 0 when the table is full or there is no memory;
    nothing is changed then. */
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_add(fusedwasi_p2_state *state, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
+    if (state->closed__) return 0; /* a closed state makes no handle */
     uint32_t index = 0;
     for (uint32_t i = 1; i < state->slot_count__; i++)
         if (!state->slots__[i].live) {
@@ -393,6 +406,7 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_add(fusedwasi_p2_state *state, uint3
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2__table_new(fusedwasi_p2_guest *g, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
     uint32_t handle = fusedwasi_p2_table_add(g->state, kind, obj, destroy);
     if (!handle) {
+        if (g->state->closed__) g->trap(g, "the state is closed");
         if (g->state->slot_count__ > FUSEDWASI_P2__INDEX_MASK) g->trap(g, "table of handles is full");
         g->trap(g, "out of memory");
     }
@@ -401,7 +415,7 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2__table_new(fusedwasi_p2_guest *g, uint32_t
 
 /* For a function that has the guest, after a constructor of the state that gave 0 for a full table or no memory: the trap. */
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2__handle_or_trap(fusedwasi_p2_guest *g, uint32_t handle) {
-    if (!handle) g->trap(g, g->state->slot_count__ > FUSEDWASI_P2__INDEX_MASK ? "table of handles is full" : "out of memory");
+    if (!handle) g->trap(g, g->state->closed__ ? "the state is closed" : g->state->slot_count__ > FUSEDWASI_P2__INDEX_MASK ? "table of handles is full" : "out of memory");
     return handle;
 }
 

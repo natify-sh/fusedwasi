@@ -477,12 +477,20 @@ fail:
    (size_t)-1 when it was not a directory). The functions of 0.1 do it at their first call when this was not called; nothing is made twice. */
 static inline int fusedwasi_p1_open_descriptors(fusedwasi_p2_state *state, int *err, size_t *bad) {
     *bad = (size_t)-1;
+    if (state->closed__) {
+        *err = EBADF; /* a closed state has no descriptors and makes none */
+        return -1;
+    }
     if (state->p1_table__) return 0;
     return fusedwasi_p1__make_fds(state, err, bad) ? 0 : -1;
 }
 
 /* the descriptors of the state of the guest, made if they were not; NULL with *rc the errno of WASI of the failure */
 static inline fusedwasi_p1__fds *fusedwasi_p1__fds_get(fusedwasi_p2_guest *g, uint32_t *rc) {
+    if (g->state->closed__) {
+        *rc = FUSEDWASI_P1_E_BADF; /* closed: every descriptor, 0 to 2 too, is bad, and the map is not made again */
+        return NULL;
+    }
     fusedwasi_p2__slot *slot = fusedwasi_p2__table_find(g->state, g->state->p1_table__, FUSEDWASI_P2__KIND_P1_FDS);
     if (slot) return (fusedwasi_p1__fds *)slot->obj;
     int err = 0;

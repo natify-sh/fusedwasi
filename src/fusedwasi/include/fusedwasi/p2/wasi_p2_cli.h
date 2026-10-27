@@ -118,6 +118,7 @@ FUSEDWASI_P2_FN fusedwasi_p2_fd_stream *fusedwasi_p2_fd_output_new(fusedwasi_p2_
 /* the standard stream i (0 stdin, 1 stdout, 2 stderr); NULL when the default one cannot be made (no memory) */
 FUSEDWASI_P2_FN fusedwasi_p2_stream *fusedwasi_p2_std_get(fusedwasi_p2_state *state, int i) {
     if (state->std[i]) return state->std[i];
+    if (state->closed__) return NULL; /* a closed state makes no default stream (it would not be freed) */
     if (!state->std_default__[i]) state->std_default__[i] = i == 0 ? (void *)fusedwasi_p2_fd_input_new(state, 0) : (void *)fusedwasi_p2_fd_output_new(state, i);
     return (fusedwasi_p2_stream *)state->std_default__[i];
 }
@@ -125,7 +126,7 @@ FUSEDWASI_P2_FN fusedwasi_p2_stream *fusedwasi_p2_std_get(fusedwasi_p2_state *st
 /* the same in a function that has the guest: no memory for the default stream is a trap */
 FUSEDWASI_P2_FN fusedwasi_p2_stream *fusedwasi_p2__std(fusedwasi_p2_guest *g, int i) {
     fusedwasi_p2_stream *st = fusedwasi_p2_std_get(g->state, i);
-    if (!st) g->trap(g, "out of memory");
+    if (!st) g->trap(g, g->state->closed__ ? "the state is closed" : "out of memory");
     return st;
 }
 

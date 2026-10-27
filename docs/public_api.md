@@ -6,7 +6,7 @@ Written by `tools/public_api.py doc` from `src/fusedwasi/public_api.json`; do no
 * **Python**: a private name has a leading underscore (`_check`, `State._slots`). A module lists no other name than the ones below and the functions of its imports.
 * **unstable**: public in the alpha, with no promise: wasi:http and wasi:sockets.
 
-`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 326 public names besides the 247 functions of the imports, 543 private names and 9 private fields.
+`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 327 public names besides the 247 functions of the imports, 543 private names and 10 private fields.
 
 ## C
 
@@ -18,7 +18,8 @@ Written by `tools/public_api.py doc` from `src/fusedwasi/public_api.json`; do no
 | `fusedwasi_p2_guest` | the caller: memories, trap, realloc, wait, exit, signal, the end of a call; one for each instance, over one state |
 | `fusedwasi_p2_preopen` | a directory of the host that the guest sees under a name: {path, name, writable} (the same struct for both families) |
 | `fusedwasi_p2_init` | makes a state: all zero, with the system's clocks, random source and sleep |
-| `fusedwasi_p2_free` | frees what the state holds; the guests over it must not be used afterwards |
+| `fusedwasi_p2_free` | frees what the state holds and closes it; the guests over it must not be used afterwards, except to see what a closed state answers |
+| `fusedwasi_p2_state_closed` | whether the state is closed (`fusedwasi_p2_free` was called): no handle is alive, none is made, every descriptor of 0.1 is BADF |
 | `fusedwasi_p2_guest_init` | makes a guest over a state: all zero, with the default trap (aborts), wait and exit |
 | `fusedwasi_p2_bind_memory` | binds memory number `comp` of a guest by pointer (base and size read at each access, so a memory that moves is followed) |
 | `fusedwasi_p2_set_memory` | binds memory number `comp` by value (the guest keeps a copy; set it again when the memory grows) |
@@ -159,7 +160,7 @@ Not public although they match a pattern above: `FUSEDWASI_P2_KIND_P1_FDS`, `FUS
 | `resolution_ns` | their resolutions |
 | `sleep` | hook: how a call of 0.1 waits |
 | `user` | the pointer of whoever made the state, given back to its hooks; never touched by the library |
-| `slots__`, `slot_count__`, `slot_capacity__`, `std_default__`, `p1_table__` | private: not to be read or written by a host |
+| `slots__`, `slot_count__`, `slot_capacity__`, `std_default__`, `p1_table__`, `closed__` | private: not to be read or written by a host |
 
 `fusedwasi_p2_guest`:
 
@@ -452,7 +453,8 @@ wasi:http (unstable in the alpha).  Its functions are the ones of the table `sig
 | `clock` | hook |
 | `resolution_ns` | the resolutions |
 | `sleep` | hook |
-| `close_all` | closes what the state holds open |
+| `close_all` | closes what the state holds open, and closes the state (`closed`) |
+| `closed` | read only: whether `close_all()` was called; a closed state has no live handle, makes none, and every descriptor of 0.1 is BADF |
 | `_slots`, `_p1` | private |
 
 `fusedwasi.p2.Guest`:

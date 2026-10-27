@@ -1,0 +1,46 @@
+# WASI 0.1 on a state that is closed (close_all / fusedwasi_p2_free): every descriptor, 0 to 2 included, answers BADF, the map is not made again (the preopens do not come back), the configuration is still read.
+arg "prog"
+preopen "$TMP" "/data" rw
+hooks on
+start 8192
+mem put 1000 "hello.txt"
+mem u32 5000 3100
+mem u32 5004 3
+mem put 3100 "abc"
+mem u32 5100 6000
+mem u32 5104 16
+closed before
+call fd_prestat_get 3 4000
+mem dump 4000 8 prestat_before
+call path_open 3 0 1000 9 1 536870911 536870911 0 4100
+mem dump 4100 4 fd
+call fd_write 4 5000 1 4200
+call fd_write 1 5000 1 4200
+call fd_close 4
+close
+closed after
+call fd_write 1 5000 1 4300
+call fd_write 2 5000 1 4300
+call fd_read 0 5100 1 4300
+call fd_fdstat_get 0 4400
+call fd_fdstat_get 1 4400
+call fd_prestat_get 3 4500
+call fd_prestat_dir_name 3 4600 5
+call fd_seek 4 0 0 4700
+call fd_filestat_get 3 4800
+call fd_close 4
+call fd_close 3
+call fd_renumber 4 5
+call path_open 3 0 1000 9 1 536870911 536870911 0 4900
+call path_filestat_get 3 1 1000 9 4950
+call fd_readdir 3 5200 64 0 5300
+call sock_recv 4 5100 1 0 4300 4310
+mem dump 4300 16 results_untouched
+call args_sizes_get 4000 4004
+mem dump 4000 8 sizes
+call random_get 5400 4
+call sched_yield
+close
+closed twice
+call fd_write 1 5000 1 4300
+call path_open 3 0 1000 9 0 536870911 536870911 0 4900

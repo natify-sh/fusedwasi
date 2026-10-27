@@ -116,6 +116,12 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
                 state.clock, state.random_bytes, state.sleep = hook_clock, hook_random, hook_sleep
                 state.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
             guest = Guest(state, OutOfProcessMemory(memory) if remote else memory)
+        elif word == "close":
+            assert state is not None
+            state.close_all()
+        elif word == "closed":
+            assert state is not None
+            out.append(f"closed {t[1].decode()} {int(state.closed)}")
         elif word == "signal":
             assert guest is not None
             guest.signal = hook_signal if t[1] == b"on" else None

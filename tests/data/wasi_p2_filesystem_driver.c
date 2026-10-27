@@ -236,6 +236,17 @@ int main(int argc, char **argv) {
         FS(descriptor_get_flags, d2, 240), show("flags", 240, 2);
         n = path("made", 4);
         FS(descriptor_create_directory_at, d2, 1000, n, 250), show("create in it", 250, 8);
+    } else if (!strcmp(scenario, "closed_handle") || !strcmp(scenario, "closed_new")) {
+        /* a closed state (fusedwasi_p2_free): its handles are dead, and it makes none */
+        fusedwasi_wasi_filesystem_preopens_get_directories(&s, 0, 0);
+        uint32_t hd = u32(u32(0));
+        FS(descriptor_get_flags, hd, 240), show("flags before", 240, 4);
+        printf("closed %d\n", fusedwasi_p2_state_closed(&world));
+        fusedwasi_p2_free(&world);
+        printf("closed %d\n", fusedwasi_p2_state_closed(&world));
+        if (!strcmp(scenario, "closed_handle")) FS(descriptor_get_flags, hd, 240);
+        else fusedwasi_wasi_filesystem_preopens_get_directories(&s, 0, 0);
+        printf("not reached\n");
     } else if (!strcmp(scenario, "bad_handle")) {
         FS(descriptor_get_flags, 12345, 0);
     } else if (!strcmp(scenario, "outside")) {
