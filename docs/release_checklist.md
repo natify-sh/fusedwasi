@@ -10,7 +10,7 @@ What `wasmext` (C) and `wasmhost` (Python) use today is, in effect, the public i
 
 C (counted in `wasmext/src`, by use):
 
-- State of 0.2: `fusedwasi_p2_state` (fields read or written from outside: `user`, `trap`, `realloc`, `exited`, `exit_code`, `std[]`, `args`, `env_*`, `preopens`, `clock`, `random_bytes`, `sleep`, `wait`, `socket_addr_check`, `http_check`), `fusedwasi_p2_init`, `fusedwasi_p2_free`, `fusedwasi_p2_set_memory`, `fusedwasi_p2_stream` with `FUSEDWASI_P2_STREAM_OK / CLOSED / FAILED`, `fusedwasi_p2_preopen`.
+- State of 0.2: `fusedwasi_p2_state` (fields read or written from outside: `user`, `trap`, `realloc`, `exited`, `exit_code`, `std[]`, `args`, `env_*`, `preopens`, `clock`, `random_bytes`, `sleep`, `wait`, `socket_addr_check`, `http_check`), `fusedwasi_p2_init`, `fusedwasi_p2_free`, `fusedwasi_p2_bind_memory` (primary), `fusedwasi_p2_set_memory` (convenience), `fusedwasi_p2_stream` with `FUSEDWASI_P2_STREAM_OK / CLOSED / FAILED`, `fusedwasi_p2_preopen`.
 - State of 0.1: `fusedwasi_p1_state` (fields: `core`, `user`, `finished`, `end_value`, `memory_data`, `memory_size`), `fusedwasi_p1_config`, `fusedwasi_p1_preopen`, `fusedwasi_p1_create`, `fusedwasi_p1_destroy`, `fusedwasi_p1_bind`, `fusedwasi_p1_errno`, `fusedwasi_p1_copy`, `FUSEDWASI_P1_END_EXIT / END_SIGNAL`, and the macros `FUSEDWASI_P1_MALLOC / CALLOC / FREE / WRITE`.
 - The function of each import (`fusedwasi_p1_<name>`, `fusedwasi_p2_<package>_<name>`) is bound by the generator by name, so these names are an interface too.
 

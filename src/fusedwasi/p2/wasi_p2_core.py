@@ -1,7 +1,8 @@
 """The state of a host of WASI 0.2 and the helpers of the canonical ABI that every package uses (the twin of `include/fusedwasi/p2/wasi_p2_core.h`).
 
 No mutable state at the level of the module: everything that changes is in a `Host`, which is passed as the first argument of every function of the packages.
-A memory is any writable buffer (`bytearray`, `memoryview`); a module fused from components has one for each component, and a function takes the number of its own.
+A memory is any writable buffer (`bytearray`, `memoryview`) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
+that moves is followed: the twin of `fusedwasi_p2_bind_memory`); a module fused from components has one for each component, and a function takes the number of its own.
 """
 
 from __future__ import annotations
@@ -108,7 +109,7 @@ class Host:
 
     def __init__(
         self,
-        memories: Sequence[object] = (),
+        memories: Sequence[object | Callable[[], object]] = (),
         *,
         clock: Callable[[int], int] = lambda ident: _CLOCKS[ident](),
         resolution_ns: Sequence[int] | None = None,
@@ -133,7 +134,7 @@ class Host:
         http_send: Callable[[Any], Any] | None = None,
         user: object = None,
     ) -> None:
-        self.memories: list[object] = list(memories)
+        self.memories: list[object | Callable[[], object]] = list(memories)
         self.slots: list[Slot] = [Slot()]  # slot 0 is never used
         self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
         self.wait = wait  # what a blocking call does between two looks at a pollable
@@ -225,7 +226,10 @@ def table_drop(host: Host, handle: int, kind: int) -> None:
 def _check(host: Host, comp: int, ptr: int, size: int) -> memoryview:
     if comp >= len(host.memories):
         raise Trap(f"no memory {comp}")
-    view = memoryview(host.memories[comp])  # type: ignore[call-overload]
+    memory = host.memories[comp]
+    if callable(memory):  # a function that gives the buffer: a memory that moves is followed
+        memory = memory()
+    view = memoryview(memory)  # type: ignore[call-overload]
     if ptr < 0 or ptr + size > len(view):
         raise Trap(f"pointer {ptr:#x}+{size} is outside the memory")
     return view

@@ -104,7 +104,7 @@ Same name, same meaning, unless stated. "gap" is a place where a host written ag
 
 | C field | Python `Host` | Parity |
 | --- | --- | --- |
-| `memory[8]`, `memories` (copy of base and size) | `memories` list of any writable buffer | different model, same meaning. Python has no limit of 8. |
+| `memory[8]`, `memories` (pointers to base and size; `fusedwasi_p2_bind_memory` binds them, `fusedwasi_p2_set_memory` writes cells of the state and binds those) | `memories` list of any writable buffer or a function of no arguments that gives it | same model since the bind by pointer (as 0.1's `fusedwasi_p1_bind` and `memory=`). Python has no limit of 8. |
 | `trap` hook | none: a bad handle raises `Trap` | **gap (by design)**: Python has no hook to replace; an exception is the trap. Neither is wrong, but a Python host cannot turn a trap into something else without catching. |
 | `realloc(s, comp, ...)` | `realloc(comp, ...)` | same |
 | `wait(s)` | `wait()` | same |
@@ -148,7 +148,7 @@ Same name, same meaning, unless stated. "gap" is a place where a host written ag
 ### 2.4 Parity inside C
 
 * The two preopen structs (0.1 and 0.2) have different field names and polarity (`host`/`path`, `readonly`/`writable`, `name_len`). A host that fills both (wasmext does) writes the same list twice.
-* 0.1 binds the memory by pointer; 0.2 sets it by value (2.2).
+* 0.1 and 0.2 both bind the memory by pointer (`fusedwasi_p1_bind`, `fusedwasi_p2_bind_memory`); `fusedwasi_p2_set_memory` is the by-value convenience (2.2).
 * `fusedwasi_p1_*` functions take `void *s`; `fusedwasi_wasi_*` take `fusedwasi_p2_state *`. This is deliberate in 0.1 (a glue binds all functions with one pointer type) but is not said.
 
 ### 2.5 Behaviour parity
@@ -244,7 +244,7 @@ Python gets the same contract plus the exceptions `Exit` and `Signal`: the excep
 
 **Public configuration (fields the host sets):** `args/arg_count`, `env_names/env_values/env_count`, `initial_cwd`, `preopens/preopen_count`, `socket_addr_check`, `allow_ip_name_lookup`, `http_check`, `http_send`, `std[3]`, `terminals`, the hooks `trap`, `realloc`, `wait`, `exit`, `random_bytes`, `insecure_random_bytes`, `clock`, `resolution_ns`, `sleep`, and `user`. Lifetime rule to write: pointers are owned by the caller and must outlive the state.
 
-**Private (not to be read or written by a host):** `memory[]`, `memories` (use `set_memory`), `slots`, `slot_count`, `slot_capacity`, `std_default`, all of `fusedwasi_p2_slot`, `fusedwasi_p2_pollable`, the handle layout constants (`INDEX_BITS`, `GENERATION_MASK`), `FUSEDWASI_P2_KIND_*`, `FUSEDWASI_P1_K_*`, `fusedwasi_p1_entry`, `entries`, `nentries`, `memory_data`, `memory_size` (use `bind`), every `fusedwasi_p2_sys_*`, `fusedwasi_p2_walk_*`, `fusedwasi_p2_default_*`, `FUSEDWASI_P1_STATE`, `FUSEDWASI_P1_MEM`, `FUSEDWASI_P1_READ/WRITE/...` and `FUSEDWASI_P2_FN`. C has no way to enforce this; a naming rule (a double underscore, or a `_private` tail) or a comment block "Host API" at the top of each state would carry it.
+**Private (not to be read or written by a host):** `memory[]`, `memory_cell[]`, `memories` (use `bind_memory`, or `set_memory`), `slots`, `slot_count`, `slot_capacity`, `std_default`, all of `fusedwasi_p2_slot`, `fusedwasi_p2_pollable`, the handle layout constants (`INDEX_BITS`, `GENERATION_MASK`), `FUSEDWASI_P2_KIND_*`, `FUSEDWASI_P1_K_*`, `fusedwasi_p1_entry`, `entries`, `nentries`, `memory_data`, `memory_size` (use `bind`), every `fusedwasi_p2_sys_*`, `fusedwasi_p2_walk_*`, `fusedwasi_p2_default_*`, `FUSEDWASI_P1_STATE`, `FUSEDWASI_P1_MEM`, `FUSEDWASI_P1_READ/WRITE/...` and `FUSEDWASI_P2_FN`. C has no way to enforce this; a naming rule (a double underscore, or a `_private` tail) or a comment block "Host API" at the top of each state would carry it.
 
 **Things a host needs and may not have:** the inverse of `fusedwasi_p1_errno`, a way to name a `use` (`fusedwasi_p2_use_name(int)`), a typed `std`.
 

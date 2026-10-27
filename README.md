@@ -44,7 +44,8 @@ fusedwasi_p2_init(&s);                  /* defaults: system clocks, /dev/urandom
 s.args = args, s.arg_count = 2;
 s.realloc = my_cabi_realloc;         /* the cabi_realloc of component `comp` */
 s.trap = my_trap;                    /* in a wasm2c module: wasm_rt_trap */
-fusedwasi_p2_set_memory(&s, 0, base, size);       /* once for each component; set again when the memory grows */
+fusedwasi_p2_bind_memory(&s, 0, &m->data, &m->size);  /* once for each component: read at each call, so memory.grow needs no rebind */
+/* or, as a convenience that keeps its own copy (set it again when the memory grows): fusedwasi_p2_set_memory(&s, 0, base, size); */
 
 /* the body of an import of the module: the first argument is the component whose memory it is */
 fusedwasi_wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
@@ -54,13 +55,15 @@ fusedwasi_wasi_cli_environment_get_arguments(&s, /*comp*/ 0, /*retptr*/ ptr);
 from fusedwasi import Host
 from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers
 
-host = Host([memory], args=["prog"], realloc=my_cabi_realloc)  # a memory is any writable buffer
+host = Host(
+    [memory], args=["prog"], realloc=my_cabi_realloc
+)  # a memory is any writable buffer, or a function of no arguments that gives it (followed when it moves)
 cli.wasi_cli_environment_get_arguments(host, 0, ptr)
 ```
 
 | Part | What the host gives | What the library does |
 |---|---|---|
-| memory | a base and a size for each component | checked, little-endian loads and stores; a pointer outside is a trap |
+| memory | a base and a size for each component, bound by pointer (`fusedwasi_p2_bind_memory`, primary: read at each access, so a moved base is followed) or set by value (`fusedwasi_p2_set_memory`, the convenience) | checked, little-endian loads and stores; a pointer outside is a trap |
 | handles | nothing | the table of `own` and `borrow` (generation + index), `[resource-drop]` |
 | lists and strings it returns | `realloc` (the `cabi_realloc` of the component) | placing them in the guest's memory |
 | files | the preopened directories (`path`, `name`, `writable`) | paths confined below the preopen (POSIX and Windows) |

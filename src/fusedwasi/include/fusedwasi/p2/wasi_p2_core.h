@@ -81,10 +81,17 @@ enum { FUSEDWASI_P2_KIND_POLLABLE = 1, FUSEDWASI_P2_KIND_ERROR = 2, FUSEDWASI_P2
 
 enum { FUSEDWASI_P2_TERMINAL_STDIN = 1, FUSEDWASI_P2_TERMINAL_STDOUT = 2, FUSEDWASI_P2_TERMINAL_STDERR = 4 };
 
+/* A memory is read through two pointers the consumer owns (the base moves when the module grows its memory; the library keeps no copy of either).
+   `fusedwasi_p2_memory_cell` is the storage that `fusedwasi_p2_set_memory` writes to; `fusedwasi_p2_bind_memory` points elsewhere. */
+typedef struct {
+    uint8_t **data;
+    uint64_t *size;
+} fusedwasi_p2_memory;
+
 typedef struct {
     uint8_t *base;
     uint64_t size;
-} fusedwasi_p2_memory;
+} fusedwasi_p2_memory_cell;
 
 /* Something a guest can wait for; wasi:clocks and wasi:io make the kinds. `ctx` is the owner's, `deadline` is for the clocks. */
 typedef struct fusedwasi_p2_pollable {
@@ -102,7 +109,8 @@ typedef struct {
 } fusedwasi_p2_slot;
 
 typedef struct fusedwasi_p2_state {
-    fusedwasi_p2_memory memory[FUSEDWASI_P2_MAX_MEMORIES];
+    fusedwasi_p2_memory memory[FUSEDWASI_P2_MAX_MEMORIES]; /* NULL pointers: never bound */
+    fusedwasi_p2_memory_cell memory_cell[FUSEDWASI_P2_MAX_MEMORIES]; /* the cells of `fusedwasi_p2_set_memory`, owned by the state */
     uint32_t memories;
     fusedwasi_p2_slot *slots; /* slot 0 is never used */
     uint32_t slot_count, slot_capacity;
@@ -290,13 +298,23 @@ FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *s) {
     s->slot_count = s->slot_capacity = 0;
 }
 
-/* Binds memory number `comp` (the base moves when the module grows its memory: set it again). Returns 0, or -1 if the number is too big. */
-FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_state *s, uint32_t comp, uint8_t *base, uint64_t size) {
+/* Binds memory number `comp` by pointer: `*data` is the base and `*size` the size in bytes, both owned by the caller and read at each access, so a base that moves
+   (memory.grow) is followed with no second call. The pointers must stay valid while the state is used. Returns 0, or -1 if the number is too big. */
+FUSEDWASI_P2_FN int fusedwasi_p2_bind_memory(fusedwasi_p2_state *s, uint32_t comp, uint8_t **data, uint64_t *size) {
     if (comp >= FUSEDWASI_P2_MAX_MEMORIES) return -1;
-    s->memory[comp].base = base;
+    s->memory[comp].data = data;
     s->memory[comp].size = size;
     if (comp >= s->memories) s->memories = comp + 1;
     return 0;
+}
+
+/* The convenience: stores `base` and `size` in cells of the state and binds the memory to them (a base that moves: call it again, or use `fusedwasi_p2_bind_memory`).
+   Returns 0, or -1 if the number is too big. */
+FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_state *s, uint32_t comp, uint8_t *base, uint64_t size) {
+    if (comp >= FUSEDWASI_P2_MAX_MEMORIES) return -1;
+    s->memory_cell[comp].base = base;
+    s->memory_cell[comp].size = size;
+    return fusedwasi_p2_bind_memory(s, comp, &s->memory_cell[comp].base, &s->memory_cell[comp].size);
 }
 
 /* the table of handles (own and borrow share it; a handle is an i32 for the guest) */
@@ -365,9 +383,9 @@ FUSEDWASI_P2_FN void fusedwasi_p2_table_drop(fusedwasi_p2_state *s, uint32_t han
 /* memory: little-endian, checked */
 
 FUSEDWASI_P2_FN uint8_t *fusedwasi_p2_mem(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint32_t size) {
-    if (comp >= s->memories) s->trap(s, "no such memory");
-    if ((uint64_t)ptr + size > s->memory[comp].size) s->trap(s, "pointer outside the memory");
-    return s->memory[comp].base + ptr;
+    if (comp >= s->memories || !s->memory[comp].data || !s->memory[comp].size) s->trap(s, "no such memory");
+    if ((uint64_t)ptr + size > *s->memory[comp].size) s->trap(s, "pointer outside the memory");
+    return *s->memory[comp].data + ptr;
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_store_u32(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint32_t v) {

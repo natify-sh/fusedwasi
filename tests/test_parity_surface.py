@@ -217,3 +217,104 @@ def test_every_constant_of_0_1_in_python_is_in_c_with_the_same_value(tmp_path: P
     c_values = {line.split()[0]: int(line.split()[1]) for line in out.splitlines()}
     for n in names:
         assert c_values[n] == getattr(wasi_p1_core, n), n
+
+
+# ---- the memory: bound by pointer (primary) or set by value ----------------------------------------------------------------------
+
+BIND_C = """#include <stdio.h>
+#include <setjmp.h>
+#include <stdlib.h>
+#include "wasi_p2_cli.h"
+static jmp_buf jb;
+static const char *last;
+static void on_trap(fusedwasi_p2_state *s, const char *m) { (void)s; last = m; longjmp(jb, 1); }
+static void terminal(fusedwasi_p2_state *s, uint8_t *base, uint32_t at, const char *label) {
+    last = "none";
+    if (setjmp(jb) == 0) {
+        fusedwasi_wasi_cli_terminal_stdin_get_terminal_stdin(s, 0, at);
+        printf("%s ok %d\\n", label, base ? base[at] : -1);
+    } else printf("%s trap %s\\n", label, last);
+}
+int main(void) {
+    fusedwasi_p2_state s;
+    fusedwasi_p2_init(&s);
+    s.trap = on_trap;
+    s.terminals = FUSEDWASI_P2_TERMINAL_STDIN;
+    printf("bind %d %d\\n", fusedwasi_p2_bind_memory(&s, 0, NULL, NULL), fusedwasi_p2_bind_memory(&s, FUSEDWASI_P2_MAX_MEMORIES, NULL, NULL));
+    terminal(&s, NULL, 0, "null");
+    /* the cells are the consumer's: bind once, then realloc the cell */
+    uint8_t *data = calloc(16, 1);
+    uint64_t size = 16;
+    printf("bind %d\\n", fusedwasi_p2_bind_memory(&s, 0, &data, &size));
+    terminal(&s, data, 8, "first");
+    terminal(&s, data, 40, "outside");
+    uint8_t *moved = calloc(64, 1);
+    free(data);
+    data = moved, size = 64;
+    terminal(&s, data, 40, "grown");
+    /* memory 2 alone: 1 was never bound */
+    printf("bind %d\\n", fusedwasi_p2_bind_memory(&s, 2, &data, &size));
+    last = "none";
+    if (setjmp(jb) == 0) fusedwasi_wasi_cli_terminal_stdin_get_terminal_stdin(&s, 1, 0);
+    printf("unbound %s\\n", last);
+    /* set_memory keeps its meaning, and takes the number over from the binding */
+    static uint8_t fixed[32];
+    printf("set %d\\n", fusedwasi_p2_set_memory(&s, 0, fixed, sizeof fixed));
+    terminal(&s, fixed, 20, "set");
+    terminal(&s, fixed, 40, "set-outside");
+    data[0] = 7;
+    printf("untouched %d\\n", fixed[0]);
+    free(data);
+    fusedwasi_p2_free(&s);
+    return 0;
+}
+"""
+
+
+def test_bind_memory_follows_a_moved_base_in_c_and_python(tmp_path: Path) -> None:
+    out = build_and_run(tmp_path, BIND_C).splitlines()
+    assert out == [
+        "bind 0 -1",
+        "null trap no such memory",
+        "bind 0",
+        "first ok 1",
+        "outside trap pointer outside the memory",
+        "grown ok 1",
+        "bind 0",
+        "unbound no such memory",
+        "set 0",
+        "set ok 1",
+        "set-outside trap pointer outside the memory",
+        "untouched 0",
+    ]
+    # the same, in Python: a function that gives the buffer, and the buffer is replaced
+    cell = [bytearray(16)]
+    host = Host([lambda: cell[0]], terminals=core.TERMINAL_STDIN)
+    cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 0, 8)
+    assert cell[0][8] == 1
+    with pytest.raises(core.Trap, match="outside the memory"):
+        cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 0, 40)
+    cell[0] = bytearray(64)
+    cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 0, 40)
+    assert cell[0][40] == 1
+    with pytest.raises(core.Trap, match="no memory"):
+        cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, 1, 0)
+    # buffers and functions mix, and a buffer still works as before
+    plain = bytearray(32)
+    mixed = Host([lambda: cell[0], plain], terminals=core.TERMINAL_STDIN)
+    cli.wasi_cli_terminal_stdin_get_terminal_stdin(mixed, 1, 20)
+    assert plain[20] == 1
+    with pytest.raises(core.Trap, match="outside the memory"):
+        cli.wasi_cli_terminal_stdin_get_terminal_stdin(mixed, 1, 40)
+
+
+def test_bind_memory_is_in_c_and_the_python_twin_takes_callables(tmp_path: Path) -> None:
+    text = (C_P2 / "wasi_p2_core.h").read_text()
+    assert re.search(
+        r"int fusedwasi_p2_bind_memory\(fusedwasi_p2_state \*s, uint32_t comp, uint8_t \*\*data, uint64_t \*size\)",
+        text,
+    )
+    assert re.search(
+        r"int fusedwasi_p2_set_memory\(fusedwasi_p2_state \*s, uint32_t comp, uint8_t \*base, uint64_t size\)", text
+    )
+    assert "memories" in Host.__init__.__annotations__
