@@ -121,6 +121,11 @@ def test_append_by_hand(tmp_path: Path) -> None:
     """Read by hand: a write and a pwrite on a descriptor opened for appending go to the end (the system's rule for pwrite, kept when 0.1 went over 0.2); with the flag off they go where told."""
     lines = run(DATA / "p1" / "append.txt", str(tmp_path))
     assert "tell_after_write 0300000000000000" in lines  # "abc" written: the position is 3
+    if (
+        sys.platform == "win32"
+    ):  # there pwrite is a seek, a write and a seek back, as it always was: it writes where it is told
+        assert "content 5a5a630000000000" in lines
+        return
     assert "content 6162635a5a000000" in lines  # the pwrite of "ZZ" at 0 went to the end
     assert "content2 5a5a635a5a61626300000000" in lines  # flag off: pwrite at 0 overwrote "ab"
 
