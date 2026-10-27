@@ -1,4 +1,4 @@
-# wasi:http, the same requests from the guest in Wasmtime and from the host of wasmext, to the server of server.py (PORT is its port)
+# wasi:http, the same requests from the guest in Wasmtime and from the host of fusedwasi, to the server of server.py (PORT is its port)
 # req METHOD AUTHORITY PATH [body=TEXT] [h:NAME=VALUE] [tr:NAME=VALUE] [first=MS]
 req GET 127.0.0.1:PORT /hello
 req GET 127.0.0.1:PORT /hello h:x-test=1

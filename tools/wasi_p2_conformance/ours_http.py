@@ -6,7 +6,8 @@ from pathlib import Path
 
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Host, load_u32, store_u32
+from fusedwasi.p2 import Guest, State
+from fusedwasi.p2.wasi_p2_core import load_u32, store_u32
 
 R = 256
 STD = ("GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH")
@@ -22,7 +23,7 @@ class Ours:
             self.free = ptr + new_size
             return ptr
 
-        self.host = Host([self.memory], realloc=bump, http=True)
+        self.host = Guest(State(http=True), [self.memory], realloc=bump)
 
     def u32(self, off: int) -> int:
         return load_u32(self.host, 0, off)

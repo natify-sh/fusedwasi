@@ -1,4 +1,4 @@
-# wasi:filesystem, the same operations on the guest in Wasmtime and on the host of wasmext.
+# wasi:filesystem, the same operations on the guest in Wasmtime and on the host of fusedwasi.
 # open NAME DIR PATH PATHFLAGS(f|-) OPENFLAGS(c d e t|-) DESCRIPTORFLAGS(r w f d q m|-)
 preopen root 0
 preopen ro 1

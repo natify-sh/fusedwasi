@@ -6,7 +6,8 @@ from pathlib import Path
 
 from fusedwasi.p2 import wasi_p2_filesystem as fs
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Host, load_u32
+from fusedwasi.p2 import Guest, State
+from fusedwasi.p2.wasi_p2_core import load_u32
 
 R = 256
 KINDS = ["unknown", "block-device", "character-device", "directory", "fifo", "symbolic-link", "regular-file", "socket"]
@@ -28,7 +29,7 @@ class Ours:
             self.free = ptr + new_size
             return ptr
 
-        self.host = Host([self.memory], realloc=bump, preopens=preopens)
+        self.host = Guest(State(preopens=preopens), [self.memory], realloc=bump)
         self.h: dict[str, int] = {}
 
     # memory helpers

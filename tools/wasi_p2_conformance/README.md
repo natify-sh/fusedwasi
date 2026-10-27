@@ -1,11 +1,16 @@
 # The host of WASI 0.2 against Wasmtime
 
-The same script of operations is run by a guest in Wasmtime (a Rust component for `wasm32-wasip2`, run with `wasmtime-py`) and by the Python host of wasmext (`ours.py`, calling the functions of `wasi_p2_*` through a fake memory), and the lines they print are compared. The Python host is the reference for the C one: `tests/test_wasi_p2_*.py` keep the two equal.
+The same script of operations is run by a guest in Wasmtime (a Rust component for `wasm32-wasip2`, run with `wasmtime-py`) and by the Python host of fusedwasi (`ours.py`, calling the functions of `wasi_p2_*` through a fake memory), and the lines they print are compared. The Python host is the reference for the C one: `tests/test_wasi_p2_*.py` keep the two equal.
 
     pip install wasmtime            # in the environment of the project
     rustup target add wasm32-wasip2
     (cd tools/wasi_p2_conformance/guest && cargo build --release --target wasm32-wasip2)
     python tools/wasi_p2_conformance/runner.py [script_fs.txt]
+
+    HOST=c python tools/wasi_p2_conformance/runner.py [script_fs.txt|script_http.txt]   # the C host instead of the Python twin
+    SHOW_KNOWN=1 ...                                                                    # also print the differences marked `#~`
+
+`ours.py` and `ours_http.py` (Python twin: `fusedwasi.p2.State` + `Guest`) and `ours_c.c` and `ours_http_c.c` (C host: `fusedwasi_p2_state` + `fusedwasi_p2_guest`; `HOST=c` builds them with `cc -fsanitize=address,undefined`) use only the public functions of `wasi_p2_*`. The http script needs `pytest` too (`server.py` imports `tests/test_wasi_p2_http.py`).
 
 Not part of the tests: CI has neither Wasmtime nor the Rust target.
 
@@ -30,7 +35,7 @@ The rest is marked `#~` in the script with the reason (32 operations, all of the
 
 ## wasi:http (`script_http.txt`, 23 requests)
 
-The same requests from a Rust guest in Wasmtime (`add_wasi_http`) and from the host of wasmext, to a server on the loopback (`server.py`: the routes of `tests/test_wasi_p2_http.py`). 19 agree, among them the status, the fields (without `date` and `server`), the body, the trailers, and the `error-code` for a refused connection, a name that does not exist, a silent server (`connection-read-timeout`) and a bad status line (`HTTP-protocol-error`). Two things were changed because of it: the host no longer shows `transfer-encoding` in the fields of an answer whose chunks it has put together (Wasmtime does not either).
+The same requests from a Rust guest in Wasmtime (`add_wasi_http`) and from the host of fusedwasi, to a server on the loopback (`server.py`: the routes of `tests/test_wasi_p2_http.py`). 19 agree, among them the status, the fields (without `date` and `server`), the body, the trailers, and the `error-code` for a refused connection, a name that does not exist, a silent server (`connection-read-timeout`) and a bad status line (`HTTP-protocol-error`). Two things were changed because of it: the host no longer shows `transfer-encoding` in the fields of an answer whose chunks it has put together (Wasmtime does not either).
 
 The 4 known differences: the host reads the answer whole, Wasmtime streams it, so a body that breaks halfway (`/truncated`, `/badchunk`) is an error of the request here and of the body stream there; a transfer coding it does not know (`gzip`) is `HTTP-response-transfer-coding` here (the WIT has the case), and a plain body there; the head of an answer is limited to 64 KiB here. Also: Wasmtime sends the body of a request in chunks always (this host with `Content-Length`).
 

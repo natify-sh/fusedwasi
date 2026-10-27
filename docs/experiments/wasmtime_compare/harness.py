@@ -32,12 +32,11 @@ import wasmtime.component as wc
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[2] / "src"))
 
+from fusedwasi.p1 import Exit as P1Exit
 from fusedwasi.p1 import wasi_p1
-from fusedwasi.p1.wasi_p1_core import Exit as P1Exit
-from fusedwasi.p1.wasi_p1_core import State
 from fusedwasi.p2 import wasi_p2_cli, wasi_p2_clocks, wasi_p2_filesystem, wasi_p2_io, wasi_p2_random
 from fusedwasi.p2.wasi_p2_core import Exit as P2Exit
-from fusedwasi.p2.wasi_p2_core import Host
+from fusedwasi.p2.wasi_p2_core import Guest, State
 from fusedwasi.p2.wasi_p2_io import BufferOutput, MemoryInput
 
 WASI_VERSION = "0.2.12"
@@ -469,15 +468,14 @@ class FusedP2(FusedBase):
         self, wasm_core: bytes, preopens: list[tuple[str, str]], args: list[str], env: list[tuple[str, str]]
     ) -> None:
         self.out = BufferOutput(1 << 20)
-        self.host = Host(
-            [],
+        self.state = State(
             args=args,
             env=env,
             stdin=MemoryInput(b""),
             stdout=self.out,
             preopens=[(p, g, True) for p, g in preopens],
-            realloc=self._realloc,
         )
+        self.host = Guest(self.state, [], realloc=self._realloc)
         self.ops = list(P2_OPS)
 
         def bind(module: str, field: str) -> Any:
@@ -503,15 +501,22 @@ class FusedP1(FusedBase):
         self, wasm_core: bytes, preopens: list[tuple[str, str]], args: list[str], env: list[tuple[str, str]]
     ) -> None:
         self.out = BufferOutput(1 << 20)
-        self.host = Host([], args=args, env=env, stdin=MemoryInput(b""), stdout=self.out)
-        self.state = State(lambda: self.view, core=self.host, preopens=[(p, g, True) for p, g in preopens])
+        self.state = State(
+            args=args,
+            env=env,
+            stdin=MemoryInput(b""),
+            stdout=self.out,
+            preopens=[(p, g, True) for p, g in preopens],
+        )
+        self.host = Guest(self.state, [])
         self.ops = list(P1_OPS)
 
         def bind(module: str, field: str) -> Any:
             fn = getattr(wasi_p1, field)
-            return lambda *a: fn(self.state, *a)
+            return lambda *a: fn(self.host, *a)
 
         self._core(wasm_core, bind)
+        self.host.memories.append(self.view)
 
     def stdout_text(self) -> bytes:
         return bytes(self.out.data)
