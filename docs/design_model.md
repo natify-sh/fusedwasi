@@ -77,7 +77,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 
 1. ~~One state for 0.1 and 0.2~~ decided: 0.1 over 0.2 (section 4).
 2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). Open: whether the first parameter keeps the name `s`.
-3. ~~The border cases~~ settled (section 3). Open from it: keep `proc_raise` as the end of the program with a signal, or answer `NOTSUP` as Wasmtime does.
+3. ~~The border cases~~ settled (section 3). `proc_raise` decided (owner, 2026-10-27): a hook `signal` on the guest; the default answers `NOTSUP` as Wasmtime does; the library no longer ends the program by itself (section 10).
 4. ~~Typed `std[3]`~~ decided with the split: `fusedwasi_p2_stream *std[3]` (a forward declaration), the one-line casts of derived structs in the drivers are fixed in the same change.
 5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
 
@@ -101,6 +101,16 @@ What this says for fusedwasi:
 
 * `WasiCtx` holds the stdio (`StdinStream` and `StdoutStream` objects), the clocks, the random sources, the policies of the sockets, the environment, the arguments and the preopens. It holds **no memory, no trap, no realloc and no exit status**. This is the same cut as the table above.
 * **The end of the program** leaves the call as its error: `proc_exit` returns `I32Exit(status)` (status of 126 and more is refused with an error); nothing is stored in `WasiP1Ctx` or `WasiCtx`. So the end is the result of one call, which is why `exited` and the others belong to the guest.
-* `proc_raise` answers `NOTSUP` in Wasmtime. fusedwasi ends the program with the signal (`finished`, `end_value`). That is a difference from Wasmtime, not from the WASI text; it is open whether to keep it (section 7).
+* `proc_raise` answers `NOTSUP` in Wasmtime. fusedwasi ends the program with the signal (`finished`, `end_value`). That is a difference from Wasmtime, not from the WASI text; it came with the code moved from wasmext (`8f35972`, `5058d6a`), and wasmhost answers `ENOSYS` and does not end the program (its README). Decided in section 10.
 * **Waiting**: Wasmtime has no `wait` hook. A blocking `poll_oneoff` is an `await` point of the caller's task, or, when `allow_blocking_current_thread` is set and there is one relative clock, a `thread::sleep`. The wait belongs to the caller (it is where the caller can yield or be interrupted); fusedwasi is synchronous, so the hook stands for the `await`, and it is on the guest.
 * **`user`**: the data of the user is the `T` of `Store<T>`; `WasiCtx` has no pointer of the user, because Rust closures carry their own data. C has no closures, so each side has a `user`.
+
+## 10. `proc_raise` (decided by the owner, 2026-10-27)
+
+What a signal does to a program is the host's decision, not WASI's: the guest only asks. So the library does not end the program on its own.
+
+* The guest has a hook `signal(guest, number)`. It returns an errno-like result for the call, or does what the host wants (ends the program with its own means: a trap, an exception).
+* The default (no hook): answers `NOTSUP`, as Wasmtime does. The program goes on.
+* `sig > 30` stays `INVAL`; `0` stays success (no signal).
+* `finished`, `end_value`, `FUSEDWASI_P1_END_SIGNAL` and `FUSEDWASI_P1_END_NONE`/`END_EXIT` go away from the state: what remains of the end of a call is `exited` and `exit_code`, on the guest (section 3). Python: `WasiSignal` and `Signal` go away; the hook is a callable of the `Guest`.
+* The user that wants today's behaviour of wasmext (a signal that kills ends the program, with the number and the name) writes it as the hook; the table of which signals end a process moves to that user. The test `tests/test_wasi_p1_core.py` (`proc_raise trapped`, `end 2 9`) is rewritten for the hook.
