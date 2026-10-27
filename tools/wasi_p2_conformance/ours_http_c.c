@@ -1,3 +1,7 @@
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS /* strcat, strtok and fopen as they are */
+#define _CRT_NONSTDC_NO_WARNINGS /* strdup as it is */
+#endif
 /* The C host of fusedwasi (include/fusedwasi/p2/wasi_p2_http.h) driven by script_http.txt: a port of ours_http.py, printing the same lines,
  * except that an error-code is printed as its number ("err=#12"): runner.py turns it into the name with the table of the Python twin.
  *
