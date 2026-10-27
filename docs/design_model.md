@@ -49,15 +49,108 @@ The name is **Guest**. The hooks of the world take the state; the hooks of the g
 
 **The rule for the objects of the world** (decided 2026-10-27): a stream, a pollable, a slot `destroy` and every constructor of a resource belong to the world. They take the **state** (or nothing), never a guest, and **never trap**: a failure is a return value (a stream: `FUSEDWASI_P2_STREAM_FAILED` with its `failure`; a pollable: `ready` gives -1 with `failure`; a constructor: 0 or NULL). Only the WASI function, which has the guest, turns that into a trap through `g->trap`, with the message it always had. So a stream can be made and given to a state (`std[i]`) while the state is configured, before any guest exists, and the author of a stream does not need to know what a guest is. This is how Wasmtime does it: a stream operation returns a `Result` and the engine decides the trap.
 
-## 4. 0.1 and 0.2 over one state (decided by the owner, 2026-10-27)
+## 4. 0.1 and 0.2 over one state (decided by the owner, 2026-10-27; stage B of step 3, written before the code)
 
-WASI 0.1 and 0.2 are two ways to ask for the same things (files, clocks, random, sockets). **Decided: as in Wasmtime, 0.1 is implemented over 0.2.** There is one State; its ground is the state of 0.2 (the tables of resources, the configuration, the policies); a descriptor of 0.1 is a map to a resource of 0.2 (Wasmtime: `WasiP1Adapter` over `WasiCtx` and `ResourceTable`), and the functions of 0.1 do their work through the operations of 0.2. A file opened by a module of 0.1 is the same resource that a module of 0.2 sees in the same state.
+WASI 0.1 and 0.2 are two ways to ask for the same things (files, clocks, random, sockets). **Decided: as in Wasmtime, 0.1 is implemented over 0.2.** There is one State; its ground is the state of 0.2 (the tables of resources, the configuration, the policies, the streams, the clocks, the random source); a descriptor of 0.1 is a map to a resource of 0.2 plus what 0.1 keeps for each descriptor (Wasmtime: `WasiP1Adapter` over `WasiCtx` and `ResourceTable`), and the functions of 0.1 do their work through the operations of 0.2. A file opened by a module of 0.1 is the same resource that a module of 0.2 sees in the same state (it is in the same table, and it is closed by the same `free`).
 
-Why not "a shared table only": a descriptor of 0.2 is a resource with its own position, rights and system descriptor. A function of 0.1 can work on the same file only through the operations of 0.2, so the shared table already is "0.1 over 0.2".
+Why not "a shared table only": a descriptor of 0.2 is a resource with its own system descriptor and rights; a function of 0.1 can work on the same file only through the operations of 0.2, so the shared table already is "0.1 over 0.2".
 
-What it costs: the 46 functions of 0.1 are rewritten over 0.2, in C and in Python. What guards it: the official wasi-testsuite (72 tests for 0.1, run in the CI of wasmext), `tests/test_parity_surface.py`, and the drivers that compare the C with the Python.
+What guards it: the official wasi-testsuite (72 tests for 0.1, run through `tests/neutral`), the three neutral users, `tests/test_parity_surface.py`, the scripts of `tests/data/p1` that the C driver and the Python twin both run (their output was also kept from the code before this change and compared with, line by line), and the tests of 0.2, which do not change.
 
-Order: it is done after the split of section 3 (the guest), on the finished guest, not together with it. Until then 0.1 keeps its own state.
+### 4.1 One State and one Guest (C and Python)
+
+* **C.** `fusedwasi_p2_state` and `fusedwasi_p2_guest` are the only two types, for both families. The names stay: the "p2" is the ground of the model (the state is the one of 0.2), not a second world. Gone: `fusedwasi_p1_state`, `fusedwasi_p1_guest` (and its `core`), `fusedwasi_p1_config`, `fusedwasi_p1_preopen`, `fusedwasi_p1_create`, `fusedwasi_p1_destroy`, `fusedwasi_p1_guest_init`, `fusedwasi_p1_bind`, `FUSEDWASI_P1_GUEST`, `FUSEDWASI_P1_MEM`, the `void *vg` and the `int *trapped`. A function of 0.1 is `uint32_t fusedwasi_p1_<name>(fusedwasi_p2_guest *g, <parameters>)` (`proc_exit` returns nothing), the same `g` as a function of 0.2; the memory of an instance of 0.1 is memory 0 of its guest (`fusedwasi_p2_bind_memory(g, 0, ...)` or `fusedwasi_p2_set_memory`). The guest gains one hook, `signal` (`proc_raise`; NULL answers NOTSUP).
+* **The configuration of 0.1 is the fields of the state:** `args`, `env_*`, `std[3]` and `terminals`, `preopens`, `clock`, `resolution_ns`, `sleep`, `random_bytes`. A preopen is `struct fusedwasi_p2_preopen {path, name, writable}` for both.
+* **Python.** `fusedwasi.p1.State is fusedwasi.p2.State`, `fusedwasi.p1.Guest is fusedwasi.p2.Guest`, `fusedwasi.p1.Exit is fusedwasi.p2.Exit`: one class each. `Guest(state, memories=(), *, realloc, wait, trap, exit, signal, user)`; `memories` is a list of memories as now, or one memory (a buffer, a function that gives it, or an object with `read`/`write`/`len`) for the common case of one instance. The functions of 0.1 take the `guest` first, and trap through `trap(guest, message)` like those of 0.2.
+* **The end of a call** is the same for both families: `exited` and `exit_code` of the guest. `proc_exit` is `wasi:cli/exit`: it tells the hook `exit` of the guest, whose default records the code and traps. `proc_raise` asks the hook `signal`.
+* **One way to trap.** A function of 0.1 traps with `g->trap(g, message)` (it does not return in C; in Python `trap(guest, message)` tells the hook and raises `Trap`). What 0.1 used to report in `*trapped` is now: `proc_exit` (the exit hook), and a hook of the guest or of the state that traps by itself (`wait`, `signal`, a stream, the clock). The signature table and the Protocols describe the guest-facing core signature and do not change; the C parameter lists lose `int *trapped` and `void *vg` becomes `fusedwasi_p2_guest *g`, so `tools/make_signatures.py`, `docs/signatures.md` and the tests that compare the C parameters with the table are updated.
+
+### 4.2 The descriptor map of 0.1
+
+A private table in the state (a slot of the table of resources of kind `P1_FDS`, so that `fusedwasi_p2_free` frees it with the rest; Python: an attribute of the state that `close_all` empties). It is made by the first call of a function of 0.1 on the state, or earlier by `fusedwasi_p1_open_descriptors(state, &err, &bad)` (C) / `fusedwasi.p1.open_descriptors(state)` (Python, raises `PreopenError(.index)`), which tell a directory of `preopens` that cannot be opened with its errno and its place in the list. All the guests of 0.1 of the state share it (as the guests of 0.1 shared the descriptors of their state until now). An entry:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | none (free), standard stream, file, directory |
+| `handle` | the resource of 0.2: the handle of a `descriptor` in the table of the state (file or directory); for a standard stream the index 0, 1 or 2 of `std[]` |
+| `filetype` | the filetype of 0.1 of what the descriptor was opened on |
+| `rights`, `inheriting` | the rights of 0.1: a concept of 0.1 that 0.2 does not have; the adapter checks them (NOTCAPABLE) before the operation of 0.2 |
+| `flags` | the fdflags (append, dsync, nonblock, rsync, sync) |
+| `position` | the offset of the next `fd_read` / `fd_write` (0.2 has no position in a descriptor: `read`, `write` and the streams take an offset) |
+| `preopen` | the name the program sees, for the entries 3, 4, ... that `preopens` made in order |
+| `listing` | the snapshot of the names of a directory, made at cookie 0 by `fd_readdir` |
+
+Descriptors 0, 1 and 2 are the standard streams of the state (`std[0..2]`, else the descriptors of the process). Numbers 3 and up are the preopens, in the order of `preopens`, then what `path_open` opens, always the lowest free number. `fd_renumber` and `fd_close` change the map; closing a file or a directory drops the resource, closing a standard stream only frees the number. Sockets: a 0.1 descriptor is never a socket (NOTSOCK, or BADF for a number not in the map), as now.
+
+### 4.3 The operations of 0.2 that 0.1 uses
+
+The filesystem functions of 0.2 are split into the operation and the Canonical ABI around it: the operation takes host values (a descriptor, a path as bytes and a length, an offset, a buffer) and returns an error-code or a result; the function of 0.2 reads its arguments from the memory of the guest and writes the result there, and the adapter of 0.1 reads its own. So a rule of 0.2 (what a read-only preopen allows, the walk of a path below a directory, which error a missing right is) is written once. C: `fusedwasi_p2_fs_<operation>(...)` in `wasi_p2_filesystem.h`; Python: the same names as methods of `fusedwasi.p2.wasi_p2_filesystem.SystemFilesystem` (see 4.5). The few places where 0.1 differs from 0.2 are one option, `FUSEDWASI_P2_FS_P1` (Python `p1=True`), of the operations that take a path: a link with a slash after it is not a directory (the walk of 0.1 follows uvwasi, 0.2 follows Wasmtime), the name `.` as the last name (`unlink` and `rmdir`: INVAL; `rename`, `link`, `symlink`: INVAL or EXIST; `mkdir`: EXIST), and a path that leads out of the directory is told apart from an error of the system (it is `NOTCAPABLE` in 0.1, `not-permitted` in 0.2). Streams are used as they are: the standard streams are `std[]` of the state (`read`, `write`), and the readiness of a descriptor is a pollable.
+
+### 4.4 The 46 functions
+
+`fd`: the map of 4.2 (a number that is not in it is BADF). "Rights" = the adapter checks the right of 0.1 first (NOTCAPABLE).
+
+| Function of 0.1 | Operations of 0.2 | What the adapter keeps or does |
+| --- | --- | --- |
+| `args_sizes_get`, `args_get` | `wasi:cli/environment.get-arguments`: `state->args` | the layout of 0.1 in the memory (pointers, NUL-terminated strings) |
+| `environ_sizes_get`, `environ_get` | `get-environment`: `state->env_*` | `NAME=value` strings |
+| `clock_res_get` | `monotonic-clock.resolution`, `wall-clock.resolution`: `resolution_ns[id]` | ids 0 to 3; INVAL above |
+| `clock_time_get` | `monotonic-clock.now`, `wall-clock.now`: `state->clock` | a clock that cannot be read is NOTSUP (0.2 traps) |
+| `random_get` | `wasi:random/random.get-random-bytes`: `state->random_bytes` | IO where 0.2 traps |
+| `sched_yield` | none | SUCCESS |
+| `proc_exit` | `wasi:cli/exit`: the hook `exit` of the guest | nothing; `exited` and `exit_code` are the guest's, set by the hook (the default records and traps) |
+| `proc_raise` | none | the hook `signal` of the guest; NOTSUP without it; INVAL above 30; 0 is success |
+| `fd_write` | stdout/stderr: `output-stream.write` on `std[1|2]`; file: `descriptor.write` at an offset | the position; append (the write goes to the end of the file); the right; all the buffers looked at before one is used; a short write |
+| `fd_read` | stdin: `input-stream.read` on `std[0]`; file: `descriptor.read` at an offset | the position; waits (`g->wait`) for a byte or the end on a stream; the first buffer that is not empty for a stream |
+| `fd_pread`, `fd_pwrite` | `descriptor.read`, `descriptor.write` at the offset given | the right; the position does not move |
+| `fd_seek`, `fd_tell` | `descriptor.stat` (size, for the end) | the position is the adapter's; the right (a seek by 0 from the current position is a tell); a descriptor that cannot seek: SPIPE |
+| `fd_close` | `descriptor` drop | a standard stream: only the number is freed |
+| `fd_renumber` | none | the map |
+| `fd_advise` | `descriptor.advise` | the right; the advice is one of six |
+| `fd_allocate` | `descriptor.stat`, `descriptor.set-size` | the right; the room is reserved where the system has `posix_fallocate` (no operation of 0.2 reserves), else the file is made as long |
+| `fd_datasync`, `fd_sync` | `descriptor.sync-data`, `descriptor.sync` | the right; a standard stream: SUCCESS |
+| `fd_fdstat_get` | `descriptor.stat` (the type) | filetype, rights, fdflags; the rights of the standard streams are fixed |
+| `fd_fdstat_set_flags` | none in 0.2 | the right; the flags are the adapter's (append is done by `fd_write`); the sync and non-blocking flags are set on the system descriptor |
+| `fd_fdstat_set_rights` | none | rights can only be given up |
+| `fd_filestat_get` | `descriptor.stat` | the layout of 0.1 (and of `wasi_unstable`); a standard stream is a character device |
+| `fd_filestat_set_size` | `descriptor.set-size` | the right |
+| `fd_filestat_set_times` | `descriptor.set-times` | the right; the flags of 0.1 (value, now, none) become the `new-timestamp` of 0.2 |
+| `fd_readdir` | `descriptor.read-directory`, `directory-entry-stream.read-directory-entry`, `descriptor.stat-at` (the inode) | `.` and `..` first, the names in order, the cookie, an entry cut by the end of the buffer |
+| `fd_prestat_get`, `fd_prestat_dir_name` | `wasi:filesystem/preopens.get-directories`: `state->preopens` | the entries of the map that `preopens` made |
+| `path_open` | `descriptor.open-at` | the rights and `inheriting` given to the new entry (never more than the directory has); the oflags and fdflags; the rights decide the flags of 0.2 (read, write); a directory asked for as one |
+| `path_create_directory` | `descriptor.create-directory-at` | the right |
+| `path_remove_directory` | `descriptor.remove-directory-at` | the right |
+| `path_unlink_file` | `descriptor.unlink-file-at` | the right; the answer of the system for a directory |
+| `path_rename` | `descriptor.rename-at` | the two rights |
+| `path_link` | `descriptor.link-at` | the two rights; follow |
+| `path_symlink` | `descriptor.symlink-at` | the right; an empty target, a NUL, a rooted target |
+| `path_readlink` | `descriptor.readlink-at` | the right; the target cut to the buffer; a rooted target is PERM |
+| `path_filestat_get` | `descriptor.stat-at` | the right; follow |
+| `path_filestat_set_times` | `descriptor.set-times-at` | the right; follow; the flags |
+| `poll_oneoff` | `wasi:io/poll`: the pollable of `input-stream` / `output-stream.subscribe` (a clock of a subscription is the arithmetic of `state->clock`; a wait only for clocks is `state->sleep`) | the subscription and event layouts (and `wasi_unstable`); a descriptor that is a pipe or a FIFO is asked of the system; the number of bytes; the hangup flag |
+| `sock_accept`, `sock_recv`, `sock_send`, `sock_shutdown` | none | NOTSOCK for a descriptor of the map, BADF otherwise |
+
+### 4.5 The Python-only features of the old state of 0.1
+
+What they were (read in `wasi_p1_files.py` and `State`): **`files=`**, a backend for the files with the interface `Files` (`preopen`, `stat_*`, `open`, `mkdir`, `remove`, `times_*`, `rename`, `link`, `symlink`, `readlink`, `list`, `read`, `write`, `seek`, `sync`, ..., on an `Entry`), `SystemFiles` (the default, over the system layer of 0.2) and `Files()` (a host without files); the data classes `Stat`, `Entry`, `Listing`; `PreopenError(.index)`; `WasiError` (an errno from a hook; nothing in the library raises it any more). The booleans `network=` and `http=`, `stdin=`, `stdout=`, `stderr=` are on the state of 0.2 and stay as they are.
+
+The choice: **a filesystem backend for 0.2, which both families use.** The operations of 4.3 are methods of `fusedwasi.p2.wasi_p2_filesystem.SystemFilesystem` (the system's files, the default); `State(filesystem=...)` takes another object with the same methods (a base class `Filesystem` answers every operation with `unsupported`: a host without files). A descriptor of 0.2 or of 0.1 is whatever that object gives. So the feature moves one layer down, to the interface that is common to both families, and is not a layer of 0.1: the old `files=` and `Files` (an interface on `Entry`, a thing that does not exist in the model any more) are replaced by `filesystem=` and `Filesystem`. This is a change of the public Python API; it is listed in `interface_review.md` and in the report. In C the host still writes functions (the operations are `static inline` over the system layer), as before: the gap with Python is the one `interface_review.md` already records.
+
+### 4.6 Behaviours that may change
+
+Only where 0.1 on top of 0.2 forces it. Each is listed in `host_scope.md` when it is made, and in the report of the change. Expected from the design, to be confirmed by the code:
+
+1. `proc_exit` is the exit of 0.2: a hook `exit` that replaces the default also receives `proc_exit`, and is the one that records `exited` (the default does).
+2. `poll_oneoff` that waits for a descriptor asks the pollables between two `wait`s of the guest (1 ms by default), instead of blocking in `poll(2)`; a wait only for clocks is the hook `sleep`, as before.
+3. A preopen that cannot be opened is told by `open_descriptors` (and `PreopenError`); the first call of a function of 0.1 that makes the map answers with the errno instead (the state is not created by 0.1 any more).
+4. The files and directories of 0.1 are freed by `fusedwasi_p2_free(state)` (there is no `fusedwasi_p1_destroy`).
+5. The position of a file is the adapter's: an `fd_read` / `fd_write` is a `pread` / `pwrite` at it. A file that cannot be read at an offset (a FIFO, a terminal opened by a path) is read and written at the system's own position, as before.
+
+Anything else that shows up while the code is written is added here before it is pushed.
+
+### 4.7 Order of the work
+
+(1) this document; (2) the operations of 0.2 for the filesystem, in C and in Python, with the functions of 0.2 unchanged and their tests green; (3) one State and one Guest, the map, and arguments, environment, clocks, random, standard streams, preopens and `proc_*` on them; (4) files and directories over the operations; (5) `poll_oneoff` and the rest; (6) the old implementation of 0.1 removed (it was kept working until the new one passed everything); (7) README, `interface_review.md`, `signatures.md`, `release_checklist.md` section 5, the neutral users.
 
 ## 5. Public and private
 
@@ -83,7 +176,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). The first parameter of a function is the guest: `g` in C, `guest` in Python (not `s`, which would read as the state); the state is `g->state.
 3. ~~The border cases~~ settled (section 3). `proc_raise` decided (owner, 2026-10-27): a hook `signal` on the guest; the default answers `NOTSUP` as Wasmtime does; the library no longer ends the program by itself (section 10).
 4. ~~Typed `std[3]`~~ decided with the split: `fusedwasi_p2_stream *std[3]` (a forward declaration), the one-line casts of derived structs in the drivers are fixed in the same change.
-5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change; **step 1 done**, see "Step 1: what was learned" below), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
+5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change; **step 1 done**, see "Step 1: what was learned" below), then the shared state (**step 3, stage B: in progress**, the design is in section 4), then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
 
 ## 8. What the users do after
 
