@@ -3,6 +3,10 @@
 No mutable state at the level of the module: everything that changes is in a `Host`, which is passed as the first argument of every function of the packages.
 A memory is any writable buffer (`bytearray`, `memoryview`, a `ctypes` array, `mmap`: seen as flat bytes by `flat_view`) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
 that moves is followed: the twin of `fusedwasi_p2_bind_memory`); a module fused from components has one for each component, and a function takes the number of its own.
+
+Integers are unsigned, in the parameters and in the results: an offset, a length or a handle is 0 to 2**32 - 1, an `i64` is 0 to 2**64 - 1, as the `uint32_t` and `uint64_t` of the C twin. An engine
+that hands a program's `i32` and `i64` over as signed Python integers (wasmtime-py, pywasm3) masks every argument by its width (`x & 0xFFFFFFFF`, `x & 0xFFFFFFFFFFFFFFFF`) and, if it wants the
+range of its own type back, re-signs a result (`x - 2**32 if x >= 2**31`). The functions do not do it themselves: a negative offset is outside the memory.
 """
 
 from __future__ import annotations

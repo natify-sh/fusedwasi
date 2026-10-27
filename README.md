@@ -86,6 +86,8 @@ For 0.1 the same two parts: `fusedwasi_p1_state` (made by `fusedwasi_p1_create` 
 | http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only), the types of `wasi:http` |
 | time, random (state); trap, exit, wait, signal (guest) | a hook, or the system's own | the rest |
 
+**Integers are unsigned**, parameters and results, in C (`uint32_t`, `uint64_t`) and in Python: an offset, a length or a handle is 0 to 2**32 - 1, an `i64` 0 to 2**64 - 1. An engine that hands its values over as signed (the Python bindings of wasmtime and wasm3 do) masks every argument by its width (`x & 0xFFFFFFFF`, `x & 0xFFFFFFFFFFFFFFFF`) and re-signs a result if it wants the range of its own type (`x - 2**32 if x >= 2**31`); the functions do not do it, and a negative offset is outside the memory.
+
 Every function is `static inline` and nothing is global or thread-local, so a module links only what it imports and several instances (and several guests of one state) can live in a process.
 
 ## The headers come with the Python package

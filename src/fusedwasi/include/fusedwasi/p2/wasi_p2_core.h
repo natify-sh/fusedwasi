@@ -5,6 +5,7 @@
  * every function of the packages is the guest, `g`; its state is `g->state`. Many guests may point to one state. A memory is a base and a size; a module fused from components has
  * one for each component, and a function takes the number of its own.
  * Alpha: the interface is the two structs and one function per import. Memory is written byte by byte, little-endian.
+ * Integers are unsigned (`uint32_t`, `uint64_t`) in parameters and results, as in the Python twin. An engine whose values are signed converts them at the call (a cast to the unsigned type of the width).
  * POSIX clocks need `clock_gettime` (a GNU or POSIX mode of the compiler). */
 #ifndef FUSEDWASI_P2_CORE_H
 #define FUSEDWASI_P2_CORE_H

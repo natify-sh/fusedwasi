@@ -1,7 +1,7 @@
 """The calls of `wasi_snapshot_preview1`, one function for each (the twin of the `fusedwasi_p1_<name>` of `include/fusedwasi/p1/wasi_p1_core.h`).
 
 Every function takes the `Guest` first, then the parameters of the call as the core module passes them (integers: a pointer is an offset in the memory), and returns the errno of
-WASI; what the call gives back is written into the memory. A trap is an exception. Done so far (the rest of the 46 follows, a stage at a time): arguments and environment, clocks,
+WASI; what the call gives back is written into the memory. Integers are unsigned, parameters and results (see `fusedwasi.p2.wasi_p2_core`: an engine that passes signed values masks them first). A trap is an exception. Done so far (the rest of the 46 follows, a stage at a time): arguments and environment, clocks,
 random bytes, `proc_exit` and `proc_raise`, `sched_yield`, the standard streams and the descriptors of the preopened directories (`fd_write`, `fd_read`, `fd_close`,
 `fd_renumber`, `fd_seek`, `fd_tell`, `fd_advise`, `fd_fdstat_get`, `fd_prestat_get`, `fd_prestat_dir_name`).
 """
