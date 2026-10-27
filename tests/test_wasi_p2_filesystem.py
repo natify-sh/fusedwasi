@@ -10,10 +10,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_filesystem as fs
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Host, Trap, load_u32
+from fusedwasi.p2.wasi_p2_core import Trap, load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
@@ -50,7 +51,7 @@ class Run:
             self.next_free[0] = ptr + new_size
             return ptr
 
-        self.host = Host(
+        self.host = guest_of(
             [self.memory],
             realloc=bump,
             clock=lambda ident: 1700000000123456789,

@@ -7,7 +7,7 @@ static int clock_of(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
     *ns = id == 0 ? 1700000000123456789ULL : 5000;
     return 0;
 }
-static void trap(fusedwasi_p2_state *s, const char *m) { (void)s; printf("TRAP %s\n", m); exit(0); }
+static void trap(fusedwasi_p2_guest *s, const char *m) { (void)s; printf("TRAP %s\n", m); exit(0); }
 
 static void dump(const uint8_t *m, int n) {
     for (int i = 0; i < n; i++) printf("%02x", m[i]);
@@ -17,12 +17,14 @@ static void dump(const uint8_t *m, int n) {
 int main(int argc, char **argv) {
     const char *scenario = argc > 1 ? argv[1] : "main";
     uint8_t memory[64] = {0};
-    fusedwasi_p2_state s;
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_state world;
+    fusedwasi_p2_guest s;
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     s.trap = trap;
-    s.clock = clock_of;
-    s.resolution_ns[0] = 1000;
-    s.resolution_ns[1] = 7;
+    world.clock = clock_of;
+    world.resolution_ns[0] = 1000;
+    world.resolution_ns[1] = 7;
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     if (!strcmp(scenario, "main")) {
         fusedwasi_wasi_clocks_wall_clock_now(&s, 0, 0);
@@ -46,6 +48,6 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "no_memory")) {
         fusedwasi_wasi_clocks_wall_clock_now(&s, 1, 0);
     }
-    fusedwasi_p2_free(&s);
+    fusedwasi_p2_free(&world);
     return 0;
 }

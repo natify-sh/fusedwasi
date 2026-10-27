@@ -7,12 +7,13 @@
 /* the arguments of `fetch` are given by position and the rest is zero */
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
-static fusedwasi_p2_state s;
+static fusedwasi_p2_state world;
+    fusedwasi_p2_guest s;
 static uint8_t memory[1 << 16];
 static uint32_t next_free = 40000, next_input = 4000;
 #define R 100
 
-static void trap(fusedwasi_p2_state *st, const char *m) {
+static void trap(fusedwasi_p2_guest *st, const char *m) {
     (void)st;
     printf("TRAP %s\n", m);
     exit(0);
@@ -25,7 +26,7 @@ static int check_authority(fusedwasi_p2_state *st, const char *scheme, const cha
     (void)st, (void)scheme;
     return strcmp(authority, "allowed.test:80") == 0;
 }
-static uint32_t bump(fusedwasi_p2_state *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static uint32_t bump(fusedwasi_p2_guest *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     (void)st, (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (next_free + align - 1) / align * align;
     next_free = ptr + new_size;
@@ -343,7 +344,7 @@ static void get_values(uint32_t handle, const char *name) {
     printf("]\n");
 }
 
-typedef void (*getter_fn)(fusedwasi_p2_state *, uint32_t, uint32_t, uint32_t);
+typedef void (*getter_fn)(fusedwasi_p2_guest *, uint32_t, uint32_t, uint32_t);
 
 static void text_of(const char *label, getter_fn getter, uint32_t req) {
     clear();
@@ -389,14 +390,15 @@ int main(int argc, char **argv) {
     char me[64], nobody[64];
     snprintf(me, sizeof me, "127.0.0.1:%d", port);
     snprintf(nobody, sizeof nobody, "127.0.0.1:%d", dead);
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     s.realloc = bump;
     s.trap = trap;
     int denied = !strcmp(scenario, "denied") || !strcmp(scenario, "check");
-    s.http_check = !strcmp(scenario, "check") ? check_authority : denied ? NULL : allow_all;
+    world.http_check = !strcmp(scenario, "check") ? check_authority : denied ? NULL : allow_all;
     if (!strcmp(scenario, "hook") || !strcmp(scenario, "check") || !strcmp(scenario, "fields") || !strcmp(scenario, "setters") || !strcmp(scenario, "limits"))
-        s.http_send = hook;
+        world.http_send = hook;
 
     if (!strcmp(scenario, "main")) {
         struct kv h1[] = {{"X-Test", "1"}, {NULL, NULL}}, h2[] = {{"Content-Type", "text/x"}, {NULL, NULL}}, t1[] = {{"X-End", "yes"}, {NULL, NULL}};
@@ -657,6 +659,6 @@ int main(int argc, char **argv) {
             printf("%u %d %d %d %d\n", i, c->outer, c->leaves, c->kind[0], c->kind[1]);
         }
     }
-    fusedwasi_p2_free(&s);
+    fusedwasi_p2_free(&world);
     return 0;
 }

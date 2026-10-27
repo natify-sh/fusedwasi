@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import wasi_p2_sockets as sk
 from fusedwasi.p2.wasi_p2_core import (
     KIND_TCP_SOCKET,
-    Host,
     Trap,
     load_u16,
     load_u32,
@@ -57,7 +57,7 @@ def python_output(scenario: str) -> str:
         return ptr
 
     allow = scenario != "denied"
-    host = Host(
+    host = guest_of(
         [memory],
         realloc=bump,
         socket_addr_check=(lambda ip, port, use: True) if allow else None,

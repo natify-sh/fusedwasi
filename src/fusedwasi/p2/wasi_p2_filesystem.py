@@ -32,7 +32,7 @@ from .wasi_p2_core import (
     KIND_DESCRIPTOR,
     KIND_DIRECTORY_ENTRY_STREAM,
     KIND_ERROR,
-    Host,
+    Guest,
     alloc,
     load_bytes,
     store_bytes,
@@ -125,8 +125,8 @@ class DirectoryEntries:
         self.entries, self.pos = entries, 0
 
 
-def _descriptor(host: Host, handle: int) -> Descriptor:
-    return table_get(host, handle, KIND_DESCRIPTOR)  # type: ignore[return-value]
+def _descriptor(guest: Guest, handle: int) -> Descriptor:
+    return table_get(guest, handle, KIND_DESCRIPTOR)  # type: ignore[return-value]
 
 
 def _need(descriptor: Descriptor, flag: int) -> None:
@@ -555,35 +555,35 @@ sys_error_name = ERROR_CODES
 # writing results
 
 
-def _ok(host: Host, comp: int, retptr: int) -> None:
-    store_u8(host, comp, retptr, 0)
+def _ok(guest: Guest, comp: int, retptr: int) -> None:
+    store_u8(guest, comp, retptr, 0)
 
 
-def _fail(host: Host, comp: int, retptr: int, at: int, exc: FsError) -> None:
-    store_u8(host, comp, retptr, 1)
-    store_u8(host, comp, at, exc.code)
+def _fail(guest: Guest, comp: int, retptr: int, at: int, exc: FsError) -> None:
+    store_u8(guest, comp, retptr, 1)
+    store_u8(guest, comp, at, exc.code)
 
 
-def _datetime(host: Host, comp: int, ptr: int, ns: int) -> None:
-    store_u8(host, comp, ptr, 1)  # some
-    store_u64(host, comp, ptr + 8, ns // 1_000_000_000)
-    store_u32(host, comp, ptr + 16, ns % 1_000_000_000)
+def _datetime(guest: Guest, comp: int, ptr: int, ns: int) -> None:
+    store_u8(guest, comp, ptr, 1)  # some
+    store_u64(guest, comp, ptr + 8, ns // 1_000_000_000)
+    store_u32(guest, comp, ptr + 16, ns % 1_000_000_000)
 
 
-def _write_stat(host: Host, comp: int, ptr: int, st: os.stat_result) -> None:
-    store_u8(host, comp, ptr, _type_of(st.st_mode))
-    store_u64(host, comp, ptr + 8, st.st_nlink)
-    store_u64(host, comp, ptr + 16, st.st_size)
-    _datetime(host, comp, ptr + 24, st.st_atime_ns)
-    _datetime(host, comp, ptr + 48, st.st_mtime_ns)
-    _datetime(host, comp, ptr + 72, st.st_ctime_ns)
+def _write_stat(guest: Guest, comp: int, ptr: int, st: os.stat_result) -> None:
+    store_u8(guest, comp, ptr, _type_of(st.st_mode))
+    store_u64(guest, comp, ptr + 8, st.st_nlink)
+    store_u64(guest, comp, ptr + 16, st.st_size)
+    _datetime(guest, comp, ptr + 24, st.st_atime_ns)
+    _datetime(guest, comp, ptr + 48, st.st_mtime_ns)
+    _datetime(guest, comp, ptr + 72, st.st_ctime_ns)
 
 
-def _string(host: Host, comp: int, data: bytes, at: int) -> None:
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
-    store_u32(host, comp, at, ptr)
-    store_u32(host, comp, at + 4, len(data))
+def _string(guest: Guest, comp: int, data: bytes, at: int) -> None:
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
+    store_u32(guest, comp, at, ptr)
+    store_u32(guest, comp, at + 4, len(data))
 
 
 # streams over a file
@@ -643,89 +643,89 @@ class FileOutput(OutputStream):
 # preopens
 
 
-def wasi_filesystem_preopens_get_directories(host: Host, comp: int, retptr: int) -> None:
-    items = host.preopens
-    ptr = alloc(host, comp, 4, 12 * len(items))
+def wasi_filesystem_preopens_get_directories(guest: Guest, comp: int, retptr: int) -> None:
+    items = guest.state.preopens
+    ptr = alloc(guest, comp, 4, 12 * len(items))
     for i, (path, name, writable) in enumerate(items):
-        handle = table_new(host, KIND_DESCRIPTOR, _open_directory(path, READ | (MUTATE if writable else 0)))
-        store_u32(host, comp, ptr + 12 * i, handle)
-        _string(host, comp, name.encode(), ptr + 12 * i + 4)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(items))
+        handle = table_new(guest, KIND_DESCRIPTOR, _open_directory(path, READ | (MUTATE if writable else 0)))
+        store_u32(guest, comp, ptr + 12 * i, handle)
+        _string(guest, comp, name.encode(), ptr + 12 * i + 4)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(items))
 
 
 # the descriptor
 
 
-def wasi_filesystem_types_descriptor_drop(host: Host, handle: int) -> None:
-    descriptor = _descriptor(host, handle)
-    table_drop(host, handle, KIND_DESCRIPTOR)
+def wasi_filesystem_types_descriptor_drop(guest: Guest, handle: int) -> None:
+    descriptor = _descriptor(guest, handle)
+    table_drop(guest, handle, KIND_DESCRIPTOR)
     if descriptor.fd >= 0:
         os.close(descriptor.fd)
 
 
-def wasi_filesystem_types_directory_entry_stream_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_DIRECTORY_ENTRY_STREAM)
+def wasi_filesystem_types_directory_entry_stream_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_DIRECTORY_ENTRY_STREAM)
 
 
-def _stream_result(host: Host, comp: int, retptr: int, make: Callable[[], int]) -> None:
+def _stream_result(guest: Guest, comp: int, retptr: int, make: Callable[[], int]) -> None:
     try:
         stream = make()
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, stream)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, stream)
 
 
 def wasi_filesystem_types_descriptor_read_via_stream(
-    host: Host, comp: int, self: int, offset: int, retptr: int
+    guest: Guest, comp: int, self: int, offset: int, retptr: int
 ) -> None:
     def make() -> int:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, READ)
-        return input_stream_new(host, FileInput(d.fd, offset))
+        return input_stream_new(guest, FileInput(d.fd, offset))
 
-    _stream_result(host, comp, retptr, make)
+    _stream_result(guest, comp, retptr, make)
 
 
 def wasi_filesystem_types_descriptor_write_via_stream(
-    host: Host, comp: int, self: int, offset: int, retptr: int
+    guest: Guest, comp: int, self: int, offset: int, retptr: int
 ) -> None:
     def make() -> int:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, WRITE)
-        return output_stream_new(host, FileOutput(d.fd, offset))
+        return output_stream_new(guest, FileOutput(d.fd, offset))
 
-    _stream_result(host, comp, retptr, make)
+    _stream_result(guest, comp, retptr, make)
 
 
-def wasi_filesystem_types_descriptor_append_via_stream(host: Host, comp: int, self: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_append_via_stream(guest: Guest, comp: int, self: int, retptr: int) -> None:
     def make() -> int:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, WRITE)
-        return output_stream_new(host, FileOutput(d.fd, None))
+        return output_stream_new(guest, FileOutput(d.fd, None))
 
-    _stream_result(host, comp, retptr, make)
+    _stream_result(guest, comp, retptr, make)
 
 
-def _status(host: Host, comp: int, retptr: int, action: Callable[[], object]) -> None:
+def _status(guest: Guest, comp: int, retptr: int, action: Callable[[], object]) -> None:
     """For a `result<_, error-code>`: runs `action()`, writes ok or the error."""
     try:
         action()
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 1, exc)
+        _fail(guest, comp, retptr, retptr + 1, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 1, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 1, _oserror(exc))
         return
-    _ok(host, comp, retptr)
+    _ok(guest, comp, retptr)
 
 
 def wasi_filesystem_types_descriptor_advise(
-    host: Host, comp: int, self: int, offset: int, length: int, advice: int, retptr: int
+    guest: Guest, comp: int, self: int, offset: int, length: int, advice: int, retptr: int
 ) -> None:
-    _status(host, comp, retptr, lambda: _descriptor(host, self))  # advice is only a hint: accepted, and nothing done
+    _status(guest, comp, retptr, lambda: _descriptor(guest, self))  # advice is only a hint: accepted, and nothing done
 
 
 def _sync(call: Callable[[int], object], d: Descriptor) -> None:
@@ -733,38 +733,38 @@ def _sync(call: Callable[[int], object], d: Descriptor) -> None:
         call(d.fd)
 
 
-def wasi_filesystem_types_descriptor_sync_data(host: Host, comp: int, self: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_sync_data(guest: Guest, comp: int, self: int, retptr: int) -> None:
     sync = getattr(os, "fdatasync", os.fsync)  # macOS has no fdatasync
-    _status(host, comp, retptr, lambda: _sync(sync, _descriptor(host, self)))
+    _status(guest, comp, retptr, lambda: _sync(sync, _descriptor(guest, self)))
 
 
-def wasi_filesystem_types_descriptor_sync(host: Host, comp: int, self: int, retptr: int) -> None:
-    _status(host, comp, retptr, lambda: _sync(os.fsync, _descriptor(host, self)))
+def wasi_filesystem_types_descriptor_sync(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _status(guest, comp, retptr, lambda: _sync(os.fsync, _descriptor(guest, self)))
 
 
-def wasi_filesystem_types_descriptor_get_flags(host: Host, comp: int, self: int, retptr: int) -> None:
-    _ok(host, comp, retptr)
-    store_u8(host, comp, retptr + 1, _descriptor(host, self).flags)
+def wasi_filesystem_types_descriptor_get_flags(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _ok(guest, comp, retptr)
+    store_u8(guest, comp, retptr + 1, _descriptor(guest, self).flags)
 
 
-def wasi_filesystem_types_descriptor_get_type(host: Host, comp: int, self: int, retptr: int) -> None:
-    d = _descriptor(host, self)
+def wasi_filesystem_types_descriptor_get_type(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    d = _descriptor(guest, self)
     try:
         kind = _type_of(_fstat(d).st_mode)
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 1, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 1, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    store_u8(host, comp, retptr + 1, kind)
+    _ok(guest, comp, retptr)
+    store_u8(guest, comp, retptr + 1, kind)
 
 
-def wasi_filesystem_types_descriptor_set_size(host: Host, comp: int, self: int, size: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_set_size(guest: Guest, comp: int, self: int, size: int, retptr: int) -> None:
     def action() -> None:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, WRITE)
         os.ftruncate(d.fd, size)
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def _new_time(tag: int, seconds: int, nanoseconds: int, current_ns: int, now_ns: int) -> int:
@@ -777,7 +777,7 @@ def _new_time(tag: int, seconds: int, nanoseconds: int, current_ns: int, now_ns:
 
 
 def wasi_filesystem_types_descriptor_set_times(
-    host: Host,
+    guest: Guest,
     comp: int,
     self: int,
     a_tag: int,
@@ -789,10 +789,10 @@ def wasi_filesystem_types_descriptor_set_times(
     retptr: int,
 ) -> None:
     def action() -> None:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, WRITE if not d.is_dir else MUTATE)
         st = _fstat(d)
-        now = host.clock(0)
+        now = guest.state.clock(0)
         _utime_d(
             d,
             (
@@ -801,54 +801,54 @@ def wasi_filesystem_types_descriptor_set_times(
             ),
         )
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_filesystem_types_descriptor_read(
-    host: Host, comp: int, self: int, length: int, offset: int, retptr: int
+    guest: Guest, comp: int, self: int, length: int, offset: int, retptr: int
 ) -> None:
     try:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, READ)
         want = min(length, READ_CAP)
         data = _pread(d.fd, want, offset)
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 4, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 4, _oserror(exc))
         return
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, ptr)
-    store_u32(host, comp, retptr + 8, len(data))
-    store_u8(host, comp, retptr + 12, int(not data))  # end of file is when nothing was read (as in Wasmtime)
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, ptr)
+    store_u32(guest, comp, retptr + 8, len(data))
+    store_u8(guest, comp, retptr + 12, int(not data))  # end of file is when nothing was read (as in Wasmtime)
 
 
 def wasi_filesystem_types_descriptor_write(
-    host: Host, comp: int, self: int, ptr: int, length: int, offset: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, offset: int, retptr: int
 ) -> None:
     try:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, WRITE)
-        view = memoryview(load_bytes(host, comp, ptr, length))
+        view = memoryview(load_bytes(guest, comp, ptr, length))
         done = 0
         while done < len(view):
             done += _pwrite(d.fd, view[done:], offset + done)
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 8, exc)
+        _fail(guest, comp, retptr, retptr + 8, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 8, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 8, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, length)
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, length)
 
 
-def wasi_filesystem_types_descriptor_read_directory(host: Host, comp: int, self: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_read_directory(guest: Guest, comp: int, self: int, retptr: int) -> None:
     def make() -> int:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         if not d.is_dir:
             raise FsError("not-directory")
         try:
@@ -861,42 +861,42 @@ def wasi_filesystem_types_descriptor_read_directory(host: Host, comp: int, self:
                     continue
         except OSError as exc:
             raise _oserror(exc) from exc
-        return table_new(host, KIND_DIRECTORY_ENTRY_STREAM, DirectoryEntries(entries))
+        return table_new(guest, KIND_DIRECTORY_ENTRY_STREAM, DirectoryEntries(entries))
 
-    _stream_result(host, comp, retptr, make)
+    _stream_result(guest, comp, retptr, make)
 
 
 def wasi_filesystem_types_directory_entry_stream_read_directory_entry(
-    host: Host, comp: int, self: int, retptr: int
+    guest: Guest, comp: int, self: int, retptr: int
 ) -> None:
-    stream: DirectoryEntries = table_get(host, self, KIND_DIRECTORY_ENTRY_STREAM)  # type: ignore[assignment]
-    _ok(host, comp, retptr)
+    stream: DirectoryEntries = table_get(guest, self, KIND_DIRECTORY_ENTRY_STREAM)  # type: ignore[assignment]
+    _ok(guest, comp, retptr)
     if stream.pos >= len(stream.entries):
-        store_u8(host, comp, retptr + 4, 0)  # none
+        store_u8(guest, comp, retptr + 4, 0)  # none
         return
     kind, name = stream.entries[stream.pos]
     stream.pos += 1
-    store_u8(host, comp, retptr + 4, 1)
-    store_u8(host, comp, retptr + 8, kind)
-    _string(host, comp, name, retptr + 12)
+    store_u8(guest, comp, retptr + 4, 1)
+    store_u8(guest, comp, retptr + 8, kind)
+    _string(guest, comp, name, retptr + 12)
 
 
-def wasi_filesystem_types_descriptor_stat(host: Host, comp: int, self: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_stat(guest: Guest, comp: int, self: int, retptr: int) -> None:
     try:
-        st = _fstat(_descriptor(host, self))
+        st = _fstat(_descriptor(guest, self))
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 8, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 8, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    _write_stat(host, comp, retptr + 8, st)
+    _ok(guest, comp, retptr)
+    _write_stat(guest, comp, retptr + 8, st)
 
 
-def _path(host: Host, comp: int, ptr: int, length: int) -> bytes:
-    return load_bytes(host, comp, ptr, length)
+def _path(guest: Guest, comp: int, ptr: int, length: int) -> bytes:
+    return load_bytes(guest, comp, ptr, length)
 
 
-def _stat_at(host: Host, self: int, flags: int, path: bytes) -> os.stat_result:
-    d = _descriptor(host, self)
+def _stat_at(guest: Guest, self: int, flags: int, path: bytes) -> os.stat_result:
+    d = _descriptor(guest, self)
     if not d.is_dir:
         raise FsError("not-directory")
     with _Walked(_ref(d), path, bool(flags & SYMLINK_FOLLOW)) as (parent, name):
@@ -904,30 +904,30 @@ def _stat_at(host: Host, self: int, flags: int, path: bytes) -> os.stat_result:
 
 
 def wasi_filesystem_types_descriptor_stat_at(
-    host: Host, comp: int, self: int, path_flags: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, path_flags: int, ptr: int, length: int, retptr: int
 ) -> None:
     try:
-        st = _stat_at(host, self, path_flags, _path(host, comp, ptr, length))
+        st = _stat_at(guest, self, path_flags, _path(guest, comp, ptr, length))
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 8, exc)
+        _fail(guest, comp, retptr, retptr + 8, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 8, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 8, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    _write_stat(host, comp, retptr + 8, st)
+    _ok(guest, comp, retptr)
+    _write_stat(guest, comp, retptr + 8, st)
 
 
 def wasi_filesystem_types_descriptor_set_times_at(
-    host: Host, comp: int, self: int, path_flags: int, ptr: int, length: int,
+    guest: Guest, comp: int, self: int, path_flags: int, ptr: int, length: int,
     a_tag: int, a_seconds: int, a_nanos: int, m_tag: int, m_seconds: int, m_nanos: int, retptr: int,
 ) -> None:  # fmt: skip
     def action() -> None:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, MUTATE)
-        with _Walked(_ref(d), _path(host, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
+        with _Walked(_ref(d), _path(guest, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
             st = _lstat(parent, name)
-            now = host.clock(0)
+            now = guest.state.clock(0)
             _utime(
                 parent,
                 name,
@@ -937,11 +937,11 @@ def wasi_filesystem_types_descriptor_set_times_at(
                 ),
             )
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_filesystem_types_descriptor_link_at(
-    host: Host,
+    guest: Guest,
     comp: int,
     self: int,
     old_flags: int,
@@ -953,23 +953,23 @@ def wasi_filesystem_types_descriptor_link_at(
     retptr: int,
 ) -> None:
     def action() -> None:
-        d, n = _descriptor(host, self), _descriptor(host, new_dir)
+        d, n = _descriptor(guest, self), _descriptor(guest, new_dir)
         _need(d, MUTATE)
         _need(n, MUTATE)
         with (
-            _Walked(_ref(d), _path(host, comp, old_ptr, old_len), bool(old_flags & SYMLINK_FOLLOW)) as (p1, name1),
-            _Walked(_ref(n), _path(host, comp, new_ptr, new_len), False) as (p2, name2),
+            _Walked(_ref(d), _path(guest, comp, old_ptr, old_len), bool(old_flags & SYMLINK_FOLLOW)) as (p1, name1),
+            _Walked(_ref(n), _path(guest, comp, new_ptr, new_len), False) as (p2, name2),
         ):
             _link(p1, name1, p2, name2)
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_filesystem_types_descriptor_open_at(
-    host: Host, comp: int, self: int, path_flags: int, ptr: int, length: int, open_flags: int, flags: int, retptr: int
+    guest: Guest, comp: int, self: int, path_flags: int, ptr: int, length: int, open_flags: int, flags: int, retptr: int
 ) -> None:
     try:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         if not d.is_dir:
             raise FsError("not-directory")
         if flags & (WRITE | MUTATE) and not d.flags & MUTATE:
@@ -978,66 +978,66 @@ def wasi_filesystem_types_descriptor_open_at(
             raise FsError("not-permitted")
         if open_flags & (CREATE | TRUNCATE):
             _need(d, MUTATE)
-        with _Walked(_ref(d), _path(host, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
+        with _Walked(_ref(d), _path(guest, comp, ptr, length), bool(path_flags & SYMLINK_FOLLOW)) as (parent, name):
             made = _open_at(parent, name, open_flags, flags)
             if made.is_dir:  # what a directory may do is what the directory it was opened under may do (as in Wasmtime), and not what was asked for
                 made.flags = d.flags & (READ | MUTATE)
-            handle = table_new(host, KIND_DESCRIPTOR, made)
+            handle = table_new(guest, KIND_DESCRIPTOR, made)
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 4, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 4, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, handle)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, handle)
 
 
 def wasi_filesystem_types_descriptor_readlink_at(
-    host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
     try:
-        d = _descriptor(host, self)
-        with _Walked(_ref(d), _path(host, comp, ptr, length), False) as (parent, name):
+        d = _descriptor(guest, self)
+        with _Walked(_ref(d), _path(guest, comp, ptr, length), False) as (parent, name):
             target = _readlink(parent, name)
         if target.startswith(b"/"):
             raise FsError("not-permitted")  # an absolute or rooted target is not shown
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 4, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 4, _oserror(exc))
         return
-    _ok(host, comp, retptr)
-    _string(host, comp, target, retptr + 4)
+    _ok(guest, comp, retptr)
+    _string(guest, comp, target, retptr + 4)
 
 
 def _at(
-    host: Host, comp: int, retptr: int, self: int, ptr: int, length: int, call: Callable[[Ref, bytes], object]
+    guest: Guest, comp: int, retptr: int, self: int, ptr: int, length: int, call: Callable[[Ref, bytes], object]
 ) -> None:
     def action() -> None:
-        d = _descriptor(host, self)
+        d = _descriptor(guest, self)
         _need(d, MUTATE)
-        with _Walked(_ref(d), _path(host, comp, ptr, length), False) as (parent, name):
+        with _Walked(_ref(d), _path(guest, comp, ptr, length), False) as (parent, name):
             call(parent, name)
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_filesystem_types_descriptor_create_directory_at(
-    host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
-    _at(host, comp, retptr, self, ptr, length, _mkdir)
+    _at(guest, comp, retptr, self, ptr, length, _mkdir)
 
 
 def wasi_filesystem_types_descriptor_remove_directory_at(
-    host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
-    _at(host, comp, retptr, self, ptr, length, _rmdir)
+    _at(guest, comp, retptr, self, ptr, length, _rmdir)
 
 
 def wasi_filesystem_types_descriptor_unlink_file_at(
-    host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
     def unlink(parent: Ref, name: bytes) -> None:
         try:
@@ -1047,42 +1047,50 @@ def wasi_filesystem_types_descriptor_unlink_file_at(
                 raise FsError("is-directory") from None  # some systems say EPERM for a directory
             raise
 
-    _at(host, comp, retptr, self, ptr, length, unlink)
+    _at(guest, comp, retptr, self, ptr, length, unlink)
 
 
 def wasi_filesystem_types_descriptor_rename_at(
-    host: Host, comp: int, self: int, old_ptr: int, old_len: int, new_dir: int, new_ptr: int, new_len: int, retptr: int
+    guest: Guest,
+    comp: int,
+    self: int,
+    old_ptr: int,
+    old_len: int,
+    new_dir: int,
+    new_ptr: int,
+    new_len: int,
+    retptr: int,
 ) -> None:
     def action() -> None:
-        d, n = _descriptor(host, self), _descriptor(host, new_dir)
+        d, n = _descriptor(guest, self), _descriptor(guest, new_dir)
         _need(d, MUTATE)
         _need(n, MUTATE)
         with (
-            _Walked(_ref(d), _path(host, comp, old_ptr, old_len), False) as (p1, name1),
-            _Walked(_ref(n), _path(host, comp, new_ptr, new_len), False) as (p2, name2),
+            _Walked(_ref(d), _path(guest, comp, old_ptr, old_len), False) as (p1, name1),
+            _Walked(_ref(n), _path(guest, comp, new_ptr, new_len), False) as (p2, name2),
         ):
             _rename(p1, name1, p2, name2)
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_filesystem_types_descriptor_symlink_at(
-    host: Host, comp: int, self: int, old_ptr: int, old_len: int, new_ptr: int, new_len: int, retptr: int
+    guest: Guest, comp: int, self: int, old_ptr: int, old_len: int, new_ptr: int, new_len: int, retptr: int
 ) -> None:
-    target = load_bytes(host, comp, old_ptr, old_len)
+    target = load_bytes(guest, comp, old_ptr, old_len)
     if b"\0" in target or target.startswith(b"/"):
         error = FsError("invalid" if b"\0" in target else "not-permitted")
 
         def refuse() -> None:
             raise error
 
-        _status(host, comp, retptr, refuse)
+        _status(guest, comp, retptr, refuse)
         return
-    _at(host, comp, retptr, self, new_ptr, new_len, lambda parent, name: _symlink(target, parent, name))
+    _at(guest, comp, retptr, self, new_ptr, new_len, lambda parent, name: _symlink(target, parent, name))
 
 
-def wasi_filesystem_types_descriptor_is_same_object(host: Host, self: int, other: int) -> int:
-    a, b = _fstat(_descriptor(host, self)), _fstat(_descriptor(host, other))
+def wasi_filesystem_types_descriptor_is_same_object(guest: Guest, self: int, other: int) -> int:
+    a, b = _fstat(_descriptor(guest, self)), _fstat(_descriptor(guest, other))
     return int((a.st_dev, a.st_ino) == (b.st_dev, b.st_ino))
 
 
@@ -1095,40 +1103,40 @@ def _fnv(*values: int) -> int:
     return h
 
 
-def _hash(host: Host, comp: int, retptr: int, st: os.stat_result) -> None:
+def _hash(guest: Guest, comp: int, retptr: int, st: os.stat_result) -> None:
     """`upper` names the object (device, inode); `lower` also takes in what changes when the object is modified (size, modification time)."""
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, _fnv(st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino))
-    store_u64(host, comp, retptr + 16, _fnv(st.st_dev, st.st_ino))
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, _fnv(st.st_size, st.st_mtime_ns, st.st_dev, st.st_ino))
+    store_u64(guest, comp, retptr + 16, _fnv(st.st_dev, st.st_ino))
 
 
-def wasi_filesystem_types_descriptor_metadata_hash(host: Host, comp: int, self: int, retptr: int) -> None:
+def wasi_filesystem_types_descriptor_metadata_hash(guest: Guest, comp: int, self: int, retptr: int) -> None:
     try:
-        st = os.fstat(_descriptor(host, self).fd)
+        st = os.fstat(_descriptor(guest, self).fd)
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 8, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 8, _oserror(exc))
         return
-    _hash(host, comp, retptr, st)
+    _hash(guest, comp, retptr, st)
 
 
 def wasi_filesystem_types_descriptor_metadata_hash_at(
-    host: Host, comp: int, self: int, path_flags: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, path_flags: int, ptr: int, length: int, retptr: int
 ) -> None:
     try:
-        st = _stat_at(host, self, path_flags, _path(host, comp, ptr, length))
+        st = _stat_at(guest, self, path_flags, _path(guest, comp, ptr, length))
     except FsError as exc:
-        _fail(host, comp, retptr, retptr + 8, exc)
+        _fail(guest, comp, retptr, retptr + 8, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 8, _oserror(exc))
+        _fail(guest, comp, retptr, retptr + 8, _oserror(exc))
         return
-    _hash(host, comp, retptr, st)
+    _hash(guest, comp, retptr, st)
 
 
-def wasi_filesystem_types_filesystem_error_code(host: Host, comp: int, err: int, retptr: int) -> None:
-    error: Error = table_get(host, err, KIND_ERROR)  # type: ignore[assignment]
+def wasi_filesystem_types_filesystem_error_code(guest: Guest, comp: int, err: int, retptr: int) -> None:
+    error: Error = table_get(guest, err, KIND_ERROR)  # type: ignore[assignment]
     if error.code is None:
-        store_u8(host, comp, retptr, 0)
+        store_u8(guest, comp, retptr, 0)
     else:
-        store_u8(host, comp, retptr, 1)
-        store_u8(host, comp, retptr + 1, error.code)
+        store_u8(guest, comp, retptr, 1)
+        store_u8(guest, comp, retptr + 1, error.code)

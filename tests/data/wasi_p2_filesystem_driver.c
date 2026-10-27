@@ -2,12 +2,13 @@
 #include <inttypes.h>
 #include "wasi_p2_filesystem.h"
 
-static fusedwasi_p2_state s;
+static fusedwasi_p2_state world;
+    fusedwasi_p2_guest s;
 static uint8_t memory[4096];
 
-static void trap(fusedwasi_p2_state *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
+static void trap(fusedwasi_p2_guest *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
 static int clock_of(fusedwasi_p2_state *st, uint32_t id, uint64_t *ns) { (void)st, (void)id; *ns = 1700000000123456789ULL; return 0; }
-static uint32_t bump(fusedwasi_p2_state *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static uint32_t bump(fusedwasi_p2_guest *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     uint32_t *next = (uint32_t *)st->user;
     (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (*next + align - 1) / align * align;
@@ -71,12 +72,13 @@ int main(int argc, char **argv) {
     const char *root = argc > 2 ? argv[2] : ".";
     uint32_t next = 1600;
     struct fusedwasi_p2_preopen pre[2] = {{root, "/", 1}, {root, "/ro", 0}};
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     s.trap = trap;
     s.user = &next;
     s.realloc = bump;
-    s.clock = clock_of;
-    s.preopens = pre, s.preopen_count = 2;
+    world.clock = clock_of;
+    world.preopens = pre, world.preopen_count = 2;
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     memcpy(memory + 1500, "hello", 5);
     memcpy(memory + 1510, " world", 6);
@@ -239,6 +241,6 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "outside")) {
         FS(descriptor_stat_at, 1048577, 1, 4090, 100, 0);
     }
-    fusedwasi_p2_free(&s);
+    fusedwasi_p2_free(&world);
     return 0;
 }

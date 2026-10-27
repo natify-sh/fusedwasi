@@ -1,8 +1,8 @@
 /* wasi:http (63 imports): types (62) and outgoing-handler (1) (the twin of p2/wasi_p2_http.py, where the rules and the layouts are described). `incoming-handler` is an
  * export of a component, not an import.
  *
- * An outgoing request is refused (`HTTP-request-denied`) unless `s->http_check` says yes. The transport of the host is a small HTTP/1.1 client over a socket (`Connection: close`);
- * plain `http` only (BSD sockets, or Winsock on Windows): `https` is `internal-error` unless the caller sets `s->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
+ * An outgoing request is refused (`HTTP-request-denied`) unless `g->http_check` says yes. The transport of the host is a small HTTP/1.1 client over a socket (`Connection: close`);
+ * plain `http` only (BSD sockets, or Winsock on Windows): `https` is `internal-error` unless the caller sets `state->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
  * whole before the guest sees it, and a request is sent when the guest first asks for the answer. Objects that are shared (fields, bodies, responses, the answer to a future) are
  * counted; the embedder of a server side (`fusedwasi_p2_http_incoming_request_new`, `fusedwasi_p2_http_outparam_new`) holds references of its own and releases them. */
 #ifndef FUSEDWASI_P2_HTTP_H
@@ -123,16 +123,16 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_fail_num(fusedwasi_p2_http_error *e, uint3
 
 /* writing and reading an error-code in memory: 32 bytes aligned to 8, the tag at 0, the payload at 8 */
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_string(fusedwasi_p2_state *s, uint32_t comp, uint32_t at, const void *data, uint32_t n) {
-    uint32_t ptr = fusedwasi_p2_alloc(s, comp, 1, n);
-    if (n) memcpy(fusedwasi_p2_mem(s, comp, ptr, n), data, n);
-    fusedwasi_p2_store_u32(s, comp, at, ptr);
-    fusedwasi_p2_store_u32(s, comp, at + 4, n);
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_string(fusedwasi_p2_guest *g, uint32_t comp, uint32_t at, const void *data, uint32_t n) {
+    uint32_t ptr = fusedwasi_p2_alloc(g, comp, 1, n);
+    if (n) memcpy(fusedwasi_p2_mem(g, comp, ptr, n), data, n);
+    fusedwasi_p2_store_u32(g, comp, at, ptr);
+    fusedwasi_p2_store_u32(g, comp, at + 4, n);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_opt_string(fusedwasi_p2_state *s, uint32_t comp, uint32_t at, const char *text) {
-    fusedwasi_p2_store_u8(s, comp, at, text ? 1 : 0);
-    if (text) fusedwasi_p2_http_store_string(s, comp, at + 4, text, (uint32_t)strlen(text));
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_opt_string(fusedwasi_p2_guest *g, uint32_t comp, uint32_t at, const char *text) {
+    fusedwasi_p2_store_u8(g, comp, at, text ? 1 : 0);
+    if (text) fusedwasi_p2_http_store_string(g, comp, at + 4, text, (uint32_t)strlen(text));
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_http_leaf(int kind, uint32_t *size, uint32_t *align) {
@@ -161,13 +161,13 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_offsets(const fusedwasi_p2_http_case *c, 
     }
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_error(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, const fusedwasi_p2_http_error *e) {
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_error(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, const fusedwasi_p2_http_error *e) {
     const fusedwasi_p2_http_case *c = fusedwasi_p2_http_case_of(e->tag);
     uint32_t offs[2] = {0, 0};
-    fusedwasi_p2_store_u8(s, comp, ptr, (uint8_t)e->tag);
+    fusedwasi_p2_store_u8(g, comp, ptr, (uint8_t)e->tag);
     uint32_t base = ptr + 8;
     if (c->outer) {
-        fusedwasi_p2_store_u8(s, comp, base, e->present ? 1 : 0);
+        fusedwasi_p2_store_u8(g, comp, base, e->present ? 1 : 0);
         if (!e->present) return;
     }
     fusedwasi_p2_http_offsets(c, offs);
@@ -175,21 +175,21 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_store_error(fusedwasi_p2_state *s, uint32
         uint32_t at = base + offs[i], size, align;
         fusedwasi_p2_http_leaf(c->kind[i], &size, &align);
         if (c->kind[i] == FUSEDWASI_P2_HK_STR) {
-            fusedwasi_p2_store_u8(s, comp, at, e->has[i] ? 1 : 0);
-            if (e->has[i]) fusedwasi_p2_http_store_string(s, comp, at + 4, e->str[i], e->len[i]);
+            fusedwasi_p2_store_u8(g, comp, at, e->has[i] ? 1 : 0);
+            if (e->has[i]) fusedwasi_p2_http_store_string(g, comp, at + 4, e->str[i], e->len[i]);
             continue;
         }
-        fusedwasi_p2_store_u8(s, comp, at, e->has[i] ? 1 : 0);
+        fusedwasi_p2_store_u8(g, comp, at, e->has[i] ? 1 : 0);
         if (e->has[i]) {
-            uint8_t *p = fusedwasi_p2_mem(s, comp, at + align, align);
+            uint8_t *p = fusedwasi_p2_mem(g, comp, at + align, align);
             for (uint32_t b = 0; b < align; b++) p[b] = (uint8_t)(e->num[i] >> (8 * b));
         }
     }
 }
 
 /* an error-code that came as flat arguments: the tag, then the numbers of the payload (a string is a pointer and a length); strings are copied */
-FUSEDWASI_P2_FN void fusedwasi_p2_http_lift_error(fusedwasi_p2_state *s, uint32_t comp, const uint64_t *flat, fusedwasi_p2_http_error *e) {
-    if (flat[0] >= FUSEDWASI_P2_HTTP_CASES) s->trap(s, "bad error-code");
+FUSEDWASI_P2_FN void fusedwasi_p2_http_lift_error(fusedwasi_p2_guest *g, uint32_t comp, const uint64_t *flat, fusedwasi_p2_http_error *e) {
+    if (flat[0] >= FUSEDWASI_P2_HTTP_CASES) g->trap(g, "bad error-code");
     const fusedwasi_p2_http_case *c = fusedwasi_p2_http_case_of((uint32_t)flat[0]);
     fusedwasi_p2_http_error_init(e, (uint32_t)flat[0]);
     int pos = 1;
@@ -199,7 +199,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_lift_error(fusedwasi_p2_state *s, uint32_
         if (c->kind[i] == FUSEDWASI_P2_HK_STR) {
             if (has) {
                 uint32_t ptr = (uint32_t)flat[pos + 1], n = (uint32_t)flat[pos + 2];
-                fusedwasi_p2_http_error_set_str(e, i, (const char *)fusedwasi_p2_mem(s, comp, ptr, n), n);
+                fusedwasi_p2_http_error_set_str(e, i, (const char *)fusedwasi_p2_mem(g, comp, ptr, n), n);
             }
             pos += 3;
         } else {
@@ -325,81 +325,81 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_check_entry(const uint8_t *name, size_t nl
     return FUSEDWASI_P2_HE_NONE;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_fields(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_fields(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_fields_unref((fusedwasi_p2_http_fields *)obj);
 }
 
 /* a new handle of fields; the table has the reference the caller had */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_fields_handle(fusedwasi_p2_state *s, fusedwasi_p2_http_fields *f) {
-    if (!f) s->trap(s, "out of memory");
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_FIELDS, f, fusedwasi_p2_http_destroy_fields);
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_fields_handle(fusedwasi_p2_guest *g, fusedwasi_p2_http_fields *f) {
+    if (!f) g->trap(g, "out of memory");
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_FIELDS, f, fusedwasi_p2_http_destroy_fields);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_fields *fusedwasi_p2_http_fields_get_obj(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_fields *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_FIELDS)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_fields *fusedwasi_p2_http_fields_get_obj(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_fields *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_FIELDS)->obj;
 }
 
 /* an own `fields` given to a request, a response or a body: the handle is spent, the fields are not to be changed any more; the caller owns the reference */
-FUSEDWASI_P2_FN fusedwasi_p2_http_fields *fusedwasi_p2_http_fields_take(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_fields_get_obj(s, handle);
-    fusedwasi_p2_http_fields *f = (fusedwasi_p2_http_fields *)fusedwasi_p2_table_take(s, handle, FUSEDWASI_P2_KIND_FIELDS);
+FUSEDWASI_P2_FN fusedwasi_p2_http_fields *fusedwasi_p2_http_fields_take(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_fields_get_obj(g, handle);
+    fusedwasi_p2_http_fields *f = (fusedwasi_p2_http_fields *)fusedwasi_p2_table_take(g, handle, FUSEDWASI_P2_KIND_FIELDS);
     f->immutable = 1;
     return f;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_new(fusedwasi_p2_state *s) { return fusedwasi_p2_http_fields_handle(s, fusedwasi_p2_http_fields_new(0)); }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_new(fusedwasi_p2_guest *g) { return fusedwasi_p2_http_fields_handle(g, fusedwasi_p2_http_fields_new(0)); }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_from_list(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint32_t len, uint32_t retptr) {
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_from_list(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint32_t len, uint32_t retptr) {
     for (uint32_t i = 0; i < len; i++) {
         uint32_t at = ptr + 16 * i;
-        uint32_t np = fusedwasi_p2_load_u32(s, comp, at), nl = fusedwasi_p2_load_u32(s, comp, at + 4);
-        uint32_t vp = fusedwasi_p2_load_u32(s, comp, at + 8), vl = fusedwasi_p2_load_u32(s, comp, at + 12);
-        int err = fusedwasi_p2_http_check_entry(fusedwasi_p2_mem(s, comp, np, nl), nl, fusedwasi_p2_mem(s, comp, vp, vl), vl);
+        uint32_t np = fusedwasi_p2_load_u32(g, comp, at), nl = fusedwasi_p2_load_u32(g, comp, at + 4);
+        uint32_t vp = fusedwasi_p2_load_u32(g, comp, at + 8), vl = fusedwasi_p2_load_u32(g, comp, at + 12);
+        int err = fusedwasi_p2_http_check_entry(fusedwasi_p2_mem(g, comp, np, nl), nl, fusedwasi_p2_mem(g, comp, vp, vl), vl);
         if (err != FUSEDWASI_P2_HE_NONE) {
-            fusedwasi_p2_store_u8(s, comp, retptr, 1);
-            fusedwasi_p2_store_u8(s, comp, retptr + 4, (uint8_t)err);
+            fusedwasi_p2_store_u8(g, comp, retptr, 1);
+            fusedwasi_p2_store_u8(g, comp, retptr + 4, (uint8_t)err);
             return;
         }
     }
     fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_new(0);
     for (uint32_t i = 0; f && i < len; i++) {
         uint32_t at = ptr + 16 * i;
-        uint32_t np = fusedwasi_p2_load_u32(s, comp, at), nl = fusedwasi_p2_load_u32(s, comp, at + 4);
-        uint32_t vp = fusedwasi_p2_load_u32(s, comp, at + 8), vl = fusedwasi_p2_load_u32(s, comp, at + 12);
-        if (fusedwasi_p2_http_fields_add(f, fusedwasi_p2_mem(s, comp, np, nl), nl, fusedwasi_p2_mem(s, comp, vp, vl), vl) != 0) {
+        uint32_t np = fusedwasi_p2_load_u32(g, comp, at), nl = fusedwasi_p2_load_u32(g, comp, at + 4);
+        uint32_t vp = fusedwasi_p2_load_u32(g, comp, at + 8), vl = fusedwasi_p2_load_u32(g, comp, at + 12);
+        if (fusedwasi_p2_http_fields_add(f, fusedwasi_p2_mem(g, comp, np, nl), nl, fusedwasi_p2_mem(g, comp, vp, vl), vl) != 0) {
             fusedwasi_p2_http_fields_unref(f);
             f = NULL;
         }
     }
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_http_fields_handle(s, f));
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_http_fields_handle(g, f));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_get(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t retptr) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self);
-    const uint8_t *name = fusedwasi_p2_mem(s, comp, name_ptr, name_len);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_get(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t retptr) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self);
+    const uint8_t *name = fusedwasi_p2_mem(g, comp, name_ptr, name_len);
     uint32_t n = 0;
     for (uint32_t i = 0; i < f->count; i++) n += fusedwasi_p2_http_name_is(&f->e[i], name, name_len);
-    uint32_t ptr = fusedwasi_p2_alloc(s, comp, 4, 8 * n), k = 0;
+    uint32_t ptr = fusedwasi_p2_alloc(g, comp, 4, 8 * n), k = 0;
     for (uint32_t i = 0; i < f->count; i++)
-        if (fusedwasi_p2_http_name_is(&f->e[i], fusedwasi_p2_mem(s, comp, name_ptr, name_len), name_len))
-            fusedwasi_p2_http_store_string(s, comp, ptr + 8 * k++, f->e[i].value, f->e[i].len);
-    fusedwasi_p2_store_u32(s, comp, retptr, ptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, n);
+        if (fusedwasi_p2_http_name_is(&f->e[i], fusedwasi_p2_mem(g, comp, name_ptr, name_len), name_len))
+            fusedwasi_p2_http_store_string(g, comp, ptr + 8 * k++, f->e[i].value, f->e[i].len);
+    fusedwasi_p2_store_u32(g, comp, retptr, ptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, n);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_has(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self);
-    const uint8_t *name = fusedwasi_p2_mem(s, comp, name_ptr, name_len);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_has(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self);
+    const uint8_t *name = fusedwasi_p2_mem(g, comp, name_ptr, name_len);
     for (uint32_t i = 0; i < f->count; i++)
         if (fusedwasi_p2_http_name_is(&f->e[i], name, name_len)) return 1;
     return 0;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_header_result(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, int err) {
-    fusedwasi_p2_store_u8(s, comp, retptr, err == FUSEDWASI_P2_HE_NONE ? 0 : 1);
-    if (err != FUSEDWASI_P2_HE_NONE) fusedwasi_p2_store_u8(s, comp, retptr + 1, (uint8_t)err);
+FUSEDWASI_P2_FN void fusedwasi_p2_http_header_result(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, int err) {
+    fusedwasi_p2_store_u8(g, comp, retptr, err == FUSEDWASI_P2_HE_NONE ? 0 : 1);
+    if (err != FUSEDWASI_P2_HE_NONE) fusedwasi_p2_store_u8(g, comp, retptr + 1, (uint8_t)err);
 }
 
 typedef struct {
@@ -423,59 +423,59 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_change(fusedwasi_p2_http_fields *f, const 
     return FUSEDWASI_P2_HE_NONE;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_set(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t value_ptr,
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_set(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t value_ptr,
                                            uint32_t value_len, uint32_t retptr) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self);
-    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(s, comp, name_ptr, name_len), name_len};
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self);
+    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(g, comp, name_ptr, name_len), name_len};
     fusedwasi_p2_http_span *values = (fusedwasi_p2_http_span *)calloc(value_len ? value_len : 1, sizeof *values);
-    if (!values) s->trap(s, "out of memory");
+    if (!values) g->trap(g, "out of memory");
     for (uint32_t i = 0; i < value_len; i++) {
-        uint32_t p = fusedwasi_p2_load_u32(s, comp, value_ptr + 8 * i), n = fusedwasi_p2_load_u32(s, comp, value_ptr + 8 * i + 4);
-        values[i].p = fusedwasi_p2_mem(s, comp, p, n);
+        uint32_t p = fusedwasi_p2_load_u32(g, comp, value_ptr + 8 * i), n = fusedwasi_p2_load_u32(g, comp, value_ptr + 8 * i + 4);
+        values[i].p = fusedwasi_p2_mem(g, comp, p, n);
         values[i].n = n;
     }
     int err = fusedwasi_p2_http_change(f, name, values, value_len, 1);
     free(values);
-    fusedwasi_p2_http_header_result(s, comp, retptr, err);
+    fusedwasi_p2_http_header_result(g, comp, retptr, err);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_delete(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t retptr) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self);
-    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(s, comp, name_ptr, name_len), name_len};
-    fusedwasi_p2_http_header_result(s, comp, retptr, fusedwasi_p2_http_change(f, name, NULL, 0, 1));
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_delete(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t retptr) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self);
+    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(g, comp, name_ptr, name_len), name_len};
+    fusedwasi_p2_http_header_result(g, comp, retptr, fusedwasi_p2_http_change(f, name, NULL, 0, 1));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_append(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t value_ptr,
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_append(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t name_ptr, uint32_t name_len, uint32_t value_ptr,
                                               uint32_t value_len, uint32_t retptr) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self);
-    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(s, comp, name_ptr, name_len), name_len};
-    fusedwasi_p2_http_span value = {fusedwasi_p2_mem(s, comp, value_ptr, value_len), value_len};
-    fusedwasi_p2_http_header_result(s, comp, retptr, fusedwasi_p2_http_change(f, name, &value, 1, 0));
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self);
+    fusedwasi_p2_http_span name = {fusedwasi_p2_mem(g, comp, name_ptr, name_len), name_len};
+    fusedwasi_p2_http_span value = {fusedwasi_p2_mem(g, comp, value_ptr, value_len), value_len};
+    fusedwasi_p2_http_header_result(g, comp, retptr, fusedwasi_p2_http_change(f, name, &value, 1, 0));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_pairs(fusedwasi_p2_state *s, uint32_t comp, const fusedwasi_p2_http_fields *f, uint32_t retptr) {
-    uint32_t ptr = fusedwasi_p2_alloc(s, comp, 4, 16 * f->count);
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_pairs(fusedwasi_p2_guest *g, uint32_t comp, const fusedwasi_p2_http_fields *f, uint32_t retptr) {
+    uint32_t ptr = fusedwasi_p2_alloc(g, comp, 4, 16 * f->count);
     for (uint32_t i = 0; i < f->count; i++) {
-        fusedwasi_p2_http_store_string(s, comp, ptr + 16 * i, f->e[i].name, (uint32_t)strlen(f->e[i].name));
-        fusedwasi_p2_http_store_string(s, comp, ptr + 16 * i + 8, f->e[i].value, f->e[i].len);
+        fusedwasi_p2_http_store_string(g, comp, ptr + 16 * i, f->e[i].name, (uint32_t)strlen(f->e[i].name));
+        fusedwasi_p2_http_store_string(g, comp, ptr + 16 * i + 8, f->e[i].value, f->e[i].len);
     }
-    fusedwasi_p2_store_u32(s, comp, retptr, ptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, f->count);
+    fusedwasi_p2_store_u32(g, comp, retptr, ptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, f->count);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_entries(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_pairs(s, comp, fusedwasi_p2_http_fields_get_obj(s, self), retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_entries(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_pairs(g, comp, fusedwasi_p2_http_fields_get_obj(g, self), retptr);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_clone(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(s, self), *c = fusedwasi_p2_http_fields_new(0);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_fields_clone(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_fields_get_obj(g, self), *c = fusedwasi_p2_http_fields_new(0);
     for (uint32_t i = 0; c && i < f->count; i++) fusedwasi_p2_http_fields_add(c, f->e[i].name, strlen(f->e[i].name), f->e[i].value, f->e[i].len);
-    return fusedwasi_p2_http_fields_handle(s, c);
+    return fusedwasi_p2_http_fields_handle(g, c);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_fields_get_obj(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_FIELDS);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_fields_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_fields_get_obj(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_FIELDS);
 }
 
 /* blobs: bytes that a stream, an answer and a body share */
@@ -519,43 +519,43 @@ FUSEDWASI_P2_FN char *fusedwasi_p2_http_dup(const void *p, size_t n) {
 }
 
 /* the method of the guest as text (malloc'd) */
-FUSEDWASI_P2_FN char *fusedwasi_p2_http_lift_method(fusedwasi_p2_state *s, uint32_t comp, uint32_t tag, uint32_t ptr, uint32_t n) {
+FUSEDWASI_P2_FN char *fusedwasi_p2_http_lift_method(fusedwasi_p2_guest *g, uint32_t comp, uint32_t tag, uint32_t ptr, uint32_t n) {
     if (tag < 9) return fusedwasi_p2_http_dup(fusedwasi_p2_http_std_methods[tag], strlen(fusedwasi_p2_http_std_methods[tag]));
-    if (tag > 9) s->trap(s, "bad method");
-    return fusedwasi_p2_http_dup(fusedwasi_p2_mem(s, comp, ptr, n), n);
+    if (tag > 9) g->trap(g, "bad method");
+    return fusedwasi_p2_http_dup(fusedwasi_p2_mem(g, comp, ptr, n), n);
 }
 
-FUSEDWASI_P2_FN char *fusedwasi_p2_http_lift_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t tag, uint32_t ptr, uint32_t n) {
+FUSEDWASI_P2_FN char *fusedwasi_p2_http_lift_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t tag, uint32_t ptr, uint32_t n) {
     if (tag == 0) return fusedwasi_p2_http_dup("http", 4);
     if (tag == 1) return fusedwasi_p2_http_dup("https", 5);
-    if (tag > 2) s->trap(s, "bad scheme");
-    return fusedwasi_p2_http_dup(fusedwasi_p2_mem(s, comp, ptr, n), n);
+    if (tag > 2) g->trap(g, "bad scheme");
+    return fusedwasi_p2_http_dup(fusedwasi_p2_mem(g, comp, ptr, n), n);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_method(fusedwasi_p2_state *s, uint32_t comp, uint32_t at, const char *method) {
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_method(fusedwasi_p2_guest *g, uint32_t comp, uint32_t at, const char *method) {
     for (uint8_t i = 0; i < 9; i++)
         if (strcmp(method, fusedwasi_p2_http_std_methods[i]) == 0) {
-            fusedwasi_p2_store_u8(s, comp, at, i);
+            fusedwasi_p2_store_u8(g, comp, at, i);
             return;
         }
-    fusedwasi_p2_store_u8(s, comp, at, 9);
-    fusedwasi_p2_http_store_string(s, comp, at + 4, method, (uint32_t)strlen(method));
+    fusedwasi_p2_store_u8(g, comp, at, 9);
+    fusedwasi_p2_http_store_string(g, comp, at + 4, method, (uint32_t)strlen(method));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t at, const char *scheme) {
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t at, const char *scheme) {
     if (strcmp(scheme, "http") == 0) {
-        fusedwasi_p2_store_u8(s, comp, at, 0);
+        fusedwasi_p2_store_u8(g, comp, at, 0);
     } else if (strcmp(scheme, "https") == 0) {
-        fusedwasi_p2_store_u8(s, comp, at, 1);
+        fusedwasi_p2_store_u8(g, comp, at, 1);
     } else {
-        fusedwasi_p2_store_u8(s, comp, at, 2);
-        fusedwasi_p2_http_store_string(s, comp, at + 4, scheme, (uint32_t)strlen(scheme));
+        fusedwasi_p2_store_u8(g, comp, at, 2);
+        fusedwasi_p2_http_store_string(g, comp, at + 4, scheme, (uint32_t)strlen(scheme));
     }
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_store_opt_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, const char *scheme) {
-    fusedwasi_p2_store_u8(s, comp, retptr, scheme ? 1 : 0);
-    if (scheme) fusedwasi_p2_http_store_scheme(s, comp, retptr + 4, scheme);
+FUSEDWASI_P2_FN void fusedwasi_p2_http_store_opt_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, const char *scheme) {
+    fusedwasi_p2_store_u8(g, comp, retptr, scheme ? 1 : 0);
+    if (scheme) fusedwasi_p2_http_store_scheme(g, comp, retptr + 4, scheme);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_http_valid_path(const uint8_t *p, size_t n) {
@@ -645,19 +645,19 @@ typedef struct {
     fusedwasi_p2_http_obody *body;
 } fusedwasi_p2_http_ostream;
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_http_ostream_check_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int *status) {
-    (void)s;
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_http_ostream_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
+    (void)g;
     *status = FUSEDWASI_P2_STREAM_OK;
     return FUSEDWASI_P2_HTTP_MAX_BODY - ((fusedwasi_p2_http_ostream *)st)->body->len;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_http_obody *b = ((fusedwasi_p2_http_ostream *)st)->body;
     if (b->len + len > b->capacity) {
         uint64_t cap = b->capacity ? b->capacity : 64;
         while (cap < b->len + len) cap *= 2;
         uint8_t *grown = (uint8_t *)realloc(b->buf, (size_t)cap);
-        if (!grown) s->trap(s, "out of memory");
+        if (!grown) g->trap(g, "out of memory");
         b->buf = grown;
         b->capacity = cap;
     }
@@ -666,32 +666,32 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_write(fusedwasi_p2_state *s, fused
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_flush(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    (void)s;
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+    (void)g;
     (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ostream_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
     int status;
-    return fusedwasi_p2_http_ostream_check_write(s, st, &status) > 0;
+    return fusedwasi_p2_http_ostream_check_write(g, st, &status) > 0;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_ostream_destroy(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_ostream_destroy(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
     fusedwasi_p2_http_obody_unref(((fusedwasi_p2_http_ostream *)st)->body);
     free(st);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_obody(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_obody(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_obody *b = (fusedwasi_p2_http_obody *)obj;
     if (!b->finished) b->abandoned = 1;
     fusedwasi_p2_http_obody_unref(b);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_obody *fusedwasi_p2_http_obody_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_obody *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_OUTGOING_BODY)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_obody *fusedwasi_p2_http_obody_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_obody *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_OUTGOING_BODY)->obj;
 }
 
 /* the content-length of the fields, if it is a number (the first that is) */
@@ -713,19 +713,19 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_declared_length(const fusedwasi_p2_http_fi
 }
 
 /* `body()` of a request or a response: makes the body once, then err. Returns the new body (the caller keeps its reference in `*slot`), or NULL. */
-FUSEDWASI_P2_FN void fusedwasi_p2_http_new_body(fusedwasi_p2_state *s, uint32_t comp, const fusedwasi_p2_http_fields *headers, int response, fusedwasi_p2_http_obody **slot, uint32_t retptr) {
+FUSEDWASI_P2_FN void fusedwasi_p2_http_new_body(fusedwasi_p2_guest *g, uint32_t comp, const fusedwasi_p2_http_fields *headers, int response, fusedwasi_p2_http_obody **slot, uint32_t retptr) {
     if (*slot) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
         return;
     }
     fusedwasi_p2_http_obody *b = (fusedwasi_p2_http_obody *)calloc(1, sizeof *b);
-    if (!b) s->trap(s, "out of memory");
+    if (!b) g->trap(g, "out of memory");
     b->refs = 2; /* the owner and the handle */
     b->response = response;
     b->has_expected = fusedwasi_p2_http_declared_length(headers, &b->expected);
     *slot = b;
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_OUTGOING_BODY, b, fusedwasi_p2_http_destroy_obody));
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_OUTGOING_BODY, b, fusedwasi_p2_http_destroy_obody));
 }
 
 /* outgoing-request */
@@ -744,30 +744,30 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_orequest_free(fusedwasi_p2_http_orequest 
     free(r);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_orequest(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_orequest(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_orequest_free((fusedwasi_p2_http_orequest *)obj);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_orequest *fusedwasi_p2_http_orequest_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_orequest *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_OUTGOING_REQUEST)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_orequest *fusedwasi_p2_http_orequest_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_orequest *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_OUTGOING_REQUEST)->obj;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_new(fusedwasi_p2_state *s, uint32_t headers) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_new(fusedwasi_p2_guest *g, uint32_t headers) {
     fusedwasi_p2_http_orequest *r = (fusedwasi_p2_http_orequest *)calloc(1, sizeof *r);
-    if (!r) s->trap(s, "out of memory");
-    r->headers = fusedwasi_p2_http_fields_take(s, headers);
+    if (!r) g->trap(g, "out of memory");
+    r->headers = fusedwasi_p2_http_fields_take(g, headers);
     r->method = fusedwasi_p2_http_dup("GET", 3);
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_OUTGOING_REQUEST, r, fusedwasi_p2_http_destroy_orequest);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_OUTGOING_REQUEST, r, fusedwasi_p2_http_destroy_orequest);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_body(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(s, self);
-    fusedwasi_p2_http_new_body(s, comp, r->headers, 0, &r->body, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_body(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(g, self);
+    fusedwasi_p2_http_new_body(g, comp, r->headers, 0, &r->body, retptr);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_method(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_method(s, comp, retptr, fusedwasi_p2_http_orequest_get(s, self)->method);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_method(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_method(g, comp, retptr, fusedwasi_p2_http_orequest_get(g, self)->method);
 }
 
 /* replaces a text of a request: returns 0, or 1 for "no" (`value` is freed then) */
@@ -778,9 +778,9 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_replace(char **slot, char *value) {
     return 0;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_method(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
-    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(s, self);
-    char *method = fusedwasi_p2_http_lift_method(s, comp, tag, ptr, len);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_method(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
+    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(g, self);
+    char *method = fusedwasi_p2_http_lift_method(g, comp, tag, ptr, len);
     if (!method || !fusedwasi_p2_http_is_token((const uint8_t *)method, strlen(method)) || strlen(method) != (tag == 9 ? len : strlen(method))) {
         free(method);
         return 1;
@@ -788,35 +788,35 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_method(f
     return fusedwasi_p2_http_replace(&r->method, method);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_path_with_query(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_string(s, comp, retptr, fusedwasi_p2_http_orequest_get(s, self)->path);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_path_with_query(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_string(g, comp, retptr, fusedwasi_p2_http_orequest_get(g, self)->path);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_path_with_query(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
-    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(s, self);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_path_with_query(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
+    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(g, self);
     if (!tag) {
         free(r->path);
         r->path = NULL;
         return 0;
     }
-    const uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, len);
+    const uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, len);
     if (!fusedwasi_p2_http_valid_path(p, len)) return 1;
     return fusedwasi_p2_http_replace(&r->path, fusedwasi_p2_http_dup(p, len));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_scheme(s, comp, retptr, fusedwasi_p2_http_orequest_get(s, self)->scheme);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_scheme(g, comp, retptr, fusedwasi_p2_http_orequest_get(g, self)->scheme);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t tag, uint32_t scheme_tag, uint32_t ptr,
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t tag, uint32_t scheme_tag, uint32_t ptr,
                                                                 uint32_t len) {
-    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(s, self);
+    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(g, self);
     if (!tag) {
         free(r->scheme);
         r->scheme = NULL;
         return 0;
     }
-    char *scheme = fusedwasi_p2_http_lift_scheme(s, comp, scheme_tag, ptr, len);
+    char *scheme = fusedwasi_p2_http_lift_scheme(g, comp, scheme_tag, ptr, len);
     if (!scheme || (scheme_tag == 2 && !fusedwasi_p2_http_valid_scheme((const uint8_t *)scheme, len))) {
         free(scheme);
         return 1;
@@ -824,31 +824,31 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_scheme(f
     return fusedwasi_p2_http_replace(&r->scheme, scheme);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_authority(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_string(s, comp, retptr, fusedwasi_p2_http_orequest_get(s, self)->authority);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_authority(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_string(g, comp, retptr, fusedwasi_p2_http_orequest_get(g, self)->authority);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_authority(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
-    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(s, self);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_set_authority(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t tag, uint32_t ptr, uint32_t len) {
+    fusedwasi_p2_http_orequest *r = fusedwasi_p2_http_orequest_get(g, self);
     if (!tag) {
         free(r->authority);
         r->authority = NULL;
         return 0;
     }
-    const char *a = (const char *)fusedwasi_p2_mem(s, comp, ptr, len);
+    const char *a = (const char *)fusedwasi_p2_mem(g, comp, ptr, len);
     if (!fusedwasi_p2_http_split_authority(a, len, 80, NULL, NULL)) return 1;
     return fusedwasi_p2_http_replace(&r->authority, fusedwasi_p2_http_dup(a, len));
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_headers(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_orequest_get(s, self)->headers;
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_request_headers(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_orequest_get(g, self)->headers;
     fusedwasi_p2_http_fields_ref(f);
-    return fusedwasi_p2_http_fields_handle(s, f);
+    return fusedwasi_p2_http_fields_handle(g, f);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_orequest_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_OUTGOING_REQUEST);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_request_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_orequest_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_OUTGOING_REQUEST);
 }
 
 /* request-options */
@@ -858,19 +858,19 @@ typedef struct {
     uint64_t ns[3];
 } fusedwasi_p2_http_options;
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_options *fusedwasi_p2_http_options_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_options *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_options *fusedwasi_p2_http_options_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_options *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS)->obj;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_new(fusedwasi_p2_state *s) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_new(fusedwasi_p2_guest *g) {
     void *o = calloc(1, sizeof(fusedwasi_p2_http_options));
-    if (!o) s->trap(s, "out of memory");
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_REQUEST_OPTIONS, o, fusedwasi_p2_free_obj);
+    if (!o) g->trap(g, "out of memory");
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_REQUEST_OPTIONS, o, fusedwasi_p2_free_obj);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_get_timeout(fusedwasi_p2_state *s, uint32_t comp, const fusedwasi_p2_http_options *o, int which, uint32_t retptr) {
-    fusedwasi_p2_store_u8(s, comp, retptr, o->has[which] ? 1 : 0);
-    if (o->has[which]) fusedwasi_p2_store_u64(s, comp, retptr + 8, o->ns[which]);
+FUSEDWASI_P2_FN void fusedwasi_p2_http_get_timeout(fusedwasi_p2_guest *g, uint32_t comp, const fusedwasi_p2_http_options *o, int which, uint32_t retptr) {
+    fusedwasi_p2_store_u8(g, comp, retptr, o->has[which] ? 1 : 0);
+    if (o->has[which]) fusedwasi_p2_store_u64(g, comp, retptr + 8, o->ns[which]);
 }
 
 FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options *o, int which, uint32_t tag, uint64_t value) {
@@ -879,28 +879,28 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options
     return 0;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_connect_timeout(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_get_timeout(s, comp, fusedwasi_p2_http_options_get(s, self), 0, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_connect_timeout(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_get_timeout(g, comp, fusedwasi_p2_http_options_get(g, self), 0, retptr);
 }
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_connect_timeout(fusedwasi_p2_state *s, uint32_t self, uint32_t tag, uint64_t value) {
-    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(s, self), 0, tag, value);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_connect_timeout(fusedwasi_p2_guest *g, uint32_t self, uint32_t tag, uint64_t value) {
+    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(g, self), 0, tag, value);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_first_byte_timeout(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_get_timeout(s, comp, fusedwasi_p2_http_options_get(s, self), 1, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_first_byte_timeout(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_get_timeout(g, comp, fusedwasi_p2_http_options_get(g, self), 1, retptr);
 }
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_first_byte_timeout(fusedwasi_p2_state *s, uint32_t self, uint32_t tag, uint64_t value) {
-    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(s, self), 1, tag, value);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_first_byte_timeout(fusedwasi_p2_guest *g, uint32_t self, uint32_t tag, uint64_t value) {
+    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(g, self), 1, tag, value);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_between_bytes_timeout(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_get_timeout(s, comp, fusedwasi_p2_http_options_get(s, self), 2, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_between_bytes_timeout(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_get_timeout(g, comp, fusedwasi_p2_http_options_get(g, self), 2, retptr);
 }
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_between_bytes_timeout(fusedwasi_p2_state *s, uint32_t self, uint32_t tag, uint64_t value) {
-    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(s, self), 2, tag, value);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_request_options_set_between_bytes_timeout(fusedwasi_p2_guest *g, uint32_t self, uint32_t tag, uint64_t value) {
+    return fusedwasi_p2_http_set_timeout(fusedwasi_p2_http_options_get(g, self), 2, tag, value);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_options_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_request_options_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_options_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS);
 }
 
 /* incoming bodies, and the messages that carry them */
@@ -910,8 +910,8 @@ typedef struct {
     fusedwasi_p2_http_blob *blob;
 } fusedwasi_p2_http_istream;
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_istream_destroy(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_istream_destroy(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    (void)state;
     fusedwasi_p2_http_blob_unref(((fusedwasi_p2_http_istream *)st)->blob);
     free(st);
 }
@@ -929,13 +929,13 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_ibody_free(fusedwasi_p2_http_ibody *b) {
     free(b);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_ibody(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_ibody(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_ibody_free((fusedwasi_p2_http_ibody *)obj);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_ibody *fusedwasi_p2_http_ibody_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_ibody *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_INCOMING_BODY)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_ibody *fusedwasi_p2_http_ibody_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_ibody *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_INCOMING_BODY)->obj;
 }
 
 /* the body of a received message, to be consumed once */
@@ -951,31 +951,31 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_payload_free(fusedwasi_p2_http_payload *p
 }
 
 /* `consume`: `result<incoming-body>` */
-FUSEDWASI_P2_FN void fusedwasi_p2_http_consume(fusedwasi_p2_state *s, uint32_t comp, fusedwasi_p2_http_payload *p, uint32_t retptr) {
+FUSEDWASI_P2_FN void fusedwasi_p2_http_consume(fusedwasi_p2_guest *g, uint32_t comp, fusedwasi_p2_http_payload *p, uint32_t retptr) {
     if (p->consumed) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
         return;
     }
     p->consumed = 1;
     fusedwasi_p2_http_ibody *b = (fusedwasi_p2_http_ibody *)calloc(1, sizeof *b);
-    if (!b) s->trap(s, "out of memory");
+    if (!b) g->trap(g, "out of memory");
     b->blob = p->blob;
     b->trailers = p->trailers;
     p->blob = NULL;
     p->trailers = NULL;
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_INCOMING_BODY, b, fusedwasi_p2_http_destroy_ibody));
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_INCOMING_BODY, b, fusedwasi_p2_http_destroy_ibody));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_stream(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_ibody *b = fusedwasi_p2_http_ibody_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_stream(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_ibody *b = fusedwasi_p2_http_ibody_get(g, self);
     if (b->stream_taken) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
         return;
     }
     b->stream_taken = 1;
     fusedwasi_p2_http_istream *st = (fusedwasi_p2_http_istream *)calloc(1, sizeof *st);
-    if (!st) s->trap(s, "out of memory");
+    if (!st) g->trap(g, "out of memory");
     st->base.base.read = fusedwasi_p2_memory_input_read;
     st->base.base.ready = fusedwasi_p2_always_ready;
     st->base.base.destroy = fusedwasi_p2_http_istream_destroy;
@@ -983,9 +983,9 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_stream(fusedwasi_p2
     st->base.len = b->blob ? b->blob->len : 0;
     st->blob = b->blob;
     if (b->blob) b->blob->refs++;
-    b->stream_handle = fusedwasi_p2_input_stream_new(s, &st->base.base);
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, b->stream_handle);
+    b->stream_handle = fusedwasi_p2_input_stream_new(g, &st->base.base);
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, b->stream_handle);
 }
 
 typedef struct {
@@ -993,80 +993,80 @@ typedef struct {
     int taken;
 } fusedwasi_p2_http_future_trailers;
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future_trailers(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future_trailers(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_future_trailers *f = (fusedwasi_p2_http_future_trailers *)obj;
     fusedwasi_p2_http_fields_unref(f->trailers);
     free(f);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_future_trailers *fusedwasi_p2_http_future_trailers_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_future_trailers *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_FUTURE_TRAILERS)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_future_trailers *fusedwasi_p2_http_future_trailers_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_future_trailers *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_FUTURE_TRAILERS)->obj;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_body_finish(fusedwasi_p2_state *s, uint32_t this_) {
-    fusedwasi_p2_http_ibody *b = fusedwasi_p2_http_ibody_get(s, this_);
-    if (b->stream_handle && fusedwasi_p2_table_alive(s, b->stream_handle, FUSEDWASI_P2_KIND_INPUT_STREAM)) s->trap(s, "incoming-body.finish with its stream alive");
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_body_finish(fusedwasi_p2_guest *g, uint32_t this_) {
+    fusedwasi_p2_http_ibody *b = fusedwasi_p2_http_ibody_get(g, this_);
+    if (b->stream_handle && fusedwasi_p2_table_alive(g, b->stream_handle, FUSEDWASI_P2_KIND_INPUT_STREAM)) g->trap(g, "incoming-body.finish with its stream alive");
     fusedwasi_p2_http_future_trailers *f = (fusedwasi_p2_http_future_trailers *)calloc(1, sizeof *f);
-    if (!f) s->trap(s, "out of memory");
+    if (!f) g->trap(g, "out of memory");
     f->trailers = b->trailers;
     b->trailers = NULL;
-    fusedwasi_p2_table_drop(s, this_, FUSEDWASI_P2_KIND_INCOMING_BODY);
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_FUTURE_TRAILERS, f, fusedwasi_p2_http_destroy_future_trailers);
+    fusedwasi_p2_table_drop(g, this_, FUSEDWASI_P2_KIND_INCOMING_BODY);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_FUTURE_TRAILERS, f, fusedwasi_p2_http_destroy_future_trailers);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_ibody_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_INCOMING_BODY);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_body_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_ibody_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_INCOMING_BODY);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_ready_always(fusedwasi_p2_state *s, fusedwasi_p2_pollable *p) {
-    (void)s;
+FUSEDWASI_P2_FN int fusedwasi_p2_http_ready_always(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
+    (void)g;
     (void)p;
     return 1;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_future_trailers_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_future_trailers_get(s, self);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_future_trailers_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_future_trailers_get(g, self);
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
-    if (!p) s->trap(s, "out of memory");
+    if (!p) g->trap(g, "out of memory");
     p->ready = fusedwasi_p2_http_ready_always;
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_free_obj);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_trailers_get(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_future_trailers *f = fusedwasi_p2_http_future_trailers_get(s, self);
-    fusedwasi_p2_store_u8(s, comp, retptr, 1);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_trailers_get(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_future_trailers *f = fusedwasi_p2_http_future_trailers_get(g, self);
+    fusedwasi_p2_store_u8(g, comp, retptr, 1);
     if (f->taken) {
-        fusedwasi_p2_store_u8(s, comp, retptr + 8, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr + 8, 1);
         return;
     }
     f->taken = 1;
-    fusedwasi_p2_store_u8(s, comp, retptr + 8, 0);
-    fusedwasi_p2_store_u8(s, comp, retptr + 16, 0);
+    fusedwasi_p2_store_u8(g, comp, retptr + 8, 0);
+    fusedwasi_p2_store_u8(g, comp, retptr + 16, 0);
     if (!f->trailers) {
-        fusedwasi_p2_store_u8(s, comp, retptr + 24, 0);
+        fusedwasi_p2_store_u8(g, comp, retptr + 24, 0);
     } else {
-        fusedwasi_p2_store_u8(s, comp, retptr + 24, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr + 24, 1);
         fusedwasi_p2_http_fields *t = f->trailers;
         fusedwasi_p2_http_fields_ref(t);
-        fusedwasi_p2_store_u32(s, comp, retptr + 28, fusedwasi_p2_http_fields_handle(s, t));
+        fusedwasi_p2_store_u32(g, comp, retptr + 28, fusedwasi_p2_http_fields_handle(g, t));
     }
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_trailers_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_future_trailers_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_FUTURE_TRAILERS);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_trailers_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_future_trailers_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_FUTURE_TRAILERS);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_write(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_obody *b = fusedwasi_p2_http_obody_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_write(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_obody *b = fusedwasi_p2_http_obody_get(g, self);
     if (b->stream_taken) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
         return;
     }
     fusedwasi_p2_http_ostream *st = (fusedwasi_p2_http_ostream *)calloc(1, sizeof *st);
-    if (!st) s->trap(s, "out of memory");
+    if (!st) g->trap(g, "out of memory");
     st->base.check_write = fusedwasi_p2_http_ostream_check_write;
     st->base.write = fusedwasi_p2_http_ostream_write;
     st->base.flush = fusedwasi_p2_http_ostream_flush;
@@ -1075,39 +1075,39 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_write(fusedwasi_p2_
     st->body = b;
     b->refs++;
     b->stream_taken = 1;
-    b->stream_handle = fusedwasi_p2_output_stream_new(s, &st->base);
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, b->stream_handle);
+    b->stream_handle = fusedwasi_p2_output_stream_new(g, &st->base);
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, b->stream_handle);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_finish(fusedwasi_p2_state *s, uint32_t comp, uint32_t this_, uint32_t tag, uint32_t trailers, uint32_t retptr) {
-    fusedwasi_p2_http_obody *b = fusedwasi_p2_http_obody_get(s, this_);
-    if (b->stream_handle && fusedwasi_p2_table_alive(s, b->stream_handle, FUSEDWASI_P2_KIND_OUTPUT_STREAM)) s->trap(s, "outgoing-body.finish with its stream alive");
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_finish(fusedwasi_p2_guest *g, uint32_t comp, uint32_t this_, uint32_t tag, uint32_t trailers, uint32_t retptr) {
+    fusedwasi_p2_http_obody *b = fusedwasi_p2_http_obody_get(g, this_);
+    if (b->stream_handle && fusedwasi_p2_table_alive(g, b->stream_handle, FUSEDWASI_P2_KIND_OUTPUT_STREAM)) g->trap(g, "outgoing-body.finish with its stream alive");
     if (tag) {
         fusedwasi_p2_http_fields_unref(b->trailers);
-        b->trailers = fusedwasi_p2_http_fields_take(s, trailers);
+        b->trailers = fusedwasi_p2_http_fields_take(g, trailers);
     }
     int mismatch = b->has_expected && b->expected != b->len;
     if (mismatch) b->abandoned = 1;
     else b->finished = 1; /* before the handle is dropped: a drop of an unfinished body abandons it */
     b->refs++;            /* the handle may hold the last reference */
-    fusedwasi_p2_table_drop(s, this_, FUSEDWASI_P2_KIND_OUTGOING_BODY);
+    fusedwasi_p2_table_drop(g, this_, FUSEDWASI_P2_KIND_OUTGOING_BODY);
     if (mismatch) {
         fusedwasi_p2_http_error e;
         fusedwasi_p2_http_error_init(&e, 0);
         fusedwasi_p2_http_fail_num(&e, b->response ? FUSEDWASI_P2_HTTP_RESPONSE_BODY_SIZE : FUSEDWASI_P2_HTTP_REQUEST_BODY_SIZE, b->len);
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
-        fusedwasi_p2_http_store_error(s, comp, retptr + 8, &e);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
+        fusedwasi_p2_http_store_error(g, comp, retptr + 8, &e);
         fusedwasi_p2_http_error_free(&e);
     } else {
-        fusedwasi_p2_store_u8(s, comp, retptr, 0);
+        fusedwasi_p2_store_u8(g, comp, retptr, 0);
     }
     fusedwasi_p2_http_obody_unref(b);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_obody_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_OUTGOING_BODY);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_body_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_obody_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_OUTGOING_BODY);
 }
 
 /* the transport */
@@ -1586,10 +1586,10 @@ FUSEDWASI_P2_FN uint8_t *fusedwasi_p2_http_build_request(const fusedwasi_p2_http
 }
 
 /* The transport of the host: a connection for each request, `Connection: close`; plain http only. */
-FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *s, const fusedwasi_p2_http_request *req, fusedwasi_p2_http_response *out, fusedwasi_p2_http_error *err) {
-    (void)s;
+FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, const fusedwasi_p2_http_request *req, fusedwasi_p2_http_response *out, fusedwasi_p2_http_error *err) {
+    (void)state;
     int https = strcmp(req->scheme, "https") == 0;
-    if (https) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "https needs a transport of the embedder (s->http_send): this host has no TLS");
+    if (https) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "https needs a transport of the embedder (`http_send` of the state): this host has no TLS");
     char *host = NULL;
     int port = 0;
     if (!fusedwasi_p2_http_split_authority(req->authority, strlen(req->authority), 80, &host, &port)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
@@ -1679,8 +1679,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_iresponse_free(fusedwasi_p2_http_irespons
     free(r);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_iresponse(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_iresponse(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_iresponse_free((fusedwasi_p2_http_iresponse *)obj);
 }
 
@@ -1703,8 +1703,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_future_unref(fusedwasi_p2_http_future *f)
     free(f);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_future_unref((fusedwasi_p2_http_future *)obj);
 }
 
@@ -1714,7 +1714,7 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_future_fail(fusedwasi_p2_http_future *f, 
 }
 
 /* Sends the request if it is time to. Returns 1 when the answer (or the failure) is there. */
-FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_state *s, fusedwasi_p2_http_future *f) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_guest *g, fusedwasi_p2_http_future *f) {
     if (f->done) return 1;
     fusedwasi_p2_http_obody *body = f->request->body;
     if (body && !(body->finished || body->abandoned)) return 0;
@@ -1740,7 +1740,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_state *s, fuse
     memset(&resp, 0, sizeof resp);
     fusedwasi_p2_http_error err;
     fusedwasi_p2_http_error_init(&err, 0);
-    int rc = (s->http_send ? s->http_send : fusedwasi_p2_http_default_send)(s, &req, &resp, &err);
+    int rc = (g->state->http_send ? g->state->http_send : fusedwasi_p2_http_default_send)(g->state, &req, &resp, &err);
     if (rc != 0) {
         fusedwasi_p2_http_error_free(&f->error);
         f->error = err;
@@ -1749,7 +1749,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_state *s, fuse
     }
     fusedwasi_p2_http_error_free(&err);
     fusedwasi_p2_http_iresponse *r = (fusedwasi_p2_http_iresponse *)calloc(1, sizeof *r);
-    if (!r) s->trap(s, "out of memory");
+    if (!r) g->trap(g, "out of memory");
     r->status = resp.status;
     r->headers = resp.headers;
     r->headers->immutable = 1;
@@ -1760,111 +1760,111 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_future_advance(fusedwasi_p2_state *s, fuse
     return 1;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_http_future_ready(fusedwasi_p2_state *s, fusedwasi_p2_pollable *p) { return fusedwasi_p2_http_future_advance(s, (fusedwasi_p2_http_future *)p->ctx); }
+FUSEDWASI_P2_FN int fusedwasi_p2_http_future_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) { return fusedwasi_p2_http_future_advance(g, (fusedwasi_p2_http_future *)p->ctx); }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future_pollable(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_future_pollable(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)obj;
     fusedwasi_p2_http_future_unref((fusedwasi_p2_http_future *)p->ctx);
     free(p);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_future *fusedwasi_p2_http_future_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_future *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_future *fusedwasi_p2_http_future_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_future *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE)->obj;
 }
 
 /* the request as the transport takes it, or the failure (also the policy). Returns 0 or 1 with err set. */
-FUSEDWASI_P2_FN int fusedwasi_p2_http_prepare(fusedwasi_p2_state *s, fusedwasi_p2_http_orequest *r, fusedwasi_p2_http_future *f, fusedwasi_p2_http_error *err) {
+FUSEDWASI_P2_FN int fusedwasi_p2_http_prepare(fusedwasi_p2_guest *g, fusedwasi_p2_http_orequest *r, fusedwasi_p2_http_future *f, fusedwasi_p2_http_error *err) {
     if (!fusedwasi_p2_http_is_token((const uint8_t *)r->method, strlen(r->method))) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_METHOD_INVALID);
     const char *scheme = r->scheme ? r->scheme : "https";
     if ((strcmp(scheme, "http") != 0 && strcmp(scheme, "https") != 0) || !r->authority) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
     if (!fusedwasi_p2_http_split_authority(r->authority, strlen(r->authority), 80, NULL, NULL)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
-    if (!s->http_check || !s->http_check(s, scheme, r->authority)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_DENIED);
+    if (!g->state->http_check || !g->state->http_check(g->state, scheme, r->authority)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_DENIED);
     f->scheme = fusedwasi_p2_http_dup(scheme, strlen(scheme));
     f->path = fusedwasi_p2_http_dup(r->path ? r->path : "/", strlen(r->path ? r->path : "/"));
-    if (!f->scheme || !f->path) s->trap(s, "out of memory");
+    if (!f->scheme || !f->path) g->trap(g, "out of memory");
     return 0;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_outgoing_handler_handle(fusedwasi_p2_state *s, uint32_t comp, uint32_t request, uint32_t opt_tag, uint32_t opt_handle, uint32_t retptr) {
-    fusedwasi_p2_http_orequest_get(s, request);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_outgoing_handler_handle(fusedwasi_p2_guest *g, uint32_t comp, uint32_t request, uint32_t opt_tag, uint32_t opt_handle, uint32_t retptr) {
+    fusedwasi_p2_http_orequest_get(g, request);
     fusedwasi_p2_http_future *f = (fusedwasi_p2_http_future *)calloc(1, sizeof *f);
-    if (!f) s->trap(s, "out of memory");
+    if (!f) g->trap(g, "out of memory");
     f->refs = 1;
-    if (opt_tag) f->options = *fusedwasi_p2_http_options_get(s, opt_handle);
-    f->request = (fusedwasi_p2_http_orequest *)fusedwasi_p2_table_take(s, request, FUSEDWASI_P2_KIND_OUTGOING_REQUEST);
-    if (opt_tag) fusedwasi_p2_table_drop(s, opt_handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS);
+    if (opt_tag) f->options = *fusedwasi_p2_http_options_get(g, opt_handle);
+    f->request = (fusedwasi_p2_http_orequest *)fusedwasi_p2_table_take(g, request, FUSEDWASI_P2_KIND_OUTGOING_REQUEST);
+    if (opt_tag) fusedwasi_p2_table_drop(g, opt_handle, FUSEDWASI_P2_KIND_REQUEST_OPTIONS);
     fusedwasi_p2_http_error err;
     fusedwasi_p2_http_error_init(&err, 0);
-    if (fusedwasi_p2_http_prepare(s, f->request, f, &err)) {
+    if (fusedwasi_p2_http_prepare(g, f->request, f, &err)) {
         fusedwasi_p2_http_future_unref(f);
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
-        fusedwasi_p2_http_store_error(s, comp, retptr + 8, &err);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
+        fusedwasi_p2_http_store_error(g, comp, retptr + 8, &err);
         fusedwasi_p2_http_error_free(&err);
         return;
     }
     fusedwasi_p2_http_error_free(&err);
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
-    fusedwasi_p2_store_u32(s, comp, retptr + 8, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE, f, fusedwasi_p2_http_destroy_future));
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE, f, fusedwasi_p2_http_destroy_future));
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_future_incoming_response_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_future *f = fusedwasi_p2_http_future_get(s, self);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_future_incoming_response_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_future *f = fusedwasi_p2_http_future_get(g, self);
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
-    if (!p) s->trap(s, "out of memory");
+    if (!p) g->trap(g, "out of memory");
     p->ready = fusedwasi_p2_http_future_ready;
     p->ctx = f;
     f->refs++;
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_http_destroy_future_pollable);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_http_destroy_future_pollable);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_incoming_response_get(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_future *f = fusedwasi_p2_http_future_get(s, self);
-    if (!fusedwasi_p2_http_future_advance(s, f)) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 0);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_incoming_response_get(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_future *f = fusedwasi_p2_http_future_get(g, self);
+    if (!fusedwasi_p2_http_future_advance(g, f)) {
+        fusedwasi_p2_store_u8(g, comp, retptr, 0);
         return;
     }
-    fusedwasi_p2_store_u8(s, comp, retptr, 1);
+    fusedwasi_p2_store_u8(g, comp, retptr, 1);
     if (f->taken) {
-        fusedwasi_p2_store_u8(s, comp, retptr + 8, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr + 8, 1);
         return;
     }
     f->taken = 1;
-    fusedwasi_p2_store_u8(s, comp, retptr + 8, 0);
+    fusedwasi_p2_store_u8(g, comp, retptr + 8, 0);
     if (f->failed) {
-        fusedwasi_p2_store_u8(s, comp, retptr + 16, 1);
-        fusedwasi_p2_http_store_error(s, comp, retptr + 24, &f->error);
+        fusedwasi_p2_store_u8(g, comp, retptr + 16, 1);
+        fusedwasi_p2_http_store_error(g, comp, retptr + 24, &f->error);
     } else {
-        fusedwasi_p2_store_u8(s, comp, retptr + 16, 0);
-        fusedwasi_p2_store_u32(s, comp, retptr + 24, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_INCOMING_RESPONSE, f->response, fusedwasi_p2_http_destroy_iresponse));
+        fusedwasi_p2_store_u8(g, comp, retptr + 16, 0);
+        fusedwasi_p2_store_u32(g, comp, retptr + 24, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_INCOMING_RESPONSE, f->response, fusedwasi_p2_http_destroy_iresponse));
         f->response = NULL;
     }
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_incoming_response_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_future_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_future_incoming_response_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_future_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_iresponse *fusedwasi_p2_http_iresponse_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_iresponse *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_INCOMING_RESPONSE)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_iresponse *fusedwasi_p2_http_iresponse_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_iresponse *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_INCOMING_RESPONSE)->obj;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_response_status(fusedwasi_p2_state *s, uint32_t self) { return fusedwasi_p2_http_iresponse_get(s, self)->status; }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_response_status(fusedwasi_p2_guest *g, uint32_t self) { return fusedwasi_p2_http_iresponse_get(g, self)->status; }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_response_headers(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_iresponse_get(s, self)->headers;
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_response_headers(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_iresponse_get(g, self)->headers;
     fusedwasi_p2_http_fields_ref(f);
-    return fusedwasi_p2_http_fields_handle(s, f);
+    return fusedwasi_p2_http_fields_handle(g, f);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_response_consume(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_consume(s, comp, &fusedwasi_p2_http_iresponse_get(s, self)->payload, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_response_consume(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_consume(g, comp, &fusedwasi_p2_http_iresponse_get(g, self)->payload, retptr);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_response_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_iresponse_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_INCOMING_RESPONSE);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_response_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_iresponse_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_INCOMING_RESPONSE);
 }
 
 /* the server side: what an embedder gives a component that exports incoming-handler, and what it gets back */
@@ -1875,8 +1875,8 @@ typedef struct {
     fusedwasi_p2_http_payload payload;
 } fusedwasi_p2_http_irequest;
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_irequest(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_irequest(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_irequest *r = (fusedwasi_p2_http_irequest *)obj;
     free(r->method), free(r->path), free(r->scheme), free(r->authority);
     fusedwasi_p2_http_fields_unref(r->headers);
@@ -1886,10 +1886,10 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_irequest(fusedwasi_p2_state *s, v
 
 /* A request for the guest (its handle). `path`, `scheme` and `authority` may be NULL; `scheme` is "http", "https" or another text. The strings and the body are copied; `headers`
    and `trailers` (may be NULL) are fields the caller made with fusedwasi_p2_http_fields_new: the request takes a reference of its own and makes them immutable. */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_state *s, const char *method, const char *path, const char *scheme, const char *authority,
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_guest *g, const char *method, const char *path, const char *scheme, const char *authority,
                                                       fusedwasi_p2_http_fields *headers, const void *body, uint64_t body_len, fusedwasi_p2_http_fields *trailers) {
     fusedwasi_p2_http_irequest *r = (fusedwasi_p2_http_irequest *)calloc(1, sizeof *r);
-    if (!r) s->trap(s, "out of memory");
+    if (!r) g->trap(g, "out of memory");
     r->method = fusedwasi_p2_http_dup(method, strlen(method));
     r->path = path ? fusedwasi_p2_http_dup(path, strlen(path)) : NULL;
     r->scheme = scheme ? fusedwasi_p2_http_dup(scheme, strlen(scheme)) : NULL;
@@ -1900,42 +1900,42 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_http_incoming_request_new(fusedwasi_p2_sta
     r->payload.blob = fusedwasi_p2_http_blob_new(body, body_len);
     r->payload.trailers = trailers;
     if (trailers) fusedwasi_p2_http_fields_ref(trailers), trailers->immutable = 1;
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_INCOMING_REQUEST, r, fusedwasi_p2_http_destroy_irequest);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_INCOMING_REQUEST, r, fusedwasi_p2_http_destroy_irequest);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_irequest *fusedwasi_p2_http_irequest_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_irequest *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_INCOMING_REQUEST)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_irequest *fusedwasi_p2_http_irequest_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_irequest *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_INCOMING_REQUEST)->obj;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_method(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_method(s, comp, retptr, fusedwasi_p2_http_irequest_get(s, self)->method);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_method(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_method(g, comp, retptr, fusedwasi_p2_http_irequest_get(g, self)->method);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_path_with_query(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_string(s, comp, retptr, fusedwasi_p2_http_irequest_get(s, self)->path);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_path_with_query(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_string(g, comp, retptr, fusedwasi_p2_http_irequest_get(g, self)->path);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_scheme(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_scheme(s, comp, retptr, fusedwasi_p2_http_irequest_get(s, self)->scheme);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_scheme(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_scheme(g, comp, retptr, fusedwasi_p2_http_irequest_get(g, self)->scheme);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_authority(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_store_opt_string(s, comp, retptr, fusedwasi_p2_http_irequest_get(s, self)->authority);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_authority(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_store_opt_string(g, comp, retptr, fusedwasi_p2_http_irequest_get(g, self)->authority);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_request_headers(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_irequest_get(s, self)->headers;
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_incoming_request_headers(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_irequest_get(g, self)->headers;
     fusedwasi_p2_http_fields_ref(f);
-    return fusedwasi_p2_http_fields_handle(s, f);
+    return fusedwasi_p2_http_fields_handle(g, f);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_consume(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_consume(s, comp, &fusedwasi_p2_http_irequest_get(s, self)->payload, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_consume(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_consume(g, comp, &fusedwasi_p2_http_irequest_get(g, self)->payload, retptr);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_irequest_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_INCOMING_REQUEST);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_incoming_request_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_irequest_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_INCOMING_REQUEST);
 }
 
 typedef struct fusedwasi_p2_http_oresponse {
@@ -1952,8 +1952,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_oresponse_unref(fusedwasi_p2_http_orespon
     free(r);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_oresponse(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_oresponse(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_oresponse_unref((fusedwasi_p2_http_oresponse *)obj);
 }
 
@@ -1972,8 +1972,8 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_outparam_release(fusedwasi_p2_http_outpar
     free(p);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_outparam(fusedwasi_p2_state *s, void *obj) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_outparam(fusedwasi_p2_state *state, void *obj) {
+    (void)state;
     fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)obj;
     if (!p->done) {
         fusedwasi_p2_http_fail_str(&p->error, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "response-outparam dropped without a response");
@@ -1984,78 +1984,78 @@ FUSEDWASI_P2_FN void fusedwasi_p2_http_destroy_outparam(fusedwasi_p2_state *s, v
 }
 
 /* makes the place for an answer; returns it (the caller releases it with fusedwasi_p2_http_outparam_release) and gives the handle for the guest */
-FUSEDWASI_P2_FN fusedwasi_p2_http_outparam *fusedwasi_p2_http_outparam_new(fusedwasi_p2_state *s, uint32_t *handle) {
+FUSEDWASI_P2_FN fusedwasi_p2_http_outparam *fusedwasi_p2_http_outparam_new(fusedwasi_p2_guest *g, uint32_t *handle) {
     fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)calloc(1, sizeof *p);
-    if (!p) s->trap(s, "out of memory");
+    if (!p) g->trap(g, "out of memory");
     p->refs = 2; /* the caller and the handle */
-    *handle = fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM, p, fusedwasi_p2_http_destroy_outparam);
+    *handle = fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM, p, fusedwasi_p2_http_destroy_outparam);
     return p;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_set(fusedwasi_p2_state *s, uint32_t comp, uint32_t param, uint32_t tag, uint32_t a1, uint32_t a2, uint64_t a3,
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_set(fusedwasi_p2_guest *g, uint32_t comp, uint32_t param, uint32_t tag, uint32_t a1, uint32_t a2, uint64_t a3,
                                                       uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7) {
-    fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)fusedwasi_p2_table_get(s, param, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM)->obj;
+    fusedwasi_p2_http_outparam *p = (fusedwasi_p2_http_outparam *)fusedwasi_p2_table_get(g, param, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM)->obj;
     if (tag == 0) {
-        fusedwasi_p2_table_get(s, (uint32_t)a1, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
-        p->response = (fusedwasi_p2_http_oresponse *)fusedwasi_p2_table_take(s, (uint32_t)a1, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
+        fusedwasi_p2_table_get(g, (uint32_t)a1, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
+        p->response = (fusedwasi_p2_http_oresponse *)fusedwasi_p2_table_take(g, (uint32_t)a1, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
     } else if (tag == 1) {
         uint64_t flat[7] = {a1, a2, a3, a4, a5, a6, a7};
-        fusedwasi_p2_http_lift_error(s, comp, flat, &p->error);
+        fusedwasi_p2_http_lift_error(g, comp, flat, &p->error);
         p->failed = 1;
     } else {
-        s->trap(s, "bad result");
+        g->trap(g, "bad result");
     }
     p->done = 1;
-    fusedwasi_p2_table_drop(s, param, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
+    fusedwasi_p2_table_drop(g, param, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_response_outparam_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_http_oresponse *fusedwasi_p2_http_oresponse_get(fusedwasi_p2_state *s, uint32_t handle) {
-    return (fusedwasi_p2_http_oresponse *)fusedwasi_p2_table_get(s, handle, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_http_oresponse *fusedwasi_p2_http_oresponse_get(fusedwasi_p2_guest *g, uint32_t handle) {
+    return (fusedwasi_p2_http_oresponse *)fusedwasi_p2_table_get(g, handle, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE)->obj;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_new(fusedwasi_p2_state *s, uint32_t headers) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_new(fusedwasi_p2_guest *g, uint32_t headers) {
     fusedwasi_p2_http_oresponse *r = (fusedwasi_p2_http_oresponse *)calloc(1, sizeof *r);
-    if (!r) s->trap(s, "out of memory");
+    if (!r) g->trap(g, "out of memory");
     r->refs = 1;
     r->status = 200;
-    r->headers = fusedwasi_p2_http_fields_take(s, headers);
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE, r, fusedwasi_p2_http_destroy_oresponse);
+    r->headers = fusedwasi_p2_http_fields_take(g, headers);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE, r, fusedwasi_p2_http_destroy_oresponse);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_status_code(fusedwasi_p2_state *s, uint32_t self) { return fusedwasi_p2_http_oresponse_get(s, self)->status; }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_status_code(fusedwasi_p2_guest *g, uint32_t self) { return fusedwasi_p2_http_oresponse_get(g, self)->status; }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_set_status_code(fusedwasi_p2_state *s, uint32_t self, uint32_t status) {
-    fusedwasi_p2_http_oresponse *r = fusedwasi_p2_http_oresponse_get(s, self);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_set_status_code(fusedwasi_p2_guest *g, uint32_t self, uint32_t status) {
+    fusedwasi_p2_http_oresponse *r = fusedwasi_p2_http_oresponse_get(g, self);
     if (status < 100 || status > 599) return 1;
     r->status = (uint16_t)status;
     return 0;
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_headers(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_oresponse_get(s, self)->headers;
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_http_types_outgoing_response_headers(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_http_fields *f = fusedwasi_p2_http_oresponse_get(g, self)->headers;
     fusedwasi_p2_http_fields_ref(f);
-    return fusedwasi_p2_http_fields_handle(s, f);
+    return fusedwasi_p2_http_fields_handle(g, f);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_response_body(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_http_oresponse *r = fusedwasi_p2_http_oresponse_get(s, self);
-    fusedwasi_p2_http_new_body(s, comp, r->headers, 1, &r->body, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_response_body(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_http_oresponse *r = fusedwasi_p2_http_oresponse_get(g, self);
+    fusedwasi_p2_http_new_body(g, comp, r->headers, 1, &r->body, retptr);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_response_drop(fusedwasi_p2_state *s, uint32_t handle) {
-    fusedwasi_p2_http_oresponse_get(s, handle);
-    fusedwasi_p2_table_drop(s, handle, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_outgoing_response_drop(fusedwasi_p2_guest *g, uint32_t handle) {
+    fusedwasi_p2_http_oresponse_get(g, handle);
+    fusedwasi_p2_table_drop(g, handle, FUSEDWASI_P2_KIND_OUTGOING_RESPONSE);
 }
 
 /* errors of the io resource: a stream of a body never fails here, so no error carries an http error-code */
-FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_http_error_code(fusedwasi_p2_state *s, uint32_t comp, uint32_t err, uint32_t retptr) {
-    fusedwasi_p2_table_get(s, err, FUSEDWASI_P2_KIND_ERROR);
-    fusedwasi_p2_store_u8(s, comp, retptr, 0);
+FUSEDWASI_P2_FN void fusedwasi_wasi_http_types_http_error_code(fusedwasi_p2_guest *g, uint32_t comp, uint32_t err, uint32_t retptr) {
+    fusedwasi_p2_table_get(g, err, FUSEDWASI_P2_KIND_ERROR);
+    fusedwasi_p2_store_u8(g, comp, retptr, 0);
 }
 
 #endif /* FUSEDWASI_P2_HTTP_H */

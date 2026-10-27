@@ -1,5 +1,5 @@
 /* wasi:sockets (58 imports): network, instance-network, ip-name-lookup, tcp, tcp-create-socket, udp, udp-create-socket (the twin of p2/wasi_p2_sockets.py, where the
- * rules, the states and the layouts are described). BSD sockets, or Winsock on Windows (link ws2_32). Nothing is allowed unless `s->socket_addr_check` / `s->allow_ip_name_lookup` say so.
+ * rules, the states and the layouts are described). BSD sockets, or Winsock on Windows (link ws2_32). Nothing is allowed unless `state->socket_addr_check` / `state->allow_ip_name_lookup` say so.
  * A socket is shared by its streams and its handle (a count of references), so a stream can outlive the handle of the socket; the descriptor is closed with the handle. */
 #ifndef FUSEDWASI_P2_SOCKETS_H
 #define FUSEDWASI_P2_SOCKETS_H
@@ -147,47 +147,47 @@ FUSEDWASI_P2_FN int fusedwasi_p2_addr_unicast(const fusedwasi_p2_addr *a) {
 }
 
 /* the address in memory: the variant of 32 bytes at `ptr` */
-FUSEDWASI_P2_FN void fusedwasi_p2_write_addr(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, const fusedwasi_p2_addr *a) {
-    fusedwasi_p2_store_u8(s, comp, ptr, (uint8_t)a->family);
-    fusedwasi_p2_store_u16(s, comp, ptr + 4, a->port);
+FUSEDWASI_P2_FN void fusedwasi_p2_write_addr(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, const fusedwasi_p2_addr *a) {
+    fusedwasi_p2_store_u8(g, comp, ptr, (uint8_t)a->family);
+    fusedwasi_p2_store_u16(g, comp, ptr + 4, a->port);
     if (a->family == 0) {
-        memcpy(fusedwasi_p2_mem(s, comp, ptr + 6, 4), a->v4, 4);
+        memcpy(fusedwasi_p2_mem(g, comp, ptr + 6, 4), a->v4, 4);
     } else {
-        fusedwasi_p2_store_u32(s, comp, ptr + 8, a->flow);
-        for (int i = 0; i < 8; i++) fusedwasi_p2_store_u16(s, comp, ptr + 12 + 2 * i, a->v6[i]);
-        fusedwasi_p2_store_u32(s, comp, ptr + 28, a->scope);
+        fusedwasi_p2_store_u32(g, comp, ptr + 8, a->flow);
+        for (int i = 0; i < 8; i++) fusedwasi_p2_store_u16(g, comp, ptr + 12 + 2 * i, a->v6[i]);
+        fusedwasi_p2_store_u32(g, comp, ptr + 28, a->scope);
     }
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_addr fusedwasi_p2_read_addr(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr) {
+FUSEDWASI_P2_FN fusedwasi_p2_addr fusedwasi_p2_read_addr(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr) {
     fusedwasi_p2_addr a;
     memset(&a, 0, sizeof a);
-    a.family = fusedwasi_p2_load_u8(s, comp, ptr) == 0 ? 0 : 1;
-    a.port = fusedwasi_p2_load_u16(s, comp, ptr + 4);
+    a.family = fusedwasi_p2_load_u8(g, comp, ptr) == 0 ? 0 : 1;
+    a.port = fusedwasi_p2_load_u16(g, comp, ptr + 4);
     if (a.family == 0) {
-        memcpy(a.v4, fusedwasi_p2_mem(s, comp, ptr + 6, 4), 4);
+        memcpy(a.v4, fusedwasi_p2_mem(g, comp, ptr + 6, 4), 4);
     } else {
-        a.flow = fusedwasi_p2_load_u32(s, comp, ptr + 8);
-        for (int i = 0; i < 8; i++) a.v6[i] = fusedwasi_p2_load_u16(s, comp, ptr + 12 + 2 * i);
-        a.scope = fusedwasi_p2_load_u32(s, comp, ptr + 28);
+        a.flow = fusedwasi_p2_load_u32(g, comp, ptr + 8);
+        for (int i = 0; i < 8; i++) a.v6[i] = fusedwasi_p2_load_u16(g, comp, ptr + 12 + 2 * i);
+        a.scope = fusedwasi_p2_load_u32(g, comp, ptr + 28);
     }
     return a;
 }
 
 /* results */
 
-FUSEDWASI_P2_FN void fusedwasi_p2_net_status(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, int rc) {
+FUSEDWASI_P2_FN void fusedwasi_p2_net_status(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, int rc) {
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 1);
-        fusedwasi_p2_store_u8(s, comp, retptr + 1, (uint8_t)rc);
+        fusedwasi_p2_store_u8(g, comp, retptr, 1);
+        fusedwasi_p2_store_u8(g, comp, retptr + 1, (uint8_t)rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
+    fusedwasi_p2_ok(g, comp, retptr);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_net_fail(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, uint32_t at, int rc) {
-    fusedwasi_p2_store_u8(s, comp, retptr, 1);
-    fusedwasi_p2_store_u8(s, comp, at, (uint8_t)rc);
+FUSEDWASI_P2_FN void fusedwasi_p2_net_fail(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, uint32_t at, int rc) {
+    fusedwasi_p2_store_u8(g, comp, retptr, 1);
+    fusedwasi_p2_store_u8(g, comp, at, (uint8_t)rc);
 }
 
 /* the objects */
@@ -250,73 +250,73 @@ FUSEDWASI_P2_FN int fusedwasi_p2_net_socket(int family, int type, int *rc) {
     return fd;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_tcp_unref(fusedwasi_p2_state *s, fusedwasi_p2_tcp *t) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_tcp_unref(fusedwasi_p2_state *state, fusedwasi_p2_tcp *t) {
+    (void)state;
     if (--t->refs == 0) free(t);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_udp_unref(fusedwasi_p2_state *s, fusedwasi_p2_udp *u) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_udp_unref(fusedwasi_p2_state *state, fusedwasi_p2_udp *u) {
+    (void)state;
     if (--u->refs == 0) free(u);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_tcp_destroy(fusedwasi_p2_state *s, void *obj) { /* the handle of the socket is dropped, or the state is freed */
+FUSEDWASI_P2_FN void fusedwasi_p2_tcp_destroy(fusedwasi_p2_state *state, void *obj) { /* the handle of the socket is dropped, or the state is freed */
     fusedwasi_p2_tcp *t = (fusedwasi_p2_tcp *)obj;
     if (t->fd >= 0) FUSEDWASI_P2_CLOSE(t->fd);
     t->fd = -1;
     t->state = FUSEDWASI_P2_SS_CLOSED;
-    fusedwasi_p2_tcp_unref(s, t);
+    fusedwasi_p2_tcp_unref(state, t);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_udp_destroy(fusedwasi_p2_state *s, void *obj) {
+FUSEDWASI_P2_FN void fusedwasi_p2_udp_destroy(fusedwasi_p2_state *state, void *obj) {
     fusedwasi_p2_udp *u = (fusedwasi_p2_udp *)obj;
     if (u->fd >= 0) FUSEDWASI_P2_CLOSE(u->fd);
     u->fd = -1;
     u->closed = 1;
-    fusedwasi_p2_udp_unref(s, u);
+    fusedwasi_p2_udp_unref(state, u);
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_get(fusedwasi_p2_state *s, uint32_t h) {
-    return (fusedwasi_p2_tcp *)fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_TCP_SOCKET)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_get(fusedwasi_p2_guest *g, uint32_t h) {
+    return (fusedwasi_p2_tcp *)fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_TCP_SOCKET)->obj;
 }
-FUSEDWASI_P2_FN fusedwasi_p2_udp *fusedwasi_p2_udp_get(fusedwasi_p2_state *s, uint32_t h) {
-    return (fusedwasi_p2_udp *)fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_UDP_SOCKET)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_udp *fusedwasi_p2_udp_get(fusedwasi_p2_guest *g, uint32_t h) {
+    return (fusedwasi_p2_udp *)fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_UDP_SOCKET)->obj;
 }
-FUSEDWASI_P2_FN void fusedwasi_p2_network_get(fusedwasi_p2_state *s, uint32_t h) { fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_NETWORK); }
+FUSEDWASI_P2_FN void fusedwasi_p2_network_get(fusedwasi_p2_guest *g, uint32_t h) { fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_NETWORK); }
 
 /* policy and the checks of an address */
-FUSEDWASI_P2_FN int fusedwasi_p2_policy(fusedwasi_p2_state *s, const fusedwasi_p2_addr *a, int use) {
+FUSEDWASI_P2_FN int fusedwasi_p2_policy(fusedwasi_p2_guest *g, const fusedwasi_p2_addr *a, int use) {
     char text[64];
     fusedwasi_p2_addr_text(a, text, sizeof text);
-    return s->socket_addr_check && s->socket_addr_check(s, text, a->port, use) ? FUSEDWASI_P2_NOK : FUSEDWASI_P2_N_ACCESS_DENIED;
+    return g->state->socket_addr_check && g->state->socket_addr_check(g->state, text, a->port, use) ? FUSEDWASI_P2_NOK : FUSEDWASI_P2_N_ACCESS_DENIED;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_check_bind(fusedwasi_p2_state *s, int family, const fusedwasi_p2_addr *a, int use) {
+FUSEDWASI_P2_FN int fusedwasi_p2_check_bind(fusedwasi_p2_guest *g, int family, const fusedwasi_p2_addr *a, int use) {
     if (a->family != family || !fusedwasi_p2_addr_unicast(a)) return FUSEDWASI_P2_N_INVALID_ARGUMENT;
-    return fusedwasi_p2_policy(s, a, use);
+    return fusedwasi_p2_policy(g, a, use);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_check_connect(fusedwasi_p2_state *s, int family, const fusedwasi_p2_addr *a, int use) {
+FUSEDWASI_P2_FN int fusedwasi_p2_check_connect(fusedwasi_p2_guest *g, int family, const fusedwasi_p2_addr *a, int use) {
     if (a->family != family || !fusedwasi_p2_addr_unicast(a) || fusedwasi_p2_addr_unspecified(a) || a->port == 0) return FUSEDWASI_P2_N_INVALID_ARGUMENT;
-    return fusedwasi_p2_policy(s, a, use);
+    return fusedwasi_p2_policy(g, a, use);
 }
 
 /* network */
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_network_network_drop(fusedwasi_p2_state *s, uint32_t h) { fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_NETWORK); }
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_network_network_drop(fusedwasi_p2_guest *g, uint32_t h) { fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_NETWORK); }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_network_network_error_code(fusedwasi_p2_state *s, uint32_t comp, uint32_t err, uint32_t retptr) {
-    fusedwasi_p2_error *e = (fusedwasi_p2_error *)fusedwasi_p2_table_get(s, err, FUSEDWASI_P2_KIND_ERROR)->obj;
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_network_network_error_code(fusedwasi_p2_guest *g, uint32_t comp, uint32_t err, uint32_t retptr) {
+    fusedwasi_p2_error *e = (fusedwasi_p2_error *)fusedwasi_p2_table_get(g, err, FUSEDWASI_P2_KIND_ERROR)->obj;
     if (e->network_code < 0) {
-        fusedwasi_p2_store_u8(s, comp, retptr, 0);
+        fusedwasi_p2_store_u8(g, comp, retptr, 0);
         return;
     }
-    fusedwasi_p2_store_u8(s, comp, retptr, 1);
-    fusedwasi_p2_store_u8(s, comp, retptr + 1, (uint8_t)e->network_code);
+    fusedwasi_p2_store_u8(g, comp, retptr, 1);
+    fusedwasi_p2_store_u8(g, comp, retptr + 1, (uint8_t)e->network_code);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_instance_network_instance_network(fusedwasi_p2_state *s) {
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_NETWORK, NULL, NULL);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_instance_network_instance_network(fusedwasi_p2_guest *g) {
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_NETWORK, NULL, NULL);
 }
 
 /* the streams of a connection */
@@ -326,9 +326,9 @@ typedef struct {
     fusedwasi_p2_tcp *t;
 } fusedwasi_p2_sock_stream;
 
-FUSEDWASI_P2_FN void fusedwasi_p2_sock_stream_destroy(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    fusedwasi_p2_tcp_unref(s, ((fusedwasi_p2_sock_stream *)st)->t);
-    fusedwasi_p2_stream_free(s, st);
+FUSEDWASI_P2_FN void fusedwasi_p2_sock_stream_destroy(fusedwasi_p2_state *state, fusedwasi_p2_stream *st) {
+    fusedwasi_p2_tcp_unref(state, ((fusedwasi_p2_sock_stream *)st)->t);
+    fusedwasi_p2_stream_free(state, st);
 }
 
 FUSEDWASI_P2_FN void fusedwasi_p2_sock_fail(fusedwasi_p2_stream *st, int e, const char *what) {
@@ -337,9 +337,9 @@ FUSEDWASI_P2_FN void fusedwasi_p2_sock_fail(fusedwasi_p2_stream *st, int e, cons
     st->failure_network_code = fusedwasi_p2_net_errno(e);
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, uint8_t *buf, uint64_t len, uint64_t *got) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)s;
+    (void)g;
     *got = 0;
     if (t->recv_shut || t->state == FUSEDWASI_P2_SS_CLOSED) return FUSEDWASI_P2_STREAM_CLOSED;
     if (len == 0) return FUSEDWASI_P2_STREAM_OK;
@@ -354,22 +354,22 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sock_read(fusedwasi_p2_state *s, fusedwasi_p2_s
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_in_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_in_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)s;
+    (void)g;
     return t->recv_shut || t->state == FUSEDWASI_P2_SS_CLOSED || fusedwasi_p2_poll_fd(t->fd, POLLIN);
 }
 
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_sock_check_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, int *status) {
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_sock_check_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, int *status) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)s;
+    (void)g;
     *status = t->send_shut || t->state == FUSEDWASI_P2_SS_CLOSED ? FUSEDWASI_P2_STREAM_CLOSED : FUSEDWASI_P2_STREAM_OK;
     return *status == FUSEDWASI_P2_STREAM_OK ? FUSEDWASI_P2_SOCK_CHUNK : 0;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_state *s, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st, const uint8_t *data, uint64_t len) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)s;
+    (void)g;
     while (len) {
         fusedwasi_p2_ssize n = FUSEDWASI_P2_SEND(t->fd, data, (size_t)len, FUSEDWASI_P2_MSG_NOSIGNAL);
         if (n < 0) {
@@ -388,20 +388,20 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sock_write(fusedwasi_p2_state *s, fusedwasi_p2_
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_flush(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
-    (void)s, (void)st;
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_flush(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
+    (void)g, (void)st;
     return FUSEDWASI_P2_STREAM_OK;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_out_ready(fusedwasi_p2_state *s, fusedwasi_p2_stream *st) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_out_ready(fusedwasi_p2_guest *g, fusedwasi_p2_stream *st) {
     fusedwasi_p2_tcp *t = ((fusedwasi_p2_sock_stream *)st)->t;
-    (void)s;
+    (void)g;
     return t->send_shut || t->state == FUSEDWASI_P2_SS_CLOSED || fusedwasi_p2_poll_fd(t->fd, POLLOUT);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_stream_new(fusedwasi_p2_state *s, fusedwasi_p2_tcp *t, int output) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_stream_new(fusedwasi_p2_guest *g, fusedwasi_p2_tcp *t, int output) {
     fusedwasi_p2_sock_stream *st = (fusedwasi_p2_sock_stream *)calloc(1, sizeof *st);
-    if (!st) s->trap(s, "out of memory");
+    if (!st) g->trap(g, "out of memory");
     st->t = t;
     t->refs++;
     st->base.destroy = fusedwasi_p2_sock_stream_destroy;
@@ -410,51 +410,51 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_stream_new(fusedwasi_p2_state *s, fus
         st->base.write = fusedwasi_p2_sock_write;
         st->base.flush = fusedwasi_p2_sock_flush;
         st->base.ready = fusedwasi_p2_sock_out_ready;
-        return fusedwasi_p2_output_stream_new(s, &st->base);
+        return fusedwasi_p2_output_stream_new(g, &st->base);
     }
     st->base.read = fusedwasi_p2_sock_read;
     st->base.ready = fusedwasi_p2_sock_in_ready;
-    return fusedwasi_p2_input_stream_new(s, &st->base);
+    return fusedwasi_p2_input_stream_new(g, &st->base);
 }
 
 /* tcp-create-socket */
 
-FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_make(fusedwasi_p2_state *s, int family, int fd, int state) {
+FUSEDWASI_P2_FN fusedwasi_p2_tcp *fusedwasi_p2_tcp_make(fusedwasi_p2_guest *g, int family, int fd, int state) {
     fusedwasi_p2_tcp *t = (fusedwasi_p2_tcp *)calloc(1, sizeof *t);
-    if (!t) s->trap(s, "out of memory");
+    if (!t) g->trap(g, "out of memory");
     t->fd = fd, t->family = family, t->state = state, t->backlog = 128, t->refs = 1;
     return t;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_create_socket_create_tcp_socket(fusedwasi_p2_state *s, uint32_t comp, uint32_t address_family, uint32_t retptr) {
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_create_socket_create_tcp_socket(fusedwasi_p2_guest *g, uint32_t comp, uint32_t address_family, uint32_t retptr) {
     int rc = FUSEDWASI_P2_NOK;
     int fd = fusedwasi_p2_net_socket((int)address_family, SOCK_STREAM, &rc);
     if (fd < 0) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4,
-                      fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_TCP_SOCKET, fusedwasi_p2_tcp_make(s, (int)address_family, fd, FUSEDWASI_P2_SS_UNBOUND), fusedwasi_p2_tcp_destroy));
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4,
+                      fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, fusedwasi_p2_tcp_make(g, (int)address_family, fd, FUSEDWASI_P2_SS_UNBOUND), fusedwasi_p2_tcp_destroy));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_drop(fusedwasi_p2_state *s, uint32_t h) {
-    fusedwasi_p2_tcp_get(s, h);
-    fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_TCP_SOCKET);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_drop(fusedwasi_p2_guest *g, uint32_t h) {
+    fusedwasi_p2_tcp_get(g, h);
+    fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_TCP_SOCKET);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_tcp_open(const fusedwasi_p2_tcp *t) { return t->state == FUSEDWASI_P2_SS_CLOSED ? FUSEDWASI_P2_N_INVALID_STATE : FUSEDWASI_P2_NOK; }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_bind(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1, uint32_t p2,
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_bind(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1, uint32_t p2,
                                                        uint32_t p3, uint32_t p4, uint32_t p5, uint32_t p6, uint32_t p7, uint32_t p8, uint32_t p9, uint32_t p10,
                                                        uint32_t p11, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
-    fusedwasi_p2_network_get(s, network);
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
+    fusedwasi_p2_network_get(g, network);
     uint32_t f[11] = {p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11};
     fusedwasi_p2_addr a = fusedwasi_p2_addr_flat(tag, f);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_UNBOUND) rc = FUSEDWASI_P2_N_INVALID_STATE;
-    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_bind(s, t->family, &a, FUSEDWASI_P2_USE_TCP_BIND);
+    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_bind(g, t->family, &a, FUSEDWASI_P2_USE_TCP_BIND);
     if (rc == FUSEDWASI_P2_NOK) {
 #ifdef _WIN32
         /* SO_REUSEADDR on Windows lets another program take the port; the address is made exclusive instead */
@@ -469,27 +469,27 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_bind(fusedwasi_
         if (bind(t->fd, (struct sockaddr *)&ss, n) < 0) rc = fusedwasi_p2_net_errno(fusedwasi_p2_errno());
         else t->state = FUSEDWASI_P2_SS_BIND_IN_PROGRESS;
     }
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_bind(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_bind(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_BIND_IN_PROGRESS) rc = FUSEDWASI_P2_N_NOT_IN_PROGRESS;
     else t->state = FUSEDWASI_P2_SS_BOUND;
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_connect(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1,
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_connect(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1,
                                                           uint32_t p2, uint32_t p3, uint32_t p4, uint32_t p5, uint32_t p6, uint32_t p7, uint32_t p8, uint32_t p9,
                                                           uint32_t p10, uint32_t p11, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
-    fusedwasi_p2_network_get(s, network);
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
+    fusedwasi_p2_network_get(g, network);
     uint32_t f[11] = {p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11};
     fusedwasi_p2_addr a = fusedwasi_p2_addr_flat(tag, f);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_UNBOUND && t->state != FUSEDWASI_P2_SS_BOUND) rc = FUSEDWASI_P2_N_INVALID_STATE;
-    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_connect(s, t->family, &a, FUSEDWASI_P2_USE_TCP_CONNECT);
+    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_connect(g, t->family, &a, FUSEDWASI_P2_USE_TCP_CONNECT);
     if (rc == FUSEDWASI_P2_NOK) {
         struct sockaddr_storage ss;
         socklen_t n = fusedwasi_p2_to_sockaddr(&a, &ss);
@@ -500,11 +500,11 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_connect(fusedwa
             t->state = FUSEDWASI_P2_SS_CONNECT_IN_PROGRESS;
         }
     }
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_connect(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_connect(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_CONNECT_IN_PROGRESS) {
         rc = FUSEDWASI_P2_N_NOT_IN_PROGRESS;
@@ -522,33 +522,33 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_connect(fusedw
         }
     }
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_sock_stream_new(s, t, 0));
-    fusedwasi_p2_store_u32(s, comp, retptr + 8, fusedwasi_p2_sock_stream_new(s, t, 1));
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_sock_stream_new(g, t, 0));
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_sock_stream_new(g, t, 1));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_listen(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_start_listen(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_BOUND) rc = FUSEDWASI_P2_N_INVALID_STATE;
     else if (listen(t->fd, (int)t->backlog) < 0) rc = fusedwasi_p2_net_errno(fusedwasi_p2_errno());
     else t->state = FUSEDWASI_P2_SS_LISTEN_IN_PROGRESS;
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_listen(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_listen(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_LISTEN_IN_PROGRESS) rc = FUSEDWASI_P2_N_NOT_IN_PROGRESS;
     else t->state = FUSEDWASI_P2_SS_LISTENING;
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK, fd = -1;
     if (t->state != FUSEDWASI_P2_SS_LISTENING) {
         rc = FUSEDWASI_P2_N_INVALID_STATE;
@@ -559,24 +559,24 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_s
     }
     if (rc != FUSEDWASI_P2_NOK) {
         if (fd >= 0) FUSEDWASI_P2_CLOSE(fd);
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
     FUSEDWASI_P2_CLOEXEC(fd);
-    fusedwasi_p2_tcp *conn = fusedwasi_p2_tcp_make(s, t->family, fd, FUSEDWASI_P2_SS_CONNECTED);
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_TCP_SOCKET, conn, fusedwasi_p2_tcp_destroy));
-    fusedwasi_p2_store_u32(s, comp, retptr + 8, fusedwasi_p2_sock_stream_new(s, conn, 0));
-    fusedwasi_p2_store_u32(s, comp, retptr + 12, fusedwasi_p2_sock_stream_new(s, conn, 1));
+    fusedwasi_p2_tcp *conn = fusedwasi_p2_tcp_make(g, t->family, fd, FUSEDWASI_P2_SS_CONNECTED);
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, conn, fusedwasi_p2_tcp_destroy));
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, fusedwasi_p2_sock_stream_new(g, conn, 0));
+    fusedwasi_p2_store_u32(g, comp, retptr + 12, fusedwasi_p2_sock_stream_new(g, conn, 1));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_address_result(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, int rc, const fusedwasi_p2_addr *a) {
+FUSEDWASI_P2_FN void fusedwasi_p2_address_result(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, int rc, const fusedwasi_p2_addr *a) {
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_write_addr(s, comp, retptr + 4, a);
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_write_addr(g, comp, retptr + 4, a);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_name_of(int fd, int peer, fusedwasi_p2_addr *out) {
@@ -587,29 +587,29 @@ FUSEDWASI_P2_FN int fusedwasi_p2_name_of(int fd, int peer, fusedwasi_p2_addr *ou
     return FUSEDWASI_P2_NOK;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_local_address(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_local_address(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     fusedwasi_p2_addr a;
     memset(&a, 0, sizeof a);
     int rc = t->state == FUSEDWASI_P2_SS_UNBOUND || t->state == FUSEDWASI_P2_SS_BIND_IN_PROGRESS || t->state == FUSEDWASI_P2_SS_CLOSED ? FUSEDWASI_P2_N_INVALID_STATE
                                                                                                                          : fusedwasi_p2_name_of(t->fd, 0, &a);
-    fusedwasi_p2_address_result(s, comp, retptr, rc, &a);
+    fusedwasi_p2_address_result(g, comp, retptr, rc, &a);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_remote_address(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_remote_address(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     fusedwasi_p2_addr a;
     memset(&a, 0, sizeof a);
     int rc = t->state != FUSEDWASI_P2_SS_CONNECTED ? FUSEDWASI_P2_N_INVALID_STATE : fusedwasi_p2_name_of(t->fd, 1, &a);
-    fusedwasi_p2_address_result(s, comp, retptr, rc, &a);
+    fusedwasi_p2_address_result(g, comp, retptr, rc, &a);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_is_listening(fusedwasi_p2_state *s, uint32_t self) { return fusedwasi_p2_tcp_get(s, self)->state == FUSEDWASI_P2_SS_LISTENING; }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_is_listening(fusedwasi_p2_guest *g, uint32_t self) { return fusedwasi_p2_tcp_get(g, self)->state == FUSEDWASI_P2_SS_LISTENING; }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_address_family(fusedwasi_p2_state *s, uint32_t self) { return (uint32_t)fusedwasi_p2_tcp_get(s, self)->family; }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_address_family(fusedwasi_p2_guest *g, uint32_t self) { return (uint32_t)fusedwasi_p2_tcp_get(g, self)->family; }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK && value == 0) rc = FUSEDWASI_P2_N_INVALID_ARGUMENT;
     if (rc == FUSEDWASI_P2_NOK && (t->state == FUSEDWASI_P2_SS_CONNECT_IN_PROGRESS || t->state == FUSEDWASI_P2_SS_CONNECTED)) rc = FUSEDWASI_P2_N_INVALID_STATE;
@@ -617,7 +617,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_listen_backlog_si
         t->backlog = value < FUSEDWASI_P2_BACKLOG_MAX ? (uint32_t)value : FUSEDWASI_P2_BACKLOG_MAX;
         if (t->state == FUSEDWASI_P2_SS_LISTENING && listen(t->fd, (int)t->backlog) < 0) rc = fusedwasi_p2_net_errno(fusedwasi_p2_errno());
     }
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
 /* options: numbers from getsockopt / to setsockopt; the names that a system lacks are `not-supported` */
@@ -643,47 +643,47 @@ FUSEDWASI_P2_FN int fusedwasi_p2_seconds(uint64_t ns) {
 }
 
 /* result<number>: the value stored at `at` with `size` bytes (1, 4 or 8) */
-FUSEDWASI_P2_FN void fusedwasi_p2_number_result(fusedwasi_p2_state *s, uint32_t comp, uint32_t retptr, uint32_t at, int size, int rc, uint64_t value) {
+FUSEDWASI_P2_FN void fusedwasi_p2_number_result(fusedwasi_p2_guest *g, uint32_t comp, uint32_t retptr, uint32_t at, int size, int rc, uint64_t value) {
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + at, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + at, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    if (size == 1) fusedwasi_p2_store_u8(s, comp, retptr + at, (uint8_t)value);
-    else if (size == 4) fusedwasi_p2_store_u32(s, comp, retptr + at, (uint32_t)value);
-    else fusedwasi_p2_store_u64(s, comp, retptr + at, value);
+    fusedwasi_p2_ok(g, comp, retptr);
+    if (size == 1) fusedwasi_p2_store_u8(g, comp, retptr + at, (uint8_t)value);
+    else if (size == 4) fusedwasi_p2_store_u32(g, comp, retptr + at, (uint32_t)value);
+    else fusedwasi_p2_store_u64(g, comp, retptr + at, value);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_enabled(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_enabled(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int v = 0, rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(t->fd, SOL_SOCKET, SO_KEEPALIVE, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 1, 1, rc, v != 0);
+    fusedwasi_p2_number_result(g, comp, retptr, 1, 1, rc, v != 0);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_enabled(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_enabled(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_setopt(t->fd, SOL_SOCKET, SO_KEEPALIVE, value != 0);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
 /* `name` < 0: the system has no such option */
-FUSEDWASI_P2_FN void fusedwasi_p2_keepalive_get(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t factor, int size) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_p2_keepalive_get(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t factor, int size) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int v = 0, rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK && name < 0) rc = FUSEDWASI_P2_N_NOT_SUPPORTED;
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(t->fd, IPPROTO_TCP, name, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, size == 8 ? 8 : 4, size, rc, (uint64_t)v * factor);
+    fusedwasi_p2_number_result(g, comp, retptr, size == 8 ? 8 : 4, size, rc, (uint64_t)v * factor);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_keepalive_set(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t value, int seconds) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_p2_keepalive_set(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t value, int seconds) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK && value == 0) rc = FUSEDWASI_P2_N_INVALID_ARGUMENT;
     if (rc == FUSEDWASI_P2_NOK && name < 0) rc = FUSEDWASI_P2_N_NOT_SUPPORTED;
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_setopt(t->fd, IPPROTO_TCP, name, seconds ? fusedwasi_p2_seconds(value) : (int)(value < 2147483647ULL ? value : 2147483647ULL));
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
 #ifdef FUSEDWASI_P2_KEEPIDLE
@@ -702,23 +702,23 @@ FUSEDWASI_P2_FN void fusedwasi_p2_keepalive_set(fusedwasi_p2_state *s, uint32_t 
 #define FUSEDWASI_P2_OPT_CNT (-1)
 #endif
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_idle_time(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_keepalive_get(s, comp, self, retptr, FUSEDWASI_P2_OPT_IDLE, 1000000000ULL, 8);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_idle_time(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_keepalive_get(g, comp, self, retptr, FUSEDWASI_P2_OPT_IDLE, 1000000000ULL, 8);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_idle_time(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_keepalive_set(s, comp, self, retptr, FUSEDWASI_P2_OPT_IDLE, value, 1);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_idle_time(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_keepalive_set(g, comp, self, retptr, FUSEDWASI_P2_OPT_IDLE, value, 1);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_interval(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_keepalive_get(s, comp, self, retptr, FUSEDWASI_P2_OPT_INTVL, 1000000000ULL, 8);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_interval(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_keepalive_get(g, comp, self, retptr, FUSEDWASI_P2_OPT_INTVL, 1000000000ULL, 8);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_interval(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_keepalive_set(s, comp, self, retptr, FUSEDWASI_P2_OPT_INTVL, value, 1);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_interval(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_keepalive_set(g, comp, self, retptr, FUSEDWASI_P2_OPT_INTVL, value, 1);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_count(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_keepalive_get(s, comp, self, retptr, FUSEDWASI_P2_OPT_CNT, 1, 4);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_count(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_keepalive_get(g, comp, self, retptr, FUSEDWASI_P2_OPT_CNT, 1, 4);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_count(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
-    fusedwasi_p2_keepalive_set(s, comp, self, retptr, FUSEDWASI_P2_OPT_CNT, value, 0);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_count(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
+    fusedwasi_p2_keepalive_set(g, comp, self, retptr, FUSEDWASI_P2_OPT_CNT, value, 0);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_hop_get(int fd, int family, int *v) {
@@ -737,41 +737,41 @@ FUSEDWASI_P2_FN int fusedwasi_p2_buffer_set(int fd, int name, uint64_t value) {
     return fusedwasi_p2_setopt(fd, SOL_SOCKET, name, (int)(value < 2147483647ULL ? value : 2147483647ULL));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_hop_limit(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_hop_limit(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int v = 0, rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_hop_get(t->fd, t->family, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 1, 1, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 1, 1, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_hop_limit(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_hop_limit(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_hop_set(t->fd, t->family, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_receive_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_receive_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int v = 0, rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(t->fd, SOL_SOCKET, SO_RCVBUF, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 8, 8, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 8, 8, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_receive_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_receive_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_buffer_set(t->fd, SO_RCVBUF, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_send_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_send_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int v = 0, rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(t->fd, SOL_SOCKET, SO_SNDBUF, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 8, 8, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 8, 8, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_send_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_send_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = fusedwasi_p2_tcp_open(t);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_buffer_set(t->fd, SO_SNDBUF, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
 /* a pollable that asks a socket */
@@ -781,9 +781,9 @@ typedef struct {
     fusedwasi_p2_udp *u;
 } fusedwasi_p2_sock_poll;
 
-FUSEDWASI_P2_FN int fusedwasi_p2_sock_poll_ready(fusedwasi_p2_state *s, fusedwasi_p2_pollable *p) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sock_poll_ready(fusedwasi_p2_guest *g, fusedwasi_p2_pollable *p) {
     fusedwasi_p2_sock_poll *sp = (fusedwasi_p2_sock_poll *)p->ctx;
-    (void)s;
+    (void)g;
     switch (sp->kind) {
     case 0:
         if (sp->t->state == FUSEDWASI_P2_SS_CONNECT_IN_PROGRESS) return fusedwasi_p2_poll_fd(sp->t->fd, POLLOUT);
@@ -797,33 +797,33 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sock_poll_ready(fusedwasi_p2_state *s, fusedwas
 }
 
 /* the pollable owns a reference to the socket (so that it can ask it), released when the pollable is dropped */
-FUSEDWASI_P2_FN void fusedwasi_p2_sock_poll_destroy(fusedwasi_p2_state *s, void *obj) {
+FUSEDWASI_P2_FN void fusedwasi_p2_sock_poll_destroy(fusedwasi_p2_state *state, void *obj) {
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)obj;
     fusedwasi_p2_sock_poll *sp = (fusedwasi_p2_sock_poll *)p->ctx;
-    if (sp->t) fusedwasi_p2_tcp_unref(s, sp->t);
-    if (sp->u) fusedwasi_p2_udp_unref(s, sp->u);
+    if (sp->t) fusedwasi_p2_tcp_unref(state, sp->t);
+    if (sp->u) fusedwasi_p2_udp_unref(state, sp->u);
     free(sp);
     free(p);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_pollable(fusedwasi_p2_state *s, int kind, fusedwasi_p2_tcp *t, fusedwasi_p2_udp *u) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_sock_pollable(fusedwasi_p2_guest *g, int kind, fusedwasi_p2_tcp *t, fusedwasi_p2_udp *u) {
     fusedwasi_p2_pollable *p = (fusedwasi_p2_pollable *)calloc(1, sizeof *p);
     fusedwasi_p2_sock_poll *sp = (fusedwasi_p2_sock_poll *)calloc(1, sizeof *sp);
-    if (!p || !sp) s->trap(s, "out of memory");
+    if (!p || !sp) g->trap(g, "out of memory");
     sp->kind = kind, sp->t = t, sp->u = u;
     if (t) t->refs++;
     if (u) u->refs++;
     p->ready = fusedwasi_p2_sock_poll_ready;
     p->ctx = sp;
-    return fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_sock_poll_destroy);
+    return fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_POLLABLE, p, fusedwasi_p2_sock_poll_destroy);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(s, 0, fusedwasi_p2_tcp_get(s, self), NULL);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_tcp_tcp_socket_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    return fusedwasi_p2_sock_pollable(g, 0, fusedwasi_p2_tcp_get(g, self), NULL);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_shutdown(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t shutdown_type, uint32_t retptr) {
-    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_shutdown(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t shutdown_type, uint32_t retptr) {
+    fusedwasi_p2_tcp *t = fusedwasi_p2_tcp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (t->state != FUSEDWASI_P2_SS_CONNECTED) {
         rc = FUSEDWASI_P2_N_INVALID_STATE;
@@ -835,16 +835,16 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_shutdown(fusedwasi_p2
             if (how != FUSEDWASI_P2_SHUT_RD) t->send_shut = 1;
         }
     }
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
 /* udp-create-socket and udp */
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_create_socket_create_udp_socket(fusedwasi_p2_state *s, uint32_t comp, uint32_t address_family, uint32_t retptr) {
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_create_socket_create_udp_socket(fusedwasi_p2_guest *g, uint32_t comp, uint32_t address_family, uint32_t retptr) {
     int rc = FUSEDWASI_P2_NOK;
     int fd = fusedwasi_p2_net_socket((int)address_family, SOCK_DGRAM, &rc);
     if (fd < 0) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
 #ifdef _WIN32
@@ -858,154 +858,154 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_create_socket_create_udp_socket(
     }
 #endif
     fusedwasi_p2_udp *u = (fusedwasi_p2_udp *)calloc(1, sizeof *u);
-    if (!u) s->trap(s, "out of memory");
+    if (!u) g->trap(g, "out of memory");
     u->fd = fd, u->family = (int)address_family, u->state = FUSEDWASI_P2_SS_UNBOUND, u->refs = 1;
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_UDP_SOCKET, u, fusedwasi_p2_udp_destroy));
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_UDP_SOCKET, u, fusedwasi_p2_udp_destroy));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_drop(fusedwasi_p2_state *s, uint32_t h) {
-    fusedwasi_p2_udp_get(s, h);
-    fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_UDP_SOCKET);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_drop(fusedwasi_p2_guest *g, uint32_t h) {
+    fusedwasi_p2_udp_get(g, h);
+    fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_UDP_SOCKET);
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2_udp_open(const fusedwasi_p2_udp *u) { return u->closed ? FUSEDWASI_P2_N_INVALID_STATE : FUSEDWASI_P2_NOK; }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_start_bind(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1, uint32_t p2,
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_start_bind(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t network, uint32_t tag, uint32_t p1, uint32_t p2,
                                                        uint32_t p3, uint32_t p4, uint32_t p5, uint32_t p6, uint32_t p7, uint32_t p8, uint32_t p9, uint32_t p10,
                                                        uint32_t p11, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
-    fusedwasi_p2_network_get(s, network);
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
+    fusedwasi_p2_network_get(g, network);
     uint32_t f[11] = {p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11};
     fusedwasi_p2_addr a = fusedwasi_p2_addr_flat(tag, f);
     int rc = FUSEDWASI_P2_NOK;
     if (u->state != FUSEDWASI_P2_SS_UNBOUND) rc = FUSEDWASI_P2_N_INVALID_STATE;
-    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_bind(s, u->family, &a, FUSEDWASI_P2_USE_UDP_BIND);
+    if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_check_bind(g, u->family, &a, FUSEDWASI_P2_USE_UDP_BIND);
     if (rc == FUSEDWASI_P2_NOK) {
         struct sockaddr_storage ss;
         socklen_t n = fusedwasi_p2_to_sockaddr(&a, &ss);
         if (bind(u->fd, (struct sockaddr *)&ss, n) < 0) rc = fusedwasi_p2_net_errno(fusedwasi_p2_errno());
         else u->state = FUSEDWASI_P2_SS_BIND_IN_PROGRESS;
     }
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_finish_bind(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_finish_bind(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int rc = FUSEDWASI_P2_NOK;
     if (u->state != FUSEDWASI_P2_SS_BIND_IN_PROGRESS) rc = FUSEDWASI_P2_N_NOT_IN_PROGRESS;
     else u->state = FUSEDWASI_P2_SS_BOUND;
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_dgram_destroy(fusedwasi_p2_state *s, void *obj) { /* the handle is dropped, or the state is freed */
+FUSEDWASI_P2_FN void fusedwasi_p2_dgram_destroy(fusedwasi_p2_state *state, void *obj) { /* the handle is dropped, or the state is freed */
     fusedwasi_p2_dgram_stream *d = (fusedwasi_p2_dgram_stream *)obj;
-    fusedwasi_p2_udp_unref(s, d->u);
+    fusedwasi_p2_udp_unref(state, d->u);
     free(d);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_dgram_stream_new(fusedwasi_p2_state *s, fusedwasi_p2_udp *u, uint32_t kind) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_dgram_stream_new(fusedwasi_p2_guest *g, fusedwasi_p2_udp *u, uint32_t kind) {
     fusedwasi_p2_dgram_stream *d = (fusedwasi_p2_dgram_stream *)calloc(1, sizeof *d);
-    if (!d) s->trap(s, "out of memory");
+    if (!d) g->trap(g, "out of memory");
     d->u = u;
     u->refs++;
-    return fusedwasi_p2_table_new(s, kind, d, fusedwasi_p2_dgram_destroy);
+    return fusedwasi_p2_table_new(g, kind, d, fusedwasi_p2_dgram_destroy);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_stream(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t remote_tag, uint32_t tag, uint32_t p1, uint32_t p2,
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_stream(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t remote_tag, uint32_t tag, uint32_t p1, uint32_t p2,
                                                    uint32_t p3, uint32_t p4, uint32_t p5, uint32_t p6, uint32_t p7, uint32_t p8, uint32_t p9, uint32_t p10,
                                                    uint32_t p11, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     uint32_t f[11] = {p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11};
     fusedwasi_p2_addr a = fusedwasi_p2_addr_flat(tag, f);
     int rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK && u->state != FUSEDWASI_P2_SS_BOUND) rc = FUSEDWASI_P2_N_INVALID_STATE;
-    if (rc == FUSEDWASI_P2_NOK && remote_tag) rc = fusedwasi_p2_check_connect(s, u->family, &a, FUSEDWASI_P2_USE_UDP_CONNECT);
+    if (rc == FUSEDWASI_P2_NOK && remote_tag) rc = fusedwasi_p2_check_connect(g, u->family, &a, FUSEDWASI_P2_USE_UDP_CONNECT);
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
     u->has_remote = remote_tag != 0;
     if (u->has_remote) u->remote = a;
-    fusedwasi_p2_ok(s, comp, retptr);
+    fusedwasi_p2_ok(g, comp, retptr);
     /* the handles of the two streams; their kinds free them with a reference to the socket */
-    uint32_t in = fusedwasi_p2_dgram_stream_new(s, u, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM);
-    uint32_t out = fusedwasi_p2_dgram_stream_new(s, u, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, in);
-    fusedwasi_p2_store_u32(s, comp, retptr + 8, out);
+    uint32_t in = fusedwasi_p2_dgram_stream_new(g, u, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM);
+    uint32_t out = fusedwasi_p2_dgram_stream_new(g, u, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, in);
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, out);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_local_address(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_local_address(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     fusedwasi_p2_addr a;
     memset(&a, 0, sizeof a);
     int rc = u->state != FUSEDWASI_P2_SS_BOUND || u->closed ? FUSEDWASI_P2_N_INVALID_STATE : fusedwasi_p2_name_of(u->fd, 0, &a);
-    fusedwasi_p2_address_result(s, comp, retptr, rc, &a);
+    fusedwasi_p2_address_result(g, comp, retptr, rc, &a);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_remote_address(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_remote_address(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int rc = !u->has_remote || u->closed ? FUSEDWASI_P2_N_INVALID_STATE : FUSEDWASI_P2_NOK;
-    fusedwasi_p2_address_result(s, comp, retptr, rc, &u->remote);
+    fusedwasi_p2_address_result(g, comp, retptr, rc, &u->remote);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_udp_socket_address_family(fusedwasi_p2_state *s, uint32_t self) { return (uint32_t)fusedwasi_p2_udp_get(s, self)->family; }
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_udp_socket_address_family(fusedwasi_p2_guest *g, uint32_t self) { return (uint32_t)fusedwasi_p2_udp_get(g, self)->family; }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_unicast_hop_limit(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_unicast_hop_limit(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int v = 0, rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_hop_get(u->fd, u->family, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 1, 1, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 1, 1, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_unicast_hop_limit(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_unicast_hop_limit(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_hop_set(u->fd, u->family, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_receive_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_receive_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int v = 0, rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(u->fd, SOL_SOCKET, SO_RCVBUF, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 8, 8, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 8, 8, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_receive_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_receive_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_buffer_set(u->fd, SO_RCVBUF, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_send_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_send_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int v = 0, rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_getopt(u->fd, SOL_SOCKET, SO_SNDBUF, &v);
-    fusedwasi_p2_number_result(s, comp, retptr, 8, 8, rc, (uint64_t)v);
+    fusedwasi_p2_number_result(g, comp, retptr, 8, 8, rc, (uint64_t)v);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_send_buffer_size(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_udp_socket_set_send_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_udp_get(g, self);
     int rc = fusedwasi_p2_udp_open(u);
     if (rc == FUSEDWASI_P2_NOK) rc = fusedwasi_p2_buffer_set(u->fd, SO_SNDBUF, value);
-    fusedwasi_p2_net_status(s, comp, retptr, rc);
+    fusedwasi_p2_net_status(g, comp, retptr, rc);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_udp_socket_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(s, 3, NULL, fusedwasi_p2_udp_get(s, self));
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_udp_socket_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    return fusedwasi_p2_sock_pollable(g, 3, NULL, fusedwasi_p2_udp_get(g, self));
 }
 
-FUSEDWASI_P2_FN fusedwasi_p2_dgram_stream *fusedwasi_p2_incoming_get(fusedwasi_p2_state *s, uint32_t h) {
-    return (fusedwasi_p2_dgram_stream *)fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_dgram_stream *fusedwasi_p2_incoming_get(fusedwasi_p2_guest *g, uint32_t h) {
+    return (fusedwasi_p2_dgram_stream *)fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM)->obj;
 }
-FUSEDWASI_P2_FN fusedwasi_p2_dgram_stream *fusedwasi_p2_outgoing_get(fusedwasi_p2_state *s, uint32_t h) {
-    return (fusedwasi_p2_dgram_stream *)fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM)->obj;
+FUSEDWASI_P2_FN fusedwasi_p2_dgram_stream *fusedwasi_p2_outgoing_get(fusedwasi_p2_guest *g, uint32_t h) {
+    return (fusedwasi_p2_dgram_stream *)fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM)->obj;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_drop(fusedwasi_p2_state *s, uint32_t h) {
-    fusedwasi_p2_incoming_get(s, h);
-    fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_drop(fusedwasi_p2_guest *g, uint32_t h) {
+    fusedwasi_p2_incoming_get(g, h);
+    fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_INCOMING_DATAGRAM_STREAM);
 }
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_drop(fusedwasi_p2_state *s, uint32_t h) {
-    fusedwasi_p2_outgoing_get(s, h);
-    fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_drop(fusedwasi_p2_guest *g, uint32_t h) {
+    fusedwasi_p2_outgoing_get(g, h);
+    fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM);
 }
 
 typedef struct {
@@ -1014,13 +1014,13 @@ typedef struct {
     fusedwasi_p2_addr src;
 } fusedwasi_p2_received;
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint64_t max_results, uint32_t retptr) {
-    fusedwasi_p2_udp *u = fusedwasi_p2_incoming_get(s, self)->u;
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t max_results, uint32_t retptr) {
+    fusedwasi_p2_udp *u = fusedwasi_p2_incoming_get(g, self)->u;
     int rc = fusedwasi_p2_udp_open(u);
     uint32_t count = 0, capacity = 0;
     fusedwasi_p2_received *got = NULL;
     uint8_t *buf = (uint8_t *)malloc(65536); /* scratch only: filled and copied out before the call returns */
-    if (!buf) s->trap(s, "out of memory");
+    if (!buf) g->trap(g, "out of memory");
     while (rc == FUSEDWASI_P2_NOK && count < max_results) {
         struct sockaddr_storage ss;
         socklen_t n = sizeof ss;
@@ -1037,10 +1037,10 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive
         if (count == capacity) {
             capacity = capacity ? capacity * 2 : 4;
             got = (fusedwasi_p2_received *)realloc(got, capacity * sizeof *got);
-            if (!got) s->trap(s, "out of memory");
+            if (!got) g->trap(g, "out of memory");
         }
         got[count].data = (uint8_t *)malloc(r ? (size_t)r : 1);
-        if (!got[count].data) s->trap(s, "out of memory");
+        if (!got[count].data) g->trap(g, "out of memory");
         memcpy(got[count].data, buf, (size_t)r);
         got[count].len = (uint32_t)r;
         got[count].src = src;
@@ -1050,57 +1050,57 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive
     if (rc != FUSEDWASI_P2_NOK) {
         for (uint32_t i = 0; i < count; i++) free(got[i].data);
         free(got);
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
-    uint32_t ptr = fusedwasi_p2_alloc(s, comp, 4, 40 * count);
+    uint32_t ptr = fusedwasi_p2_alloc(g, comp, 4, 40 * count);
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t dptr = fusedwasi_p2_alloc(s, comp, 1, got[i].len);
-        if (got[i].len) memcpy(fusedwasi_p2_mem(s, comp, dptr, got[i].len), got[i].data, got[i].len);
+        uint32_t dptr = fusedwasi_p2_alloc(g, comp, 1, got[i].len);
+        if (got[i].len) memcpy(fusedwasi_p2_mem(g, comp, dptr, got[i].len), got[i].data, got[i].len);
         free(got[i].data);
-        fusedwasi_p2_store_u32(s, comp, ptr + 40 * i, dptr);
-        fusedwasi_p2_store_u32(s, comp, ptr + 40 * i + 4, got[i].len);
-        fusedwasi_p2_write_addr(s, comp, ptr + 40 * i + 8, &got[i].src);
+        fusedwasi_p2_store_u32(g, comp, ptr + 40 * i, dptr);
+        fusedwasi_p2_store_u32(g, comp, ptr + 40 * i + 4, got[i].len);
+        fusedwasi_p2_write_addr(g, comp, ptr + 40 * i + 8, &got[i].src);
     }
     free(got);
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, ptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 8, count);
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, ptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 8, count);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_incoming_datagram_stream_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(s, 1, NULL, fusedwasi_p2_incoming_get(s, self)->u);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_incoming_datagram_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    return fusedwasi_p2_sock_pollable(g, 1, NULL, fusedwasi_p2_incoming_get(g, self)->u);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_dgram_stream *o = fusedwasi_p2_outgoing_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_dgram_stream *o = fusedwasi_p2_outgoing_get(g, self);
     int rc = fusedwasi_p2_udp_open(o->u);
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 8, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 8, rc);
         return;
     }
     o->permit = FUSEDWASI_P2_CHECK_SEND_PERMIT;
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u64(s, comp, retptr + 8, FUSEDWASI_P2_CHECK_SEND_PERMIT);
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u64(g, comp, retptr + 8, FUSEDWASI_P2_CHECK_SEND_PERMIT);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length, uint32_t retptr) {
-    fusedwasi_p2_dgram_stream *o = fusedwasi_p2_outgoing_get(s, self);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t ptr, uint32_t length, uint32_t retptr) {
+    fusedwasi_p2_dgram_stream *o = fusedwasi_p2_outgoing_get(g, self);
     fusedwasi_p2_udp *u = o->u;
-    if (length > o->permit) s->trap(s, "send of more datagrams than check-send permitted");
+    if (length > o->permit) g->trap(g, "send of more datagrams than check-send permitted");
     o->permit = 0;
     uint64_t sent = 0;
     int rc = fusedwasi_p2_udp_open(u);
     for (uint32_t i = 0; rc == FUSEDWASI_P2_NOK && i < length; i++) {
         uint32_t base = ptr + 44 * i;
-        uint32_t dptr = fusedwasi_p2_load_u32(s, comp, base), dlen = fusedwasi_p2_load_u32(s, comp, base + 4);
-        const uint8_t *data = fusedwasi_p2_mem(s, comp, dptr, dlen);
-        int has_remote = fusedwasi_p2_load_u8(s, comp, base + 8) != 0;
+        uint32_t dptr = fusedwasi_p2_load_u32(g, comp, base), dlen = fusedwasi_p2_load_u32(g, comp, base + 4);
+        const uint8_t *data = fusedwasi_p2_mem(g, comp, dptr, dlen);
+        int has_remote = fusedwasi_p2_load_u8(g, comp, base + 8) != 0;
         fusedwasi_p2_addr target;
         int e = FUSEDWASI_P2_NOK, would_block = 0;
         if (u->has_remote) {
             if (has_remote) { /* the stream has its peer: the datagram names none, or exactly that one */
-                fusedwasi_p2_addr named = fusedwasi_p2_read_addr(s, comp, base + 12);
+                fusedwasi_p2_addr named = fusedwasi_p2_read_addr(g, comp, base + 12);
                 if (named.family != u->remote.family || named.port != u->remote.port || memcmp(named.v4, u->remote.v4, 4) || memcmp(named.v6, u->remote.v6, 16) ||
                     named.flow != u->remote.flow || named.scope != u->remote.scope)
                     e = FUSEDWASI_P2_N_INVALID_ARGUMENT;
@@ -1110,8 +1110,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(fu
             e = FUSEDWASI_P2_N_INVALID_ARGUMENT;
             memset(&target, 0, sizeof target);
         } else {
-            target = fusedwasi_p2_read_addr(s, comp, base + 12);
-            e = fusedwasi_p2_check_connect(s, u->family, &target, FUSEDWASI_P2_USE_UDP_OUTGOING);
+            target = fusedwasi_p2_read_addr(g, comp, base + 12);
+            e = fusedwasi_p2_check_connect(g, u->family, &target, FUSEDWASI_P2_USE_UDP_OUTGOING);
         }
         if (e == FUSEDWASI_P2_NOK) {
             struct sockaddr_storage ss;
@@ -1129,22 +1129,22 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(fu
         sent++;
     }
     if (rc != FUSEDWASI_P2_NOK) {
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 8, rc);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 8, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u64(s, comp, retptr + 8, sent);
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u64(g, comp, retptr + 8, sent);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    return fusedwasi_p2_sock_pollable(s, 2, NULL, fusedwasi_p2_outgoing_get(s, self)->u);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    return fusedwasi_p2_sock_pollable(g, 2, NULL, fusedwasi_p2_outgoing_get(g, self)->u);
 }
 
 /* ip-name-lookup */
 
-FUSEDWASI_P2_FN void fusedwasi_p2_resolved_destroy(fusedwasi_p2_state *s, void *obj) {
+FUSEDWASI_P2_FN void fusedwasi_p2_resolved_destroy(fusedwasi_p2_state *state, void *obj) {
     fusedwasi_p2_resolved *r = (fusedwasi_p2_resolved *)obj;
-    (void)s;
+    (void)state;
     free(r->list);
     free(r);
 }
@@ -1159,17 +1159,17 @@ FUSEDWASI_P2_FN int fusedwasi_p2_same_addr(const fusedwasi_p2_addr *a, const fus
     return a->family == b->family && !memcmp(a->v4, b->v4, 4) && !memcmp(a->v6, b->v6, 16);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fusedwasi_p2_state *s, uint32_t comp, uint32_t network, uint32_t ptr, uint32_t length,
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fusedwasi_p2_guest *g, uint32_t comp, uint32_t network, uint32_t ptr, uint32_t length,
                                                               uint32_t retptr) {
-    fusedwasi_p2_network_get(s, network);
-    const uint8_t *raw = fusedwasi_p2_mem(s, comp, ptr, length);
+    fusedwasi_p2_network_get(g, network);
+    const uint8_t *raw = fusedwasi_p2_mem(g, comp, ptr, length);
     int rc = FUSEDWASI_P2_NOK;
     fusedwasi_p2_resolved *r = NULL;
     char *name = (char *)malloc((size_t)length + 1);
-    if (!name) s->trap(s, "out of memory");
+    if (!name) g->trap(g, "out of memory");
     memcpy(name, raw, length);
     name[length] = '\0';
-    if (!s->allow_ip_name_lookup) {
+    if (!g->state->allow_ip_name_lookup) {
         rc = FUSEDWASI_P2_N_ACCESS_DENIED;
     } else if (length == 0 || memchr(raw, 0, length) || strchr(name, '%')) {
         rc = FUSEDWASI_P2_N_INVALID_ARGUMENT;
@@ -1179,11 +1179,11 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fus
     }
     if (rc == FUSEDWASI_P2_NOK) {
         r = (fusedwasi_p2_resolved *)calloc(1, sizeof *r);
-        if (!r) s->trap(s, "out of memory");
+        if (!r) g->trap(g, "out of memory");
         struct in_addr a4;
         struct in6_addr a6;
         r->list = (fusedwasi_p2_addr *)calloc(1, sizeof *r->list);
-        if (!r->list) s->trap(s, "out of memory");
+        if (!r->list) g->trap(g, "out of memory");
         if (inet_pton(AF_INET, name, &a4) == 1) {
             r->list[0].family = 0;
             memcpy(r->list[0].v4, &a4, 4);
@@ -1200,9 +1200,9 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fus
             hints.ai_family = AF_UNSPEC;
             hints.ai_socktype = SOCK_STREAM;
             fusedwasi_p2_net_start();
-            int g = getaddrinfo(name, NULL, &hints, &res);
-            if (g != 0) {
-                rc = g == EAI_AGAIN ? FUSEDWASI_P2_N_TEMPORARY_RESOLVER_FAILURE : g == EAI_FAIL ? FUSEDWASI_P2_N_PERMANENT_RESOLVER_FAILURE : FUSEDWASI_P2_N_NAME_UNRESOLVABLE;
+            int gai = getaddrinfo(name, NULL, &hints, &res);
+            if (gai != 0) {
+                rc = gai == EAI_AGAIN ? FUSEDWASI_P2_N_TEMPORARY_RESOLVER_FAILURE : gai == EAI_FAIL ? FUSEDWASI_P2_N_PERMANENT_RESOLVER_FAILURE : FUSEDWASI_P2_N_NAME_UNRESOLVABLE;
             } else {
                 uint32_t cap = 1;
                 for (p = res; p; p = p->ai_next) {
@@ -1215,7 +1215,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fus
                     if (r->count == cap) {
                         cap *= 2;
                         r->list = (fusedwasi_p2_addr *)realloc(r->list, cap * sizeof *r->list);
-                        if (!r->list) s->trap(s, "out of memory");
+                        if (!r->list) g->trap(g, "out of memory");
                     }
                     r->list[r->count++] = a;
                 }
@@ -1225,37 +1225,37 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_addresses(fus
     }
     free(name);
     if (rc != FUSEDWASI_P2_NOK) {
-        if (r) fusedwasi_p2_resolved_destroy(s, r);
-        fusedwasi_p2_net_fail(s, comp, retptr, retptr + 4, rc);
+        if (r) fusedwasi_p2_resolved_destroy(g->state, r);
+        fusedwasi_p2_net_fail(g, comp, retptr, retptr + 4, rc);
         return;
     }
-    fusedwasi_p2_ok(s, comp, retptr);
-    fusedwasi_p2_store_u32(s, comp, retptr + 4, fusedwasi_p2_table_new(s, FUSEDWASI_P2_KIND_RESOLVE_STREAM, r, fusedwasi_p2_resolved_destroy));
+    fusedwasi_p2_ok(g, comp, retptr);
+    fusedwasi_p2_store_u32(g, comp, retptr + 4, fusedwasi_p2_table_new(g, FUSEDWASI_P2_KIND_RESOLVE_STREAM, r, fusedwasi_p2_resolved_destroy));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_resolve_next_address(fusedwasi_p2_state *s, uint32_t comp, uint32_t self, uint32_t retptr) {
-    fusedwasi_p2_resolved *r = (fusedwasi_p2_resolved *)fusedwasi_p2_table_get(s, self, FUSEDWASI_P2_KIND_RESOLVE_STREAM)->obj;
-    fusedwasi_p2_ok(s, comp, retptr);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_resolve_next_address(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
+    fusedwasi_p2_resolved *r = (fusedwasi_p2_resolved *)fusedwasi_p2_table_get(g, self, FUSEDWASI_P2_KIND_RESOLVE_STREAM)->obj;
+    fusedwasi_p2_ok(g, comp, retptr);
     if (r->pos >= r->count) {
-        fusedwasi_p2_store_u8(s, comp, retptr + 2, 0);
+        fusedwasi_p2_store_u8(g, comp, retptr + 2, 0);
         return;
     }
     const fusedwasi_p2_addr *a = &r->list[r->pos++];
-    fusedwasi_p2_store_u8(s, comp, retptr + 2, 1);
-    fusedwasi_p2_store_u8(s, comp, retptr + 4, (uint8_t)a->family);
-    if (a->family == 0) memcpy(fusedwasi_p2_mem(s, comp, retptr + 6, 4), a->v4, 4);
+    fusedwasi_p2_store_u8(g, comp, retptr + 2, 1);
+    fusedwasi_p2_store_u8(g, comp, retptr + 4, (uint8_t)a->family);
+    if (a->family == 0) memcpy(fusedwasi_p2_mem(g, comp, retptr + 6, 4), a->v4, 4);
     else
-        for (int i = 0; i < 8; i++) fusedwasi_p2_store_u16(s, comp, retptr + 6 + 2 * i, a->v6[i]);
+        for (int i = 0; i < 8; i++) fusedwasi_p2_store_u16(g, comp, retptr + 6 + 2 * i, a->v6[i]);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_subscribe(fusedwasi_p2_state *s, uint32_t self) {
-    fusedwasi_p2_table_get(s, self, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
-    return fusedwasi_p2_sock_pollable(s, 4, NULL, NULL);
+FUSEDWASI_P2_FN uint32_t fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_subscribe(fusedwasi_p2_guest *g, uint32_t self) {
+    fusedwasi_p2_table_get(g, self, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
+    return fusedwasi_p2_sock_pollable(g, 4, NULL, NULL);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_drop(fusedwasi_p2_state *s, uint32_t h) {
-    fusedwasi_p2_table_get(s, h, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
-    fusedwasi_p2_table_drop(s, h, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
+FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_ip_name_lookup_resolve_address_stream_drop(fusedwasi_p2_guest *g, uint32_t h) {
+    fusedwasi_p2_table_get(g, h, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
+    fusedwasi_p2_table_drop(g, h, FUSEDWASI_P2_KIND_RESOLVE_STREAM);
 }
 
 #endif /* FUSEDWASI_P2_SOCKETS_H */

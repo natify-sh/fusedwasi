@@ -76,12 +76,12 @@ def c_params(text: str) -> list[str]:
 
 
 def p1_c_functions() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """(wasi_snapshot_preview1 entry points, wasi_unstable entry points) of the C headers: name to the parameters between `void *s` and `int *trapped`."""
+    """(wasi_snapshot_preview1 entry points, wasi_unstable entry points) of the C headers: name to the parameters between `void *vg` and `int *trapped`."""
     found: dict[str, list[str]] = {}
     for header in sorted((C_INCLUDE / "p1").glob("*.h")):
         text = header.read_text(encoding="utf-8")
         for m in re.finditer(
-            r"static\s+inline\s+(?:uint32_t|void)\s+fusedwasi_p1_(\w+)\(\s*void\s*\*s\s*,([^)]*?)int\s*\*trapped\s*\)",
+            r"static\s+inline\s+(?:uint32_t|void)\s+fusedwasi_p1_(\w+)\(\s*void\s*\*vg\s*,([^)]*?)int\s*\*trapped\s*\)",
             text,
             re.DOTALL,
         ):
@@ -230,7 +230,7 @@ def test_p1_python_has_the_functions_of_the_table() -> None:
     assert set(table) - public == set()
     for name, f in table.items():
         params = list(inspect.signature(getattr(wasi_p1, name)).parameters)
-        assert params[0] == "s"
+        assert params[0] == "guest"
         assert len(params) - 1 == len(f.params), f"wasi_p1.{name}: python {len(params) - 1}, table {len(f.params)}"
 
 
@@ -307,7 +307,7 @@ def test_p2_c_parameter_types_are_those_of_the_table() -> None:
     """The C function of 0.2 is declared with the core type of each parameter (i32 is uint32_t, i64 is uint64_t): a function bound by its exact signature would be wrong otherwise."""
     table = {impl_name(f): f for f in signatures.load("p2").functions}
     for name, params in p2_c_functions().items():
-        wasm = [p for p in params if not re.search(r"\bcomp\b", p)][1:]  # without the state
+        wasm = [p for p in params if not re.search(r"\bcomp\b", p)][1:]  # without the guest
         assert c_wasm_types(wasm) == [p.type for p in table[name].params], name
 
 

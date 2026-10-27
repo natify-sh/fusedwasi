@@ -190,7 +190,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_name_cmp(const void *a, const void *b) {
 }
 
 /* the names of a directory, sorted, without . and .., with their types; the caller frees them */
-FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out, fusedwasi_p2_state *s) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out, fusedwasi_p2_guest *g) {
     int dupfd = dup(d->fd);
     DIR *dir = dupfd < 0 ? NULL : fdopendir(dupfd);
     if (!dir) {
@@ -201,23 +201,23 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
     rewinddir(dir);
     uint32_t count = 0, capacity = 16;
     char **names = (char **)malloc(capacity * sizeof *names);
-    if (!names) s->trap(s, "out of memory");
+    if (!names) g->trap(g, "out of memory");
     struct dirent *e;
     while ((e = readdir(dir)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (count == capacity) {
             capacity *= 2;
             names = (char **)realloc(names, capacity * sizeof *names);
-            if (!names) s->trap(s, "out of memory");
+            if (!names) g->trap(g, "out of memory");
         }
         names[count] = strdup(e->d_name);
-        if (!names[count]) s->trap(s, "out of memory");
+        if (!names[count]) g->trap(g, "out of memory");
         count++;
     }
     closedir(dir);
     qsort(names, count, sizeof *names, fusedwasi_p2_name_cmp);
     uint8_t *types = (uint8_t *)malloc(count ? count : 1);
-    if (!types) s->trap(s, "out of memory");
+    if (!types) g->trap(g, "out of memory");
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; i++) {
         fusedwasi_p2_stat st;

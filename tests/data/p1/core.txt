@@ -1,5 +1,5 @@
 # WASI 0.1, the first stage: arguments, environment, clocks, random bytes, the standard streams, the descriptors of preopens, the end of the program.
-# One command in a line: `arg`/`env`/`preopen`/`hooks` before `start`; then `mem` and `call`. A `call` prints `name rc`, or `name trapped` when the program ended.
+# One command in a line: `arg`/`env`/`preopen`/`hooks` before `start`; then `mem` and `call`; `signal on|off` (after `start`) sets or takes away the hook `signal` of the guest. A `call` prints `name rc`, or `name trapped` when the program ended.
 arg "prog"
 arg "a b"
 arg "c"
@@ -140,12 +140,23 @@ call fd_close 0
 call fd_read 0 600 2 620
 call fd_close 9
 
-# the end of the program
+# proc_raise asks the hook `signal` of the guest: 31 is INVAL and 0 is success whatever the hook; with no hook the answer is NOTSUP and the program goes on
 call proc_raise 31
 call proc_raise 0
 call proc_raise 20
 call proc_raise 27
 call proc_raise 9
+# with the hook (it tells the number; 20 is accepted, 9 ends the program by a trap, any other is refused with PERM)
+signal on
+call proc_raise 31
+call proc_raise 0
+call proc_raise 20
+call proc_raise 27
+call proc_raise 9
+signal off
+call proc_raise 9
+
+# the end of the program
 call fd_write 1 500 2 520
 call fd_fdstat_get 1 800
 call proc_exit 7

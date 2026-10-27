@@ -5,13 +5,14 @@
 
 #include "wasi_p2_sockets.h"
 
-static fusedwasi_p2_state s;
+static fusedwasi_p2_state world;
+static fusedwasi_p2_guest s;
 static uint8_t memory[4096];
 #define R 100
 
-static void trap(fusedwasi_p2_state *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
+static void trap(fusedwasi_p2_guest *st, const char *m) { (void)st; printf("TRAP %s\n", m); exit(0); }
 static int allow_all(fusedwasi_p2_state *st, const char *ip, uint16_t port, int use) { (void)st, (void)ip, (void)port, (void)use; return 1; }
-static uint32_t bump(fusedwasi_p2_state *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static uint32_t bump(fusedwasi_p2_guest *st, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     uint32_t *next = (uint32_t *)st->user;
     (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (*next + align - 1) / align * align;
@@ -116,13 +117,14 @@ static void receive_some(const char *label, uint32_t h, uint32_t expect_port, in
 int main(int argc, char **argv) {
     const char *scenario = argc > 1 ? argv[1] : "main";
     uint32_t next = 3000;
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     s.trap = trap;
     s.user = &next;
     s.realloc = bump;
     if (strcmp(scenario, "denied")) {
-        s.socket_addr_check = allow_all;
-        s.allow_ip_name_lookup = 1;
+        world.socket_addr_check = allow_all;
+        world.allow_ip_name_lookup = 1;
     }
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     uint32_t net = fusedwasi_wasi_sockets_instance_network_instance_network(&s);
@@ -336,6 +338,6 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "bad_handle")) {
         fusedwasi_wasi_sockets_tcp_tcp_socket_is_listening(&s, 4242);
     }
-    fusedwasi_p2_free(&s);
+    fusedwasi_p2_free(&world);
     return 0;
 }

@@ -143,36 +143,36 @@ from .wasi_p1 import (
 from .wasi_p1_core import E_INVAL, E_SUCCESS
 
 if TYPE_CHECKING:
-    from .wasi_p1_core import State
+    from .wasi_p1_core import Guest
 
 
-def fd_seek(s: State, fd: int, offset: int, whence: int, ptr: int) -> int:
+def fd_seek(guest: Guest, fd: int, offset: int, whence: int, ptr: int) -> int:
     """The order of whence in this snapshot: cur, end, set."""
     if whence > 2:
         return E_INVAL
     native = (1, 2, 0)[whence]  # cur, end, set
-    return _seek_native(s, fd, _signed(offset), native, ptr, _seek_right(_signed(offset), native))
+    return _seek_native(guest, fd, _signed(offset), native, ptr, _seek_right(_signed(offset), native))
 
 
-def fd_fdstat_get(s: State, fd: int, ptr: int) -> int:
+def fd_fdstat_get(guest: Guest, fd: int, ptr: int) -> int:
     """This snapshot has one right less, the last (sock_accept): the rights that a descriptor tells are of 29 bits."""
-    number = _fdstat_get(s, fd, ptr)
+    number = _fdstat_get(guest, fd, ptr)
     if number == E_SUCCESS:
         mask = (1 << 29) - 1
-        base, inheriting = struct.unpack("<QQ", s.load(ptr + 8, 16))
-        s.put_bytes(ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
+        base, inheriting = struct.unpack("<QQ", guest.load(ptr + 8, 16))
+        guest.put_bytes(ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
     return number
 
 
-def fd_filestat_get(s: State, fd: int, ptr: int) -> int:
+def fd_filestat_get(guest: Guest, fd: int, ptr: int) -> int:
     """The filestat of this snapshot has a 32-bit link count (56 bytes)."""
-    return filestat_of_fd(s, fd, ptr, True)
+    return filestat_of_fd(guest, fd, ptr, True)
 
 
-def path_filestat_get(s: State, fd: int, flags: int, path: int, length: int, ptr: int) -> int:
-    return filestat_of_path(s, fd, flags, path, length, ptr, True)
+def path_filestat_get(guest: Guest, fd: int, flags: int, path: int, length: int, ptr: int) -> int:
+    return filestat_of_path(guest, fd, flags, path, length, ptr, True)
 
 
-def poll_oneoff(s: State, in_: int, out: int, count: int, nevents: int) -> int:
+def poll_oneoff(guest: Guest, in_: int, out: int, count: int, nevents: int) -> int:
     """The clock subscription of this snapshot starts with an identifier (the subscriptions are 56 bytes)."""
-    return _poll(s, in_, out, count, nevents, True)
+    return _poll(guest, in_, out, count, nevents, True)

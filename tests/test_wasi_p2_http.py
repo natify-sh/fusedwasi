@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import Host, Trap, load_u32, store_u32
+from fusedwasi.p2.wasi_p2_core import Trap, load_u32, store_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_http_driver.c"
@@ -107,7 +108,7 @@ def python_output(scenario: str, port: int, dead: int) -> str:
         next_free[0] = ptr + new_size
         return ptr
 
-    host = Host(
+    host = guest_of(
         [memory],
         realloc=bump,
         http=scenario not in ("denied", "check"),

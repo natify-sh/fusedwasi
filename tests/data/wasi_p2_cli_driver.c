@@ -2,13 +2,13 @@
 #include <inttypes.h>
 #include "wasi_p2_cli.h"
 
-static void trap(fusedwasi_p2_state *s, const char *m) {
+static void trap(fusedwasi_p2_guest *s, const char *m) {
     if (s->exited) printf("EXIT %u\n", s->exit_code);
     else printf("TRAP %s\n", m);
     exit(0);
 }
 
-static uint32_t bump(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static uint32_t bump(fusedwasi_p2_guest *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     uint32_t *next = (uint32_t *)s->user;
     (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (*next + align - 1) / align * align;
@@ -28,24 +28,26 @@ int main(int argc, char **argv) {
     const char *scenario = argc > 1 ? argv[1] : "main";
     uint32_t next = 160;
     static const char *const args[] = {"prog", "-x"}, *const names[] = {"A", "LONG"}, *const values[] = {"1", "value"};
-    fusedwasi_p2_state s;
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_state world;
+    fusedwasi_p2_guest s;
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     s.trap = trap;
     s.user = &next;
     s.realloc = bump;
-    s.args = args, s.arg_count = 2;
-    s.env_names = names, s.env_values = values, s.env_count = 2;
-    s.initial_cwd = "/work";
+    world.args = args, world.arg_count = 2;
+    world.env_names = names, world.env_values = values, world.env_count = 2;
+    world.initial_cwd = "/work";
     fusedwasi_p2_set_memory(&s, 0, memory, sizeof memory);
     memcpy(memory + 120, "hello", 5);
     fusedwasi_p2_fd_stream *fin = NULL, *fout = NULL;
     int out_pipe[2] = {-1, -1};
     if (!strcmp(scenario, "main")) {
-        s.terminals = FUSEDWASI_P2_TERMINAL_STDOUT;
+        world.terminals = FUSEDWASI_P2_TERMINAL_STDOUT;
         uint32_t hi = fusedwasi_p2_memory_input_new(&s, (const uint8_t *)"in!", 3), ho;
         fusedwasi_p2_buffer_output *bo = fusedwasi_p2_buffer_output_new(&s, 100, &ho);
-        s.std[0] = fusedwasi_p2_table_get(&s, hi, FUSEDWASI_P2_KIND_INPUT_STREAM)->obj;
-        s.std[1] = &bo->base;
+        world.std[0] = fusedwasi_p2_table_get(&s, hi, FUSEDWASI_P2_KIND_INPUT_STREAM)->obj;
+        world.std[1] = &bo->base;
         printf("handles %u %u\n", hi, ho);
         fusedwasi_wasi_cli_environment_get_arguments(&s, 0, 0), dump("arguments");
         fusedwasi_wasi_cli_environment_get_environment(&s, 0, 16), dump("environment");
@@ -65,7 +67,7 @@ int main(int argc, char **argv) {
         printf("stdout ");
         for (uint64_t i = 0; i < bo->len; i++) printf("%02x", bo->buf[i]);
         printf("\n");
-        fusedwasi_p2_free(&s);
+        fusedwasi_p2_free(&world);
         fusedwasi_p2_buffer_output_release(bo);
         return 0;
     } else if (!strcmp(scenario, "fd")) {
@@ -75,7 +77,7 @@ int main(int argc, char **argv) {
         close(in_pipe[1]);
         fin = fusedwasi_p2_fd_input_new(&s, in_pipe[0]);
         fout = fusedwasi_p2_fd_output_new(&s, out_pipe[1]);
-        s.std[0] = fin, s.std[1] = fout;
+        world.std[0] = &fin->base, world.std[1] = &fout->base;
         uint32_t a = fusedwasi_wasi_cli_stdin_get_stdin(&s), b = fusedwasi_wasi_cli_stdout_get_stdout(&s);
         printf("std handles %u %u\n", a, b);
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, a, 16, 0), dump("read");
@@ -96,7 +98,7 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "exit_code")) {
         fusedwasi_wasi_cli_exit_exit_with_code(&s, 0x1ff);
     }
-    fusedwasi_p2_free(&s);
+    fusedwasi_p2_free(&world);
     free(fin);
     free(fout);
     return 0;

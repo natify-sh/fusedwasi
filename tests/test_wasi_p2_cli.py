@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_cli as cli
 from fusedwasi.p2 import wasi_p2_io as io
-from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Host, Trap, load_u32
+from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Trap, load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_cli_driver.c"
@@ -48,7 +49,7 @@ def python_output(scenario: str) -> str:
     try:
         if scenario == "main":
             stdin, stdout = io.MemoryInput(b"in!"), io.BufferOutput(100)
-            host = Host([memory], stdin=stdin, stdout=stdout, terminals=TERMINAL_STDOUT, **common)
+            host = guest_of([memory], stdin=stdin, stdout=stdout, terminals=TERMINAL_STDOUT, **common)
             hi, ho = io.input_stream_new(host, stdin), io.output_stream_new(host, stdout)
             lines.append(f"handles {hi} {ho}")
             cli.wasi_cli_environment_get_arguments(host, 0, 0)
@@ -84,7 +85,7 @@ def python_output(scenario: str) -> str:
             out_r, out_w = os.pipe()
             os.write(in_w, b"pipe!")
             os.close(in_w)
-            host = Host([memory], stdin=cli.FdInput(in_r), stdout=cli.FdOutput(out_w), **common)
+            host = guest_of([memory], stdin=cli.FdInput(in_r), stdout=cli.FdOutput(out_w), **common)
             a, b = cli.wasi_cli_stdin_get_stdin(host), cli.wasi_cli_stdout_get_stdout(host)
             lines.append(f"std handles {a} {b}")
             io.wasi_io_streams_input_stream_read(host, 0, a, 16, 0)
@@ -98,7 +99,7 @@ def python_output(scenario: str) -> str:
             os.close(in_r)
             os.close(out_r)
         else:
-            host = Host([memory], **common)
+            host = guest_of([memory], **common)
             if scenario == "exit_ok":
                 cli.wasi_cli_exit_exit(host, 0)
             elif scenario == "exit_err":
@@ -151,7 +152,7 @@ def test_default_streams_are_python_ones(capfd: pytest.CaptureFixture[str]) -> N
     """With no stream given the guest writes to `sys.stdout` of the moment, after the text layer is flushed."""
     memory = bytearray(64)
     memory[10:12] = b"ok"
-    host = Host([memory])
+    host = guest_of([memory])
     handle = cli.wasi_cli_stdout_get_stdout(host)
     print("before", end="")
     io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, handle, 10, 2, 0)

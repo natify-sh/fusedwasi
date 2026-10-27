@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
-from fusedwasi.p1.wasi_p1_core import Exit, Signal, State
-from fusedwasi.p2.wasi_p2_core import Host
+from fusedwasi.p1.wasi_p1_core import E_PERM, E_SUCCESS, Exit, Guest, State
+from fusedwasi.p2.wasi_p2_core import State as P2State
 from fusedwasi.p2.wasi_p2_io import InputStream, OutputStream, StreamFailed
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
@@ -32,6 +32,10 @@ def tokens(line: str) -> list[bytes]:
             break
         found.append(_unescape(match.group(1)) if match.group(1) is not None else match.group(2).encode())
     return found
+
+
+class Ended(Exception):
+    """What the hook `signal` raises to end the program (the C driver does it with a trap of the guest)."""
 
 
 class Remote:
@@ -60,6 +64,7 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
     status = {"stdout": 0, "clock": 0, "random": 0}
     memory = bytearray()
     state: State | None = None
+    guest: Guest | None = None
     table: Any = wasi_p1
 
     class Stdin(InputStream):
@@ -93,6 +98,12 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
     def hook_sleep(ns: int) -> None:
         out.append(f"sleep {ns}")
 
+    def hook_signal(number: int) -> int:
+        out.append(f"signal {number}")
+        if number == 9:
+            raise Ended
+        return E_SUCCESS if number == 20 else E_PERM
+
     for raw in script.read_text().splitlines():
         t = tokens(raw)
         if not t:
@@ -111,18 +122,18 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             hooks_on = t[1] == b"on"
         elif word == "start":
             memory = bytearray(int(t[1]))
-            core = Host(
+            core = P2State(
                 args=[a.decode() for a in args] or ["program"],
                 env=[(k.decode(), v.decode()) for k, _, v in (e.partition(b"=") for e in env)],
             )
             if hooks_on:
                 core.clock, core.random_bytes, core.sleep = hook_clock, hook_random, hook_sleep
                 core.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
-            state = State(
-                Remote(memory) if remote else memory,
-                core=core,
-                preopens=preopens,
-            )
+            state = State(core=core, preopens=preopens)
+            guest = Guest(state, Remote(memory) if remote else memory)
+        elif word == "signal":
+            assert guest is not None
+            guest.signal = hook_signal if t[1] == b"on" else None
         elif word == "stdin":
             stdin_data = t[1]
         elif word in ("stdout_status", "clock_status", "random_status"):
@@ -157,16 +168,15 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
                 )
                 at += 24 + have
         elif word == "call":
-            assert state is not None
+            assert guest is not None
             name = t[1].decode()
             numbers = [int(x, 0) for x in t[2:]]
             try:
-                result = getattr(table, name)(state, *numbers)
+                result = getattr(table, name)(guest, *numbers)
                 out.append(f"{name} trapped" if name == "proc_exit" else f"{name} {result}")
-            except (Exit, Signal):
+            except (Exit, Ended):
                 out.append(f"{name} trapped")
-                out.append(f"end {state.finished} {state.end_value}")
-                out.append(f"exit {int(state.core.exited)} {state.core.exit_code}")
+                out.append(f"exit {int(guest.exited)} {guest.exit_code}")
     if state is not None:
         state.close_all()
     return out

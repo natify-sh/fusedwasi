@@ -9,9 +9,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_clocks as clocks
-from fusedwasi.p2.wasi_p2_core import KIND_POLLABLE, Host, Trap, table_drop, table_get
+from fusedwasi.p2.wasi_p2_core import KIND_POLLABLE, Trap, table_drop, table_get
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_clocks_driver.c"
@@ -22,7 +23,7 @@ SCENARIOS = ["main", "double_drop", "outside", "no_memory"]
 
 def python_output(scenario: str) -> str:
     memory = bytearray(64)
-    host = Host(
+    host = guest_of(
         [memory],
         clock=lambda ident: 1700000000123456789 if ident == 0 else 5000,
         resolution_ns=[1000, 7, 1, 1],

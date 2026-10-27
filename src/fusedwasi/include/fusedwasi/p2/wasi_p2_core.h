@@ -1,8 +1,10 @@
-/* The state of a host of WASI 0.2 and the helpers of the canonical ABI that every package uses (the twin of p2/wasi_p2_core.py).
+/* The state of the world of WASI 0.2, the guest that calls into it, and the helpers of the canonical ABI that every package uses (the twin of p2/wasi_p2_core.py).
  *
- * Header-only, every function static (FUSEDWASI_P2_FN). No mutable global and no thread-local: everything that changes is in one `fusedwasi_p2_state`, passed as the first argument of every
- * function of the packages. A memory is a base and a size; a module fused from components has one for each component, and a function takes the number of its own.
- * Alpha: the interface is the state struct and one function per import. Memory is written byte by byte, little-endian.
+ * Header-only, every function static (FUSEDWASI_P2_FN). No mutable global and no thread-local. Everything that changes is in a `fusedwasi_p2_state` (the world: the configuration,
+ * the tables of handles, the policies, the clocks) or in a `fusedwasi_p2_guest` (the caller: its memories, its trap and `cabi_realloc`, the end of its call). The first argument of
+ * every function of the packages is the guest, `g`; its state is `g->state`. Many guests may point to one state. A memory is a base and a size; a module fused from components has
+ * one for each component, and a function takes the number of its own.
+ * Alpha: the interface is the two structs and one function per import. Memory is written byte by byte, little-endian.
  * POSIX clocks need `clock_gettime` (a GNU or POSIX mode of the compiler). */
 #ifndef FUSEDWASI_P2_CORE_H
 #define FUSEDWASI_P2_CORE_H
@@ -42,6 +44,8 @@ typedef ssize_t fusedwasi_p2_ssize;
 #endif
 
 struct fusedwasi_p2_state;
+struct fusedwasi_p2_guest;
+struct fusedwasi_p2_stream;
 struct fusedwasi_p2_http_request;
 struct fusedwasi_p2_http_response;
 struct fusedwasi_p2_http_error;
@@ -95,7 +99,7 @@ typedef struct {
 
 /* Something a guest can wait for; wasi:clocks and wasi:io make the kinds. `ctx` is the owner's, `deadline` is for the clocks. */
 typedef struct fusedwasi_p2_pollable {
-    int (*ready)(struct fusedwasi_p2_state *s, struct fusedwasi_p2_pollable *p);
+    int (*ready)(struct fusedwasi_p2_guest *g, struct fusedwasi_p2_pollable *p);
     void *ctx;
     uint64_t deadline;
 } fusedwasi_p2_pollable;
@@ -105,21 +109,15 @@ typedef struct {
     uint32_t kind;
     int live;
     void *obj;
-    void (*destroy)(struct fusedwasi_p2_state *s, void *obj); /* called when the handle is dropped, or the state is freed; may be NULL */
+    void (*destroy)(struct fusedwasi_p2_state *state, void *obj); /* called when the handle is dropped, or the state is freed (no guest then); may be NULL */
 } fusedwasi_p2_slot;
 
+/* The STATE is the world: what the guests share (a Wasmtime `WasiCtx` and its table). One for all the guests that share files and sockets; made once and freed once by whoever owns it.
+   The GUEST (below) is the caller: its memory, its trap, its `cabi_realloc`, the end of its call. Many guests may point to one state; nothing is rebound per call.
+   The hooks of the state (the sources of time and random bytes, the policies of the network, the transport of http) take the state; the hooks of the guest take the guest. */
 typedef struct fusedwasi_p2_state {
-    fusedwasi_p2_memory memory[FUSEDWASI_P2_MAX_MEMORIES]; /* NULL pointers: never bound */
-    fusedwasi_p2_memory_cell memory_cell[FUSEDWASI_P2_MAX_MEMORIES]; /* the cells of `fusedwasi_p2_set_memory`, owned by the state */
-    uint32_t memories;
     fusedwasi_p2_slot *slots; /* slot 0 is never used */
     uint32_t slot_count, slot_capacity;
-    /* a trap does not return; in a module it is `wasm_rt_trap`, the default aborts */
-    void (*trap)(struct fusedwasi_p2_state *s, const char *message);
-    /* the `cabi_realloc` of component `comp`: returns the pointer, or 0 for out of memory */
-    uint32_t (*realloc)(struct fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size);
-    /* what a blocking call does between two looks at a pollable */
-    void (*wait)(struct fusedwasi_p2_state *s);
     /* wasi:cli/environment: owned by the caller, they must outlive the state */
     const char *const *args;
     uint32_t arg_count;
@@ -131,36 +129,51 @@ typedef struct fusedwasi_p2_state {
     uint32_t preopen_count;
     /* wasi:sockets: nothing is allowed unless the caller says so, as in Wasmtime. `socket_addr_check` decides for each bind or connect (`use` is a FUSEDWASI_P2_USE_*),
        `allow_ip_name_lookup` for resolve-addresses. `ip` is the address as text. NULL: everything is refused. */
-    int (*socket_addr_check)(struct fusedwasi_p2_state *s, const char *ip, uint16_t port, int use);
+    int (*socket_addr_check)(struct fusedwasi_p2_state *state, const char *ip, uint16_t port, int use);
     int allow_ip_name_lookup;
     /* wasi:http: an outgoing request is refused (`HTTP-request-denied`) unless `http_check` says yes (`scheme` is "http" or "https"; NULL: everything is refused).
        `http_send` replaces the transport of wasi_p2_http.h: returns 0 with `out` filled, or nonzero with `err` filled. */
-    int (*http_check)(struct fusedwasi_p2_state *s, const char *scheme, const char *authority);
-    int (*http_send)(struct fusedwasi_p2_state *s, const struct fusedwasi_p2_http_request *req, struct fusedwasi_p2_http_response *out, struct fusedwasi_p2_http_error *err);
-    /* the standard streams (fusedwasi_p2_stream, wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for
-       (`std_default`, freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
-    void *std[3];
-    void *std_default[3];
+    int (*http_check)(struct fusedwasi_p2_state *state, const char *scheme, const char *authority);
+    int (*http_send)(struct fusedwasi_p2_state *state, const struct fusedwasi_p2_http_request *req, struct fusedwasi_p2_http_response *out, struct fusedwasi_p2_http_error *err);
+    /* the standard streams (wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for (`std_default`: private,
+       freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
+    struct fusedwasi_p2_stream *std[3];
+    void *std_default[3]; /* private */
     unsigned terminals; /* FUSEDWASI_P2_TERMINAL_*: which of the three are terminals */
-    /* the guest called wasi:cli/exit (or proc_exit of WASI 0.1, which is the same end): `exit` is told, and by default records the code and traps; the code is in `exit_code` when `exited`.
-       The state of 0.1 only records (`exited`, `exit_code`) and reports a trap in its own way, so the host reads the end of either family here. */
-    void (*exit)(struct fusedwasi_p2_state *s, uint32_t code);
-    int exited;
-    uint32_t exit_code;
-    /* random bytes: returns 0, or nonzero if the source failed (a trap). `insecure_random_bytes` is the same source unless replaced. */
-    int (*random_bytes)(struct fusedwasi_p2_state *s, uint8_t *buf, size_t n);
-    int (*insecure_random_bytes)(struct fusedwasi_p2_state *s, uint8_t *buf, size_t n);
+    /* random bytes: returns 0, or nonzero if the source failed (the guest traps). `insecure_random_bytes` is the same source unless replaced. */
+    int (*random_bytes)(struct fusedwasi_p2_state *state, uint8_t *buf, size_t n);
+    int (*insecure_random_bytes)(struct fusedwasi_p2_state *state, uint8_t *buf, size_t n);
     /* the clocks of WASI 0.1 and 0.2, in nanoseconds: `id` is 0 real time, 1 monotonic, 2 CPU time of the process, 3 CPU time of the thread. Returns 0, or nonzero if the clock
        cannot be read (0.2 traps, 0.1 answers `notsup`). Replaced in tests and by hosts. `resolution_ns` is the resolution of each. */
-    int (*clock)(struct fusedwasi_p2_state *s, uint32_t id, uint64_t *ns);
+    int (*clock)(struct fusedwasi_p2_state *state, uint32_t id, uint64_t *ns);
     uint64_t resolution_ns[4];
-    /* how a call of 0.1 that sleeps (`poll_oneoff` on a clock) waits `ns` nanoseconds; returns 0, or nonzero if interrupted (a trap) */
-    int (*sleep)(struct fusedwasi_p2_state *s, uint64_t ns);
-    void *user; /* the host's own: the library never reads, writes or frees it (`fusedwasi_p2_init` makes it NULL); the Python twin has `Host.user` */
+    /* how a call of 0.1 that sleeps (`poll_oneoff` on a clock) waits `ns` nanoseconds; returns 0, or nonzero if interrupted (the guest traps) */
+    int (*sleep)(struct fusedwasi_p2_state *state, uint64_t ns);
+    void *user; /* the pointer of whoever made the state, given back to its hooks: the library never reads, writes or frees it (`fusedwasi_p2_init` makes it NULL); `State.user` in Python */
 } fusedwasi_p2_state;
 
-FUSEDWASI_P2_FN void fusedwasi_p2_default_trap(fusedwasi_p2_state *s, const char *message) {
-    (void)s;
+/* The caller: one for each instance, made once (`fusedwasi_p2_guest_init`), never rewritten per call. */
+typedef struct fusedwasi_p2_guest {
+    fusedwasi_p2_state *state; /* the world this guest calls into */
+    fusedwasi_p2_memory memory[FUSEDWASI_P2_MAX_MEMORIES]; /* NULL pointers: never bound; `fusedwasi_p2_bind_memory`, `fusedwasi_p2_set_memory` */
+    fusedwasi_p2_memory_cell memory_cell[FUSEDWASI_P2_MAX_MEMORIES]; /* the cells of `fusedwasi_p2_set_memory`, owned by the guest */
+    uint32_t memories;
+    /* a trap does not return; a host jumps out of the call (a longjmp, or what its engine has); the default aborts */
+    void (*trap)(struct fusedwasi_p2_guest *g, const char *message);
+    /* the `cabi_realloc` of component `comp`: returns the pointer, or 0 for out of memory */
+    uint32_t (*realloc)(struct fusedwasi_p2_guest *g, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size);
+    /* what a blocking call does between two looks at a pollable; it can trap: it is where the caller may be interrupted */
+    void (*wait)(struct fusedwasi_p2_guest *g);
+    /* The end of a call is what one call leaves, so it is the guest's. The guest called wasi:cli/exit: `exit` is told, and by default records the code and traps; the code is in
+       `exit_code` when `exited`. (`proc_exit` of 0.1 only records and reports its trap in its own way; see wasi_p1_core.h.) The host clears `exited` before the next call. */
+    void (*exit)(struct fusedwasi_p2_guest *g, uint32_t code);
+    int exited;
+    uint32_t exit_code;
+    void *user; /* the pointer of whoever made the guest, given back to its hooks: the library never reads, writes or frees it (`fusedwasi_p2_guest_init` makes it NULL) */
+} fusedwasi_p2_guest;
+
+FUSEDWASI_P2_FN void fusedwasi_p2_default_trap(fusedwasi_p2_guest *g, const char *message) {
+    (void)g;
     fprintf(stderr, "fusedwasi p2 trap: %s\n", message);
     abort();
 }
@@ -168,10 +181,10 @@ FUSEDWASI_P2_FN void fusedwasi_p2_default_trap(fusedwasi_p2_state *s, const char
 #ifdef _WIN32
 FUSEDWASI_P2_FN uint64_t fusedwasi_p2_filetime_ns(FILETIME t) { return (((uint64_t)t.dwHighDateTime << 32) | t.dwLowDateTime) * 100u; }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *state, uint32_t id, uint64_t *ns) {
     FILETIME created, exited, kernel, user, now;
     LARGE_INTEGER counter, frequency;
-    (void)s;
+    (void)state;
     switch (id) {
     case 0:
         GetSystemTimePreciseAsFileTime(&now);
@@ -199,10 +212,10 @@ FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_resolution_ns(uint32_t id) {
     return 100; /* the unit of a FILETIME */
 }
 #else
-FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *s, uint32_t id, uint64_t *ns) {
+FUSEDWASI_P2_FN int fusedwasi_p2_default_clock(fusedwasi_p2_state *state, uint32_t id, uint64_t *ns) {
     static const clockid_t ids[4] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
     struct timespec ts;
-    (void)s;
+    (void)state;
     if (id > 3 || clock_gettime(ids[id], &ts) != 0) return -1;
     *ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
     return 0;
@@ -218,18 +231,18 @@ FUSEDWASI_P2_FN uint64_t fusedwasi_p2_default_resolution_ns(uint32_t id) {
 #endif
 
 /* the time of clock `id`: a clock of the host that cannot be read is a trap (0.2 has no error for it) */
-FUSEDWASI_P2_FN uint64_t fusedwasi_p2_clock_ns(fusedwasi_p2_state *s, uint32_t id) {
+FUSEDWASI_P2_FN uint64_t fusedwasi_p2_clock_ns(fusedwasi_p2_guest *g, uint32_t id) {
     uint64_t ns = 0;
-    if (s->clock(s, id, &ns) != 0) s->trap(s, "the clock cannot be read");
+    if (g->state->clock(g->state, id, &ns) != 0) g->trap(g, "the clock cannot be read");
     return ns;
 }
 
 /* waits `ns` nanoseconds on the monotonic clock; in slices, so that a host sees an interrupt between them */
-FUSEDWASI_P2_FN int fusedwasi_p2_default_sleep(fusedwasi_p2_state *s, uint64_t ns) {
+FUSEDWASI_P2_FN int fusedwasi_p2_default_sleep(fusedwasi_p2_state *state, uint64_t ns) {
     uint64_t start, now;
-    if (s->clock(s, 1, &start) != 0) return -1;
+    if (state->clock(state, 1, &start) != 0) return -1;
     for (;;) {
-        if (s->clock(s, 1, &now) != 0 || now - start >= ns) return 0;
+        if (state->clock(state, 1, &now) != 0 || now - start >= ns) return 0;
         uint64_t left = ns - (now - start), slice = left < 100000000ull ? left : 100000000ull;
 #ifdef _WIN32
         Sleep((DWORD)((slice + 999999u) / 1000000u));
@@ -240,8 +253,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_default_sleep(fusedwasi_p2_state *s, uint64_t n
     }
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_default_random_bytes(fusedwasi_p2_state *s, uint8_t *buf, size_t n) {
-    (void)s;
+FUSEDWASI_P2_FN int fusedwasi_p2_default_random_bytes(fusedwasi_p2_state *state, uint8_t *buf, size_t n) {
+    (void)state;
 #ifdef _WIN32
     return BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0;
 #elif FUSEDWASI_P2_HAVE_GETENTROPY
@@ -262,14 +275,14 @@ FUSEDWASI_P2_FN int fusedwasi_p2_default_random_bytes(fusedwasi_p2_state *s, uin
 #endif
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_default_exit(fusedwasi_p2_state *s, uint32_t code) {
-    s->exited = 1;
-    s->exit_code = code;
-    s->trap(s, "exit");
+FUSEDWASI_P2_FN void fusedwasi_p2_default_exit(fusedwasi_p2_guest *g, uint32_t code) {
+    g->exited = 1;
+    g->exit_code = code;
+    g->trap(g, "exit");
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_default_wait(fusedwasi_p2_state *s) {
-    (void)s;
+FUSEDWASI_P2_FN void fusedwasi_p2_default_wait(fusedwasi_p2_guest *g) {
+    (void)g;
 #ifdef _WIN32
     Sleep(1);
 #else
@@ -278,68 +291,76 @@ FUSEDWASI_P2_FN void fusedwasi_p2_default_wait(fusedwasi_p2_state *s) {
 #endif
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_init(fusedwasi_p2_state *s) {
-    memset(s, 0, sizeof *s);
-    s->trap = fusedwasi_p2_default_trap;
-    s->wait = fusedwasi_p2_default_wait;
-    s->exit = fusedwasi_p2_default_exit;
-    s->random_bytes = s->insecure_random_bytes = fusedwasi_p2_default_random_bytes;
-    s->clock = fusedwasi_p2_default_clock;
-    s->sleep = fusedwasi_p2_default_sleep;
-    for (uint32_t i = 0; i < 4; i++) s->resolution_ns[i] = fusedwasi_p2_default_resolution_ns(i);
+/* the state: all zero, with the system's own clocks, random source and sleep; the standard streams are the descriptors of the process until the caller gives others */
+FUSEDWASI_P2_FN void fusedwasi_p2_init(fusedwasi_p2_state *state) {
+    memset(state, 0, sizeof *state);
+    state->random_bytes = state->insecure_random_bytes = fusedwasi_p2_default_random_bytes;
+    state->clock = fusedwasi_p2_default_clock;
+    state->sleep = fusedwasi_p2_default_sleep;
+    for (uint32_t i = 0; i < 4; i++) state->resolution_ns[i] = fusedwasi_p2_default_resolution_ns(i);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *s) {
-    for (uint32_t i = 1; i < s->slot_count; i++)
-        if (s->slots[i].live && s->slots[i].destroy) s->slots[i].destroy(s, s->slots[i].obj);
-    for (int i = 0; i < 3; i++) free(s->std_default[i]), s->std_default[i] = NULL;
-    free(s->slots);
-    s->slots = NULL;
-    s->slot_count = s->slot_capacity = 0;
+/* a guest over `state`: all zero, with the default trap (aborts), wait and exit. It owns nothing, so it needs no free; it can be made on the stack for one call, or once for an instance. */
+FUSEDWASI_P2_FN void fusedwasi_p2_guest_init(fusedwasi_p2_guest *g, fusedwasi_p2_state *state) {
+    memset(g, 0, sizeof *g);
+    g->state = state;
+    g->trap = fusedwasi_p2_default_trap;
+    g->wait = fusedwasi_p2_default_wait;
+    g->exit = fusedwasi_p2_default_exit;
+}
+
+/* frees what the state holds: every live handle is destroyed (there is no guest then), and the table. The guests that point to it must not be used afterwards. */
+FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *state) {
+    for (uint32_t i = 1; i < state->slot_count; i++)
+        if (state->slots[i].live && state->slots[i].destroy) state->slots[i].destroy(state, state->slots[i].obj);
+    for (int i = 0; i < 3; i++) free(state->std_default[i]), state->std_default[i] = NULL;
+    free(state->slots);
+    state->slots = NULL;
+    state->slot_count = state->slot_capacity = 0;
 }
 
 /* Binds memory number `comp` by pointer: `*data` is the base and `*size` the size in bytes, both owned by the caller and read at each access, so a base that moves
    (memory.grow) is followed with no second call. The pointers must stay valid while the state is used. Returns 0, or -1 if the number is too big. */
-FUSEDWASI_P2_FN int fusedwasi_p2_bind_memory(fusedwasi_p2_state *s, uint32_t comp, uint8_t **data, uint64_t *size) {
+FUSEDWASI_P2_FN int fusedwasi_p2_bind_memory(fusedwasi_p2_guest *g, uint32_t comp, uint8_t **data, uint64_t *size) {
     if (comp >= FUSEDWASI_P2_MAX_MEMORIES) return -1;
-    s->memory[comp].data = data;
-    s->memory[comp].size = size;
-    if (comp >= s->memories) s->memories = comp + 1;
+    g->memory[comp].data = data;
+    g->memory[comp].size = size;
+    if (comp >= g->memories) g->memories = comp + 1;
     return 0;
 }
 
 /* The convenience: stores `base` and `size` in cells of the state and binds the memory to them (a base that moves: call it again, or use `fusedwasi_p2_bind_memory`).
    Returns 0, or -1 if the number is too big. */
-FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_state *s, uint32_t comp, uint8_t *base, uint64_t size) {
+FUSEDWASI_P2_FN int fusedwasi_p2_set_memory(fusedwasi_p2_guest *g, uint32_t comp, uint8_t *base, uint64_t size) {
     if (comp >= FUSEDWASI_P2_MAX_MEMORIES) return -1;
-    s->memory_cell[comp].base = base;
-    s->memory_cell[comp].size = size;
-    return fusedwasi_p2_bind_memory(s, comp, &s->memory_cell[comp].base, &s->memory_cell[comp].size);
+    g->memory_cell[comp].base = base;
+    g->memory_cell[comp].size = size;
+    return fusedwasi_p2_bind_memory(g, comp, &g->memory_cell[comp].base, &g->memory_cell[comp].size);
 }
 
 /* the table of handles (own and borrow share it; a handle is an i32 for the guest) */
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_new(fusedwasi_p2_state *s, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_new(fusedwasi_p2_guest *g, uint32_t kind, void *obj, void (*destroy)(fusedwasi_p2_state *, void *)) {
     uint32_t index = 0;
-    for (uint32_t i = 1; i < s->slot_count; i++)
-        if (!s->slots[i].live) {
+    for (uint32_t i = 1; i < g->state->slot_count; i++)
+        if (!g->state->slots[i].live) {
             index = i;
             break;
         }
     if (!index) {
-        if (s->slot_count == 0) s->slot_count = 1; /* slot 0 */
-        if (s->slot_count > FUSEDWASI_P2_INDEX_MASK) s->trap(s, "table of handles is full");
-        if (s->slot_count >= s->slot_capacity) {
-            uint32_t cap = s->slot_capacity ? s->slot_capacity * 2 : 16;
-            fusedwasi_p2_slot *grown = (fusedwasi_p2_slot *)realloc(s->slots, cap * sizeof *grown);
-            if (!grown) s->trap(s, "out of memory");
-            memset(grown + s->slot_capacity, 0, (cap - s->slot_capacity) * sizeof *grown);
-            s->slots = grown;
-            s->slot_capacity = cap;
+        if (g->state->slot_count == 0) g->state->slot_count = 1; /* slot 0 */
+        if (g->state->slot_count > FUSEDWASI_P2_INDEX_MASK) g->trap(g, "table of handles is full");
+        if (g->state->slot_count >= g->state->slot_capacity) {
+            uint32_t cap = g->state->slot_capacity ? g->state->slot_capacity * 2 : 16;
+            fusedwasi_p2_slot *grown = (fusedwasi_p2_slot *)realloc(g->state->slots, cap * sizeof *grown);
+            if (!grown) g->trap(g, "out of memory");
+            memset(grown + g->state->slot_capacity, 0, (cap - g->state->slot_capacity) * sizeof *grown);
+            g->state->slots = grown;
+            g->state->slot_capacity = cap;
         }
-        index = s->slot_count++;
+        index = g->state->slot_count++;
     }
-    fusedwasi_p2_slot *slot = &s->slots[index];
+    fusedwasi_p2_slot *slot = &g->state->slots[index];
     slot->generation = (slot->generation + 1) & FUSEDWASI_P2_GENERATION_MASK;
     slot->kind = kind;
     slot->live = 1;
@@ -349,94 +370,94 @@ FUSEDWASI_P2_FN uint32_t fusedwasi_p2_table_new(fusedwasi_p2_state *s, uint32_t 
 }
 
 /* The slot of a live handle of the given kind; anything else is a trap. */
-FUSEDWASI_P2_FN fusedwasi_p2_slot *fusedwasi_p2_table_get(fusedwasi_p2_state *s, uint32_t handle, uint32_t kind) {
+FUSEDWASI_P2_FN fusedwasi_p2_slot *fusedwasi_p2_table_get(fusedwasi_p2_guest *g, uint32_t handle, uint32_t kind) {
     uint32_t index = handle & FUSEDWASI_P2_INDEX_MASK;
-    if (index == 0 || index >= s->slot_count) s->trap(s, "bad handle");
-    fusedwasi_p2_slot *slot = &s->slots[index];
-    if (!slot->live || slot->generation != (handle >> FUSEDWASI_P2_INDEX_BITS) || slot->kind != kind) s->trap(s, "bad handle");
+    if (index == 0 || index >= g->state->slot_count) g->trap(g, "bad handle");
+    fusedwasi_p2_slot *slot = &g->state->slots[index];
+    if (!slot->live || slot->generation != (handle >> FUSEDWASI_P2_INDEX_BITS) || slot->kind != kind) g->trap(g, "bad handle");
     return slot;
 }
 
 /* The object of a live handle of the given kind; the handle is spent and `destroy` is not called (the caller owns the object now). */
-FUSEDWASI_P2_FN void *fusedwasi_p2_table_take(fusedwasi_p2_state *s, uint32_t handle, uint32_t kind) {
-    fusedwasi_p2_slot *slot = fusedwasi_p2_table_get(s, handle, kind);
+FUSEDWASI_P2_FN void *fusedwasi_p2_table_take(fusedwasi_p2_guest *g, uint32_t handle, uint32_t kind) {
+    fusedwasi_p2_slot *slot = fusedwasi_p2_table_get(g, handle, kind);
     void *obj = slot->obj;
     slot->live = 0;
     slot->obj = NULL;
     return obj;
 }
 
-FUSEDWASI_P2_FN int fusedwasi_p2_table_alive(fusedwasi_p2_state *s, uint32_t handle, uint32_t kind) {
+FUSEDWASI_P2_FN int fusedwasi_p2_table_alive(fusedwasi_p2_guest *g, uint32_t handle, uint32_t kind) {
     uint32_t index = handle & FUSEDWASI_P2_INDEX_MASK;
-    if (index == 0 || index >= s->slot_count) return 0;
-    fusedwasi_p2_slot *slot = &s->slots[index];
+    if (index == 0 || index >= g->state->slot_count) return 0;
+    fusedwasi_p2_slot *slot = &g->state->slots[index];
     return slot->live && slot->generation == (handle >> FUSEDWASI_P2_INDEX_BITS) && slot->kind == kind;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_table_drop(fusedwasi_p2_state *s, uint32_t handle, uint32_t kind) {
-    fusedwasi_p2_slot *slot = fusedwasi_p2_table_get(s, handle, kind);
+FUSEDWASI_P2_FN void fusedwasi_p2_table_drop(fusedwasi_p2_guest *g, uint32_t handle, uint32_t kind) {
+    fusedwasi_p2_slot *slot = fusedwasi_p2_table_get(g, handle, kind);
     slot->live = 0;
-    if (slot->destroy) slot->destroy(s, slot->obj);
+    if (slot->destroy) slot->destroy(g->state, slot->obj);
     slot->obj = NULL;
 }
 
 /* memory: little-endian, checked */
 
-FUSEDWASI_P2_FN uint8_t *fusedwasi_p2_mem(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint32_t size) {
-    if (comp >= s->memories || !s->memory[comp].data || !s->memory[comp].size) s->trap(s, "no such memory");
-    if ((uint64_t)ptr + size > *s->memory[comp].size) s->trap(s, "pointer outside the memory");
-    return *s->memory[comp].data + ptr;
+FUSEDWASI_P2_FN uint8_t *fusedwasi_p2_mem(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint32_t size) {
+    if (comp >= g->memories || !g->memory[comp].data || !g->memory[comp].size) g->trap(g, "no such memory");
+    if ((uint64_t)ptr + size > *g->memory[comp].size) g->trap(g, "pointer outside the memory");
+    return *g->memory[comp].data + ptr;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_store_u32(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint32_t v) {
-    uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, 4);
+FUSEDWASI_P2_FN void fusedwasi_p2_store_u32(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint32_t v) {
+    uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, 4);
     for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_store_u64(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint64_t v) {
-    uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, 8);
+FUSEDWASI_P2_FN void fusedwasi_p2_store_u64(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint64_t v) {
+    uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, 8);
     for (int i = 0; i < 8; i++) p[i] = (uint8_t)(v >> (8 * i));
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_store_u8(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint8_t v) { *fusedwasi_p2_mem(s, comp, ptr, 1) = v; }
+FUSEDWASI_P2_FN void fusedwasi_p2_store_u8(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint8_t v) { *fusedwasi_p2_mem(g, comp, ptr, 1) = v; }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_store_u16(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr, uint16_t v) {
-    uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, 2);
+FUSEDWASI_P2_FN void fusedwasi_p2_store_u16(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr, uint16_t v) {
+    uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, 2);
     p[0] = (uint8_t)v, p[1] = (uint8_t)(v >> 8);
 }
 
-FUSEDWASI_P2_FN uint8_t fusedwasi_p2_load_u8(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr) { return *fusedwasi_p2_mem(s, comp, ptr, 1); }
+FUSEDWASI_P2_FN uint8_t fusedwasi_p2_load_u8(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr) { return *fusedwasi_p2_mem(g, comp, ptr, 1); }
 
-FUSEDWASI_P2_FN uint16_t fusedwasi_p2_load_u16(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr) {
-    const uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, 2);
+FUSEDWASI_P2_FN uint16_t fusedwasi_p2_load_u16(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr) {
+    const uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, 2);
     return (uint16_t)(p[0] | p[1] << 8);
 }
 
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_load_u32(fusedwasi_p2_state *s, uint32_t comp, uint32_t ptr) {
-    const uint8_t *p = fusedwasi_p2_mem(s, comp, ptr, 4);
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_load_u32(fusedwasi_p2_guest *g, uint32_t comp, uint32_t ptr) {
+    const uint8_t *p = fusedwasi_p2_mem(g, comp, ptr, 4);
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
 
 /* Memory from the component for a list or a string that the host returns (`cabi_realloc`). */
-FUSEDWASI_P2_FN uint32_t fusedwasi_p2_alloc(fusedwasi_p2_state *s, uint32_t comp, uint32_t align, uint32_t size) {
+FUSEDWASI_P2_FN uint32_t fusedwasi_p2_alloc(fusedwasi_p2_guest *g, uint32_t comp, uint32_t align, uint32_t size) {
     /* The canonical ABI calls `realloc(0, 0, align, size)` also for an empty list or string (a component that counts its allocations, such as the adapter of WASI 0.1 of
        Wasmtime, relies on it); a host that has no `realloc` can still answer an empty result, as it could before. A size of 0 may come back as 0 (a component may give no
        address for nothing): the alignment stands for it. */
-    if (!s->realloc) {
+    if (!g->realloc) {
         if (size == 0) return align;
-        s->trap(s, "the component has no cabi_realloc");
+        g->trap(g, "the component has no cabi_realloc");
     }
-    uint32_t ptr = s->realloc(s, comp, 0, 0, align, size);
-    if (!ptr && size) s->trap(s, "cabi_realloc failed");
+    uint32_t ptr = g->realloc(g, comp, 0, 0, align, size);
+    if (!ptr && size) g->trap(g, "cabi_realloc failed");
     return ptr ? ptr : align;
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2_string(fusedwasi_p2_state *s, uint32_t comp, const char *text, uint32_t at) {
+FUSEDWASI_P2_FN void fusedwasi_p2_string(fusedwasi_p2_guest *g, uint32_t comp, const char *text, uint32_t at) {
     uint32_t n = (uint32_t)strlen(text);
-    uint32_t ptr = fusedwasi_p2_alloc(s, comp, 1, n);
-    if (n) memcpy(fusedwasi_p2_mem(s, comp, ptr, n), text, n);
-    fusedwasi_p2_store_u32(s, comp, at, ptr);
-    fusedwasi_p2_store_u32(s, comp, at + 4, n);
+    uint32_t ptr = fusedwasi_p2_alloc(g, comp, 1, n);
+    if (n) memcpy(fusedwasi_p2_mem(g, comp, ptr, n), text, n);
+    fusedwasi_p2_store_u32(g, comp, at, ptr);
+    fusedwasi_p2_store_u32(g, comp, at + 4, n);
 }
 
 #endif /* FUSEDWASI_P2_CORE_H */

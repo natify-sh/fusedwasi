@@ -1,9 +1,9 @@
-"""The state of a host of WASI 0.1 and the helpers that every call uses (the twin of `include/fusedwasi/p1/wasi_p1_core.h`).
+"""The state and the guest of WASI 0.1 and the helpers that every call uses (the twin of `include/fusedwasi/p1/wasi_p1_core.h`).
 
-No mutable state at the level of the module: everything that changes is in a `State`, which is the first argument of every call of `wasi_p1`. A call returns the
-errno of WASI (0 is success) and writes its results into the memory of the module; a trap is an exception (a hook may raise any), `Exit` and `Signal` are the
-ends of the program (`proc_exit`, `proc_raise`). The memory is any writable buffer (`bytearray`, `memoryview`) or a function that gives it (an engine whose memory moves
-when it grows).
+No mutable state at the level of the module. The `State` is the world of 0.1 (the descriptors, over the state of WASI 0.2); the `Guest` is the caller (the memory, the end of its call,
+the hook `signal`), and it is the first argument of every call of `wasi_p1`. A call returns the errno of WASI (0 is success) and writes its results into the memory of the module; a
+trap is an exception (a hook may raise any), `Exit` is the end of the program (`proc_exit`). `proc_raise` asks the hook `signal` of the guest. The memory is any writable buffer
+(`bytearray`, `memoryview`) or a function that gives it (an engine whose memory moves when it grows).
 """
 
 from __future__ import annotations
@@ -12,12 +12,13 @@ import errno as _errno
 import os
 import stat as _stat
 import struct
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..p2.wasi_p2_cli import FdInput, FdOutput, std
-from ..p2.wasi_p2_core import Host
+from ..p2.wasi_p2_core import State as P2State
 from ..p2.wasi_p2_io import StreamClosed, StreamFailed
 
 if TYPE_CHECKING:
@@ -87,7 +88,6 @@ T_ATIM, T_ATIM_NOW, T_MTIM, T_MTIM_NOW = 1, 2, 4, 8
 # the rights only a directory has: a program that asks for one of them along with the right to write (wasi-libc asks for all the rights there are) may mean a directory
 R_OF_DIRECTORY = sum(1 << n for n in (9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 26))
 
-END_NONE, END_EXIT, END_SIGNAL = range(3)
 
 K_NONE, K_STD, K_FILE, K_DIR = range(4)
 
@@ -192,14 +192,6 @@ class Exit(Exception):
         self.code = code
 
 
-class Signal(Exception):
-    """`proc_raise`: the program raised a signal that ends it."""
-
-    def __init__(self, number: int) -> None:
-        super().__init__(f"signal {number}")
-        self.number = number
-
-
 class WasiError(Exception):
     """What a hook raises to give the program an errno of WASI as it is (any other exception is a trap)."""
 
@@ -263,30 +255,27 @@ def _bytes(text: str | bytes) -> bytes:
 
 
 class State:
-    """The state of one instance of a program that imports `wasi_snapshot_preview1`."""
+    """The world of 0.1 (the twin of `fusedwasi_p1_state`): the descriptors with their rights, over the state of WASI 0.2 (`core`). Many `Guest`s may point to one state."""
 
     def __init__(
         self,
-        memory: object | Callable[[], object] | None = None,
         *,
-        core: Host | None = None,
+        core: P2State | None = None,
         preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
         files: Files | None = None,
         user: object = None,
     ) -> None:
-        self.memory = memory
-        self.user = user  # the host's own: the library never reads or writes it (the twin of `fusedwasi_p1_state.user`)
+        self.user = user  # the pointer of whoever made the state: the library never reads or writes it (the twin of `fusedwasi_p1_state.user`)
         self.core = (
-            core if core is not None else Host()
+            core if core is not None else P2State()
         )  # the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes
         if files is None:  # the backend of the system's files; a host without files gives `Files()`
             from .wasi_p1_files import SystemFiles
 
             files = SystemFiles()
         self.files = files
-        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook and not a state of the instance: `proc_exit` records the code in `core` (`exited`, `exit_code`), `proc_raise` the signal here (`finished`, `end_value`), and both raise `Exit` or `Signal`; the host reads them after the call and clears them before the next. A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
-        self.finished = END_NONE  # the last call ended by a signal: END_SIGNAL, or 0 (the host clears it before a call; proc_exit is in `core.exited`)
-        self.end_value = 0
+        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook and not a state of the world: it is on the `Guest`
+        # (`proc_exit` records the code there and raises `Exit`). A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
         self.entries: list[Entry] = []
         for stream in range(3):
             entry = Entry(K_STD)
@@ -308,6 +297,117 @@ class State:
             entry.rights = entry.inheriting = R_ALL if writable else R_ALL & ~R_MUTATING
             entry.preopen = _bytes(name)
             self.entries.append(entry)
+
+    # ---- descriptors --------------------------------------------------------------------------------------------------------
+
+    def new_fd(self) -> int:
+        """The lowest free number from 3 on (the table grows by one when there is none)."""
+        for number in range(3, len(self.entries)):
+            if self.entries[number].kind == K_NONE:
+                return number
+        self.entries.append(Entry())
+        return len(self.entries) - 1
+
+    def entry_of(self, fd: int) -> Entry | None:
+        return self.entries[fd] if 0 <= fd < len(self.entries) and self.entries[fd].kind != K_NONE else None
+
+    def entry_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
+        """The entry of a descriptor that has the right, or an errno of WASI."""
+        entry = self.entry_of(fd)
+        if entry is None:
+            return E_BADF, None
+        if entry.kind != K_STD and not entry.rights & right:
+            return E_NOTCAPABLE, entry
+        return E_SUCCESS, entry
+
+    def dir_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
+        """The directory of a call on a path: it has to be one and to have the right."""
+        number, entry = self.entry_with(fd, right)
+        if number or entry is None:
+            return number, entry
+        return (E_SUCCESS if entry.kind == K_DIR else E_NOTDIR), entry
+
+    def release(self, entry: Entry) -> int:
+        """Closes what the descriptor holds; 0, or the errno of the C library of the close of a file."""
+        number = 0
+        if entry.owns_fd:
+            number = self.files.close(entry)
+        entry.__init__()  # type: ignore[misc]
+        return number
+
+    def close_all(self) -> None:
+        for entry in self.entries:
+            self.release(entry)
+
+    def hooked(self, hook: Callable[..., Any] | None, *args: Any) -> tuple[int, Any]:
+        """Calls a hook: (errno of WASI, result)."""
+        assert hook is not None
+        try:
+            return E_SUCCESS, hook(*args)
+        except WasiError as caught:
+            return caught.number, None
+
+    # ---- the standard streams -----------------------------------------------------------------------------------------------
+
+    def std_stream(self, fd: int) -> Any:
+        """The standard stream `fd` (0, 1, 2) of the state of 0.2."""
+        return std(self.core, ("stdin", "stdout", "stderr")[fd])
+
+    def std_is_real(self, entry: Entry) -> bool:
+        """A standard stream that is the descriptor of the process (`FdInput`, `FdOutput`): it is what the system says it is."""
+        stream = self.core.std.get(("stdin", "stdout", "stderr")[entry.fd]) if entry.kind == K_STD else None
+        return isinstance(stream, (FdInput, FdOutput)) and stream.fd == entry.fd
+
+    def std_filetype(self, entry: Entry) -> int:
+        if self.std_is_real(entry):
+            try:
+                return filetype_of(os.fstat(entry.fd).st_mode)  # a pipe is unknown: not a terminal
+            except OSError:
+                pass
+        return FT_CHAR
+
+    @staticmethod
+    def stream_status(failure: StreamClosed | StreamFailed) -> int:
+        """A closed stream is a broken pipe; the errno of the system, when the stream knows it, as it is."""
+        if isinstance(failure, StreamClosed):
+            return E_PIPE
+        return errno_of(failure.errno) if failure.errno else E_IO
+
+    def clock_ns(self, ident: int) -> tuple[int, int]:
+        """(errno, nanoseconds) of the clock `ident` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread): the clock of `core`; one that cannot be read is NOTSUP."""
+        if ident > 3:
+            return E_INVAL, 0
+        try:
+            return E_SUCCESS, int(self.core.clock(ident))
+        except OSError:
+            return E_NOTSUP, 0
+
+
+class Guest:
+    """The caller of 0.1 (the twin of `fusedwasi_p1_guest`): the memory of the instance, `wait`, the hook `signal` and the end of its call, over a `State`.
+
+    One for each instance, made once; many guests may point to one state, and nothing is rebound per call. `memory` is any writable buffer (`bytearray`, `memoryview`) or a function
+    that gives it (an engine whose memory moves when it grows), or an object with `read`, `write` and `len`. The hooks are callables of no `Guest` argument: `wait()` is what a
+    blocking read does between two looks at the standard input; `signal(number) -> errno` is asked by `proc_raise` (it returns the errno of WASI for the call, or ends the program by
+    raising; without it the answer is NOTSUP and the program goes on).
+    """
+
+    def __init__(
+        self,
+        state: State,
+        memory: object | Callable[[], object] | None = None,
+        *,
+        wait: Callable[[], None] = lambda: time.sleep(0.001),
+        signal: Callable[[int], int] | None = None,
+        user: object = None,
+    ) -> None:
+        self.state = state
+        self.memory = memory
+        self.wait = wait
+        self.signal = signal
+        self.exited = False  # `proc_exit` was called: ... with `exit_code`; `Exit` is raised as well. The host clears it before the next call
+        self.exit_code = 0
+        self.user = user  # the pointer of whoever made the guest: the library never reads or writes it
 
     # ---- the memory of the instance (little-endian, as WebAssembly says) ----------------------------------------------------
 
@@ -375,64 +475,13 @@ class State:
     def read_bytes(self, ptr: int, length: int) -> bytes:
         return self.load(ptr, length)
 
-    # ---- descriptors --------------------------------------------------------------------------------------------------------
-
     def iov(self, iovs: int, index: int) -> tuple[int, int]:
         """(base, length) of the buffer `index` of an iovec that `iovs_valid` has looked at."""
         return self.get_u32(iovs + 8 * index) or 0, self.get_u32(iovs + 8 * index + 4) or 0
 
-    def new_fd(self) -> int:
-        """The lowest free number from 3 on (the table grows by one when there is none)."""
-        for number in range(3, len(self.entries)):
-            if self.entries[number].kind == K_NONE:
-                return number
-        self.entries.append(Entry())
-        return len(self.entries) - 1
-
-    def entry_of(self, fd: int) -> Entry | None:
-        return self.entries[fd] if 0 <= fd < len(self.entries) and self.entries[fd].kind != K_NONE else None
-
-    def entry_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
-        """The entry of a descriptor that has the right, or an errno of WASI."""
-        entry = self.entry_of(fd)
-        if entry is None:
-            return E_BADF, None
-        if entry.kind != K_STD and not entry.rights & right:
-            return E_NOTCAPABLE, entry
-        return E_SUCCESS, entry
-
-    def dir_with(self, fd: int, right: int) -> tuple[int, Entry | None]:
-        """The directory of a call on a path: it has to be one and to have the right."""
-        number, entry = self.entry_with(fd, right)
-        if number or entry is None:
-            return number, entry
-        return (E_SUCCESS if entry.kind == K_DIR else E_NOTDIR), entry
-
     def path_at(self, ptr: int, length: int) -> bytes | None:
         """The bytes of a path in the memory, or None if they are not all there."""
         return self.read_bytes(ptr, length) if self.in_memory(ptr, length) else None
-
-    def release(self, entry: Entry) -> int:
-        """Closes what the descriptor holds; 0, or the errno of the C library of the close of a file."""
-        number = 0
-        if entry.owns_fd:
-            number = self.files.close(entry)
-        entry.__init__()  # type: ignore[misc]
-        return number
-
-    def close_all(self) -> None:
-        for entry in self.entries:
-            self.release(entry)
-
-    def hooked(self, hook: Callable[..., Any] | None, *args: Any) -> tuple[int, Any]:
-        """Calls a hook: (errno of WASI, result)."""
-        assert hook is not None
-        try:
-            return E_SUCCESS, hook(*args)
-        except WasiError as caught:
-            return caught.number, None
-
-    # ---- the standard streams -----------------------------------------------------------------------------------------------
 
     def iovs_valid(self, iovs: int, count: int) -> int:
         """All the buffers of a call are looked at before any of them is used: a bad one in the middle must not leave the data before it already written."""
@@ -445,35 +494,11 @@ class State:
                 return E_FAULT
         return E_SUCCESS
 
-    def std_stream(self, fd: int) -> Any:
-        """The standard stream `fd` (0, 1, 2) of the state of 0.2."""
-        return std(self.core, ("stdin", "stdout", "stderr")[fd])
-
-    def std_is_real(self, entry: Entry) -> bool:
-        """A standard stream that is the descriptor of the process (`FdInput`, `FdOutput`): it is what the system says it is."""
-        stream = self.core.std.get(("stdin", "stdout", "stderr")[entry.fd]) if entry.kind == K_STD else None
-        return isinstance(stream, (FdInput, FdOutput)) and stream.fd == entry.fd
-
-    def std_filetype(self, entry: Entry) -> int:
-        if self.std_is_real(entry):
-            try:
-                return filetype_of(os.fstat(entry.fd).st_mode)  # a pipe is unknown: not a terminal
-            except OSError:
-                pass
-        return FT_CHAR
-
-    @staticmethod
-    def stream_status(failure: StreamClosed | StreamFailed) -> int:
-        """A closed stream is a broken pipe; the errno of the system, when the stream knows it, as it is."""
-        if isinstance(failure, StreamClosed):
-            return E_PIPE
-        return errno_of(failure.errno) if failure.errno else E_IO
-
     def write_std(self, fd: int, iovs: int, count: int, nwritten: int) -> int:
         bad = self.iovs_valid(iovs, count)
         if bad:
             return bad
-        stream = self.std_stream(fd)
+        stream = self.state.std_stream(fd)
         total = 0
         for i in range(count):
             base, length = self.get_u32(iovs + 8 * i), self.get_u32(iovs + 8 * i + 4)
@@ -487,7 +512,7 @@ class State:
                 StreamFailed,
             ) as failure:  # what was written is reported (a short write); the error comes with the next call
                 if total == 0:
-                    return self.stream_status(failure)
+                    return self.state.stream_status(failure)
                 break
             total += length
         return E_SUCCESS if self.put_u32(nwritten, total) else E_FAULT
@@ -505,7 +530,7 @@ class State:
             return E_FAULT
         data = b""
         if length:
-            stream = self.std_stream(0)
+            stream = self.state.std_stream(0)
             while (
                 True
             ):  # a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end
@@ -515,22 +540,13 @@ class State:
                     data = b""
                     break
                 except StreamFailed as failure:
-                    return self.stream_status(failure)
+                    return self.state.stream_status(failure)
                 if len(data) > length:
                     return E_IO
                 if data:
                     break
-                self.core.wait()
+                self.wait()
             self.put_bytes(base, data)
         return E_SUCCESS if self.put_u32(nread, len(data)) else E_FAULT
 
     # ---- clocks and random bytes --------------------------------------------------------------------------------------------
-
-    def clock_ns(self, ident: int) -> tuple[int, int]:
-        """(errno, nanoseconds) of the clock `ident` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread): the clock of `core`; one that cannot be read is NOTSUP."""
-        if ident > 3:
-            return E_INVAL, 0
-        try:
-            return E_SUCCESS, int(self.core.clock(ident))
-        except OSError:
-            return E_NOTSUP, 0

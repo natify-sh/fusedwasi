@@ -7,41 +7,41 @@ through the pointer that is the last argument, in memory of the component (`cabi
 
 from __future__ import annotations
 
-from .wasi_p2_core import Host, Trap, alloc, store_bytes, store_u32, store_u64
+from .wasi_p2_core import Guest, alloc, store_bytes, store_u32, store_u64, trap
 
 MAX_BYTES = 1 << 26
 
 
-def _bytes(host: Host, comp: int, insecure: bool, length: int, retptr: int) -> None:
+def _bytes(guest: Guest, comp: int, insecure: bool, length: int, retptr: int) -> None:
     if length > MAX_BYTES:
-        raise Trap(f"{length} random bytes requested")
-    data = (host.insecure_random_bytes if insecure else host.random_bytes)(length)
-    ptr = alloc(host, comp, 1, length)
-    store_bytes(host, comp, ptr, data)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, length)
+        trap(guest, f"{length} random bytes requested")
+    data = (guest.state.insecure_random_bytes if insecure else guest.state.random_bytes)(length)
+    ptr = alloc(guest, comp, 1, length)
+    store_bytes(guest, comp, ptr, data)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, length)
 
 
-def _u64(host: Host, insecure: bool) -> int:
-    return int.from_bytes((host.insecure_random_bytes if insecure else host.random_bytes)(8), "little")
+def _u64(guest: Guest, insecure: bool) -> int:
+    return int.from_bytes((guest.state.insecure_random_bytes if insecure else guest.state.random_bytes)(8), "little")
 
 
-def wasi_random_random_get_random_bytes(host: Host, comp: int, len: int, retptr: int) -> None:
-    _bytes(host, comp, False, len, retptr)
+def wasi_random_random_get_random_bytes(guest: Guest, comp: int, len: int, retptr: int) -> None:
+    _bytes(guest, comp, False, len, retptr)
 
 
-def wasi_random_random_get_random_u64(host: Host) -> int:
-    return _u64(host, False)
+def wasi_random_random_get_random_u64(guest: Guest) -> int:
+    return _u64(guest, False)
 
 
-def wasi_random_insecure_get_insecure_random_bytes(host: Host, comp: int, len: int, retptr: int) -> None:
-    _bytes(host, comp, True, len, retptr)
+def wasi_random_insecure_get_insecure_random_bytes(guest: Guest, comp: int, len: int, retptr: int) -> None:
+    _bytes(guest, comp, True, len, retptr)
 
 
-def wasi_random_insecure_get_insecure_random_u64(host: Host) -> int:
-    return _u64(host, True)
+def wasi_random_insecure_get_insecure_random_u64(guest: Guest) -> int:
+    return _u64(guest, True)
 
 
-def wasi_random_insecure_seed_insecure_seed(host: Host, comp: int, retptr: int) -> None:
-    store_u64(host, comp, retptr, _u64(host, True))
-    store_u64(host, comp, retptr + 8, _u64(host, True))
+def wasi_random_insecure_seed_insecure_seed(guest: Guest, comp: int, retptr: int) -> None:
+    store_u64(guest, comp, retptr, _u64(guest, True))
+    store_u64(guest, comp, retptr + 8, _u64(guest, True))

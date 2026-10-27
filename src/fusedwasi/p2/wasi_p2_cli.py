@@ -3,9 +3,9 @@
 - `environment`: `Host.args`, `Host.env`, `Host.initial_cwd`; lists and strings are written into the memory of the component (`cabi_realloc`), the list first, then the strings
   in order. `get-environment` is a `list<tuple<string, string>>` (16 bytes an element), `get-arguments` a `list<string>` (8 bytes), `initial-cwd` an `option<string>` (tag at 0,
   the string at 4).
-- `exit`: raises `Exit(code)`; `exit(status: result)` is 0 for ok and 1 for error, `exit-with-code` takes the code (the low 8 bits).
+- `exit`: records `exited` and `exit_code` of the guest and raises `Exit(code)`, unless the guest has the hook `exit`, which replaces that; `exit(status: result)` is 0 for ok and 1 for error, `exit-with-code` takes the code (the low 8 bits).
 - `stdin`, `stdout`, `stderr`: a new handle on every call, to the same stream: the one the caller gave the `Host`, or by default **the Python streams of the moment**
-  (`sys.stdin.buffer` and so on, looked at when used, so that a capture of the output sees what the guest writes; as in the WASI 0.1 host of wasmext). `FdInput` and `FdOutput` write
+  (`sys.stdin.buffer` and so on, looked at when used, so that a capture of the output sees what the guest writes). `FdInput` and `FdOutput` write
   to a descriptor. A standard stream is not closed when a handle to it is dropped.
 - the terminals: `get-terminal-*` is `some(handle)` for the bits in `Host.terminals` (`TERMINAL_STDIN`, `TERMINAL_STDOUT`, `TERMINAL_STDERR`) and `none` otherwise (the default); the resources have no methods.
 """
@@ -26,7 +26,8 @@ from .wasi_p2_core import (
     TERMINAL_STDIN,
     TERMINAL_STDOUT,
     Exit,
-    Host,
+    Guest,
+    State,
     alloc,
     store_bytes,
     store_u8,
@@ -127,108 +128,115 @@ def _errno_of(exc: OSError | ValueError) -> int:
     return (exc.errno if isinstance(exc, OSError) else None) or errno.EBADF
 
 
-def std(host: Host, name: str) -> object:
-    if name not in host.std:
-        host.std[name] = SysInput() if name == "stdin" else SysOutput(name)
-    return host.std[name]
+def std(state: State, name: str) -> object:
+    if name not in state.std:
+        state.std[name] = SysInput() if name == "stdin" else SysOutput(name)
+    return state.std[name]
 
 
-def _string(host: Host, comp: int, text: str) -> tuple[int, int]:
+def _string(guest: Guest, comp: int, text: str) -> tuple[int, int]:
     data = text.encode()
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
     return ptr, len(data)
 
 
 # environment
 
 
-def wasi_cli_environment_get_environment(host: Host, comp: int, retptr: int) -> None:
-    items = host.env
-    ptr = alloc(host, comp, 4, 16 * len(items))
+def wasi_cli_environment_get_environment(guest: Guest, comp: int, retptr: int) -> None:
+    items = guest.state.env
+    ptr = alloc(guest, comp, 4, 16 * len(items))
     for i, (name, value) in enumerate(items):
         for k, text in enumerate((name, value)):
-            sptr, slen = _string(host, comp, text)
-            store_u32(host, comp, ptr + 16 * i + 8 * k, sptr)
-            store_u32(host, comp, ptr + 16 * i + 8 * k + 4, slen)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(items))
+            sptr, slen = _string(guest, comp, text)
+            store_u32(guest, comp, ptr + 16 * i + 8 * k, sptr)
+            store_u32(guest, comp, ptr + 16 * i + 8 * k + 4, slen)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(items))
 
 
-def wasi_cli_environment_get_arguments(host: Host, comp: int, retptr: int) -> None:
-    ptr = alloc(host, comp, 4, 8 * len(host.args))
-    for i, text in enumerate(host.args):
-        sptr, slen = _string(host, comp, text)
-        store_u32(host, comp, ptr + 8 * i, sptr)
-        store_u32(host, comp, ptr + 8 * i + 4, slen)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(host.args))
+def wasi_cli_environment_get_arguments(guest: Guest, comp: int, retptr: int) -> None:
+    ptr = alloc(guest, comp, 4, 8 * len(guest.state.args))
+    for i, text in enumerate(guest.state.args):
+        sptr, slen = _string(guest, comp, text)
+        store_u32(guest, comp, ptr + 8 * i, sptr)
+        store_u32(guest, comp, ptr + 8 * i + 4, slen)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(guest.state.args))
 
 
-def wasi_cli_environment_initial_cwd(host: Host, comp: int, retptr: int) -> None:
-    if host.initial_cwd is None:
-        store_u8(host, comp, retptr, 0)
+def wasi_cli_environment_initial_cwd(guest: Guest, comp: int, retptr: int) -> None:
+    if guest.state.initial_cwd is None:
+        store_u8(guest, comp, retptr, 0)
         return
-    sptr, slen = _string(host, comp, host.initial_cwd)
-    store_u8(host, comp, retptr, 1)
-    store_u32(host, comp, retptr + 4, sptr)
-    store_u32(host, comp, retptr + 8, slen)
+    sptr, slen = _string(guest, comp, guest.state.initial_cwd)
+    store_u8(guest, comp, retptr, 1)
+    store_u32(guest, comp, retptr + 4, sptr)
+    store_u32(guest, comp, retptr + 8, slen)
 
 
 # exit
 
 
-def wasi_cli_exit_exit(host: Host, status: int) -> None:
-    host.exited, host.exit_code = True, 0 if status == 0 else 1
-    raise Exit(host.exit_code)
+def _exit(guest: Guest, code: int) -> None:
+    """The end of the call: the hook `guest.exit`, if there is one, replaces the default, which records `exited` and `exit_code` of the guest and raises `Exit`."""
+    if guest.exit is not None:
+        guest.exit(code)
+        return
+    guest.exited, guest.exit_code = True, code
+    raise Exit(code)
 
 
-def wasi_cli_exit_exit_with_code(host: Host, status_code: int) -> None:
-    host.exited, host.exit_code = True, status_code & 0xFF
-    raise Exit(host.exit_code)
+def wasi_cli_exit_exit(guest: Guest, status: int) -> None:
+    _exit(guest, 0 if status == 0 else 1)
+
+
+def wasi_cli_exit_exit_with_code(guest: Guest, status_code: int) -> None:
+    _exit(guest, status_code & 0xFF)
 
 
 # the standard streams
 
 
-def wasi_cli_stdin_get_stdin(host: Host) -> int:
-    return table_new(host, KIND_INPUT_STREAM, std(host, "stdin"))
+def wasi_cli_stdin_get_stdin(guest: Guest) -> int:
+    return table_new(guest, KIND_INPUT_STREAM, std(guest.state, "stdin"))
 
 
-def wasi_cli_stdout_get_stdout(host: Host) -> int:
-    return table_new(host, KIND_OUTPUT_STREAM, std(host, "stdout"))
+def wasi_cli_stdout_get_stdout(guest: Guest) -> int:
+    return table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stdout"))
 
 
-def wasi_cli_stderr_get_stderr(host: Host) -> int:
-    return table_new(host, KIND_OUTPUT_STREAM, std(host, "stderr"))
+def wasi_cli_stderr_get_stderr(guest: Guest) -> int:
+    return table_new(guest, KIND_OUTPUT_STREAM, std(guest.state, "stderr"))
 
 
 # the terminals
 
 
-def _terminal(host: Host, comp: int, retptr: int, bit: int, kind: int) -> None:
-    if host.terminals & bit:
-        store_u8(host, comp, retptr, 1)
-        store_u32(host, comp, retptr + 4, table_new(host, kind, bit))
+def _terminal(guest: Guest, comp: int, retptr: int, bit: int, kind: int) -> None:
+    if guest.state.terminals & bit:
+        store_u8(guest, comp, retptr, 1)
+        store_u32(guest, comp, retptr + 4, table_new(guest, kind, bit))
     else:
-        store_u8(host, comp, retptr, 0)
+        store_u8(guest, comp, retptr, 0)
 
 
-def wasi_cli_terminal_stdin_get_terminal_stdin(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, TERMINAL_STDIN, KIND_TERMINAL_INPUT)
+def wasi_cli_terminal_stdin_get_terminal_stdin(guest: Guest, comp: int, retptr: int) -> None:
+    _terminal(guest, comp, retptr, TERMINAL_STDIN, KIND_TERMINAL_INPUT)
 
 
-def wasi_cli_terminal_stdout_get_terminal_stdout(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, TERMINAL_STDOUT, KIND_TERMINAL_OUTPUT)
+def wasi_cli_terminal_stdout_get_terminal_stdout(guest: Guest, comp: int, retptr: int) -> None:
+    _terminal(guest, comp, retptr, TERMINAL_STDOUT, KIND_TERMINAL_OUTPUT)
 
 
-def wasi_cli_terminal_stderr_get_terminal_stderr(host: Host, comp: int, retptr: int) -> None:
-    _terminal(host, comp, retptr, TERMINAL_STDERR, KIND_TERMINAL_OUTPUT)
+def wasi_cli_terminal_stderr_get_terminal_stderr(guest: Guest, comp: int, retptr: int) -> None:
+    _terminal(guest, comp, retptr, TERMINAL_STDERR, KIND_TERMINAL_OUTPUT)
 
 
-def wasi_cli_terminal_input_terminal_input_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_TERMINAL_INPUT)
+def wasi_cli_terminal_input_terminal_input_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_TERMINAL_INPUT)
 
 
-def wasi_cli_terminal_output_terminal_output_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_TERMINAL_OUTPUT)
+def wasi_cli_terminal_output_terminal_output_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_TERMINAL_OUTPUT)

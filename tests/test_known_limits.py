@@ -15,10 +15,10 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_sockets as sk
-from fusedwasi.p2.wasi_p2_core import Host
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
@@ -53,7 +53,7 @@ def test_the_c_and_the_python_have_a_function_for_the_same_imports() -> None:
 
 def test_wasi_p1_has_the_calls_of_the_snapshot_and_four_sockets_that_answer_notsock() -> None:
     from fusedwasi.p1 import wasi_p1
-    from fusedwasi.p1.wasi_p1_core import E_BADF, E_NOTSOCK, State
+    from fusedwasi.p1.wasi_p1_core import E_BADF, E_NOTSOCK, Guest, State
 
     names = {
         k
@@ -61,7 +61,7 @@ def test_wasi_p1_has_the_calls_of_the_snapshot_and_four_sockets_that_answer_nots
         if inspect.isfunction(v) and not k.startswith("_") and v.__module__ == wasi_p1.__name__
     }
     assert {"sock_accept", "sock_recv", "sock_send", "sock_shutdown", "proc_exit", "fd_write", "path_open"} <= names
-    state = State(bytearray(64))
+    state = Guest(State(), bytearray(64))
     assert wasi_p1.sock_shutdown(state, 1, 0) == E_NOTSOCK  # a descriptor that exists is not a socket
     assert wasi_p1.sock_shutdown(state, 99, 0) == E_BADF
 
@@ -73,7 +73,7 @@ def test_ipv6_sockets_follow_the_system() -> None:
     """The host makes the socket the system makes: where the system has no IPv6 the guest gets `not-supported`; where it has, a socket of the family. (Only the checks of
     addresses are tested beyond this: the loopback of IPv6 is not exercised, a machine may have none.)"""
     memory = bytearray(256)
-    host = Host([memory], network=True)
+    host = guest_of([memory], network=True)
     sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, 100)
     try:
         socket.socket(socket.AF_INET6, socket.SOCK_STREAM).close()

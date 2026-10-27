@@ -21,9 +21,8 @@ from .wasi_p2_core import (
     KIND_INPUT_STREAM,
     KIND_OUTPUT_STREAM,
     KIND_POLLABLE,
-    Host,
+    Guest,
     Pollable,
-    Trap,
     alloc,
     load_bytes,
     load_u32,
@@ -34,6 +33,7 @@ from .wasi_p2_core import (
     table_drop,
     table_get,
     table_new,
+    trap,
 )
 
 READ_CAP = 1 << 16  # the most a call of `read` gives back
@@ -131,7 +131,7 @@ class StreamPollable(Pollable):
     def __init__(self, stream: InputStream | OutputStream) -> None:
         self.stream = stream
 
-    def ready(self, host: Host) -> bool:
+    def ready(self, guest: Guest) -> bool:
         return bool(getattr(self.stream, "dead", False)) or self.stream.ready()  # a closed stream is always ready
 
 
@@ -149,236 +149,236 @@ class Error:
 # making resources for the guest
 
 
-def error_new(host: Host, message: str, code: int | None = None, network_code: int | None = None) -> int:
-    return table_new(host, KIND_ERROR, Error(message, code, network_code))
+def error_new(guest: Guest, message: str, code: int | None = None, network_code: int | None = None) -> int:
+    return table_new(guest, KIND_ERROR, Error(message, code, network_code))
 
 
-def input_stream_new(host: Host, stream: InputStream) -> int:
-    return table_new(host, KIND_INPUT_STREAM, stream)
+def input_stream_new(guest: Guest, stream: InputStream) -> int:
+    return table_new(guest, KIND_INPUT_STREAM, stream)
 
 
-def output_stream_new(host: Host, stream: OutputStream) -> int:
-    return table_new(host, KIND_OUTPUT_STREAM, stream)
+def output_stream_new(guest: Guest, stream: OutputStream) -> int:
+    return table_new(guest, KIND_OUTPUT_STREAM, stream)
 
 
 # error
 
 
-def wasi_io_error_error_to_debug_string(host: Host, comp: int, self: int, retptr: int) -> None:
-    error: Error = table_get(host, self, KIND_ERROR)  # type: ignore[assignment]
+def wasi_io_error_error_to_debug_string(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    error: Error = table_get(guest, self, KIND_ERROR)  # type: ignore[assignment]
     data = error.message.encode()
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(data))
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(data))
 
 
-def wasi_io_error_error_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_ERROR)
+def wasi_io_error_error_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_ERROR)
 
 
 # poll
 
 
-def _pollable(host: Host, handle: int) -> Pollable:
-    return table_get(host, handle, KIND_POLLABLE)  # type: ignore[return-value]
+def _pollable(guest: Guest, handle: int) -> Pollable:
+    return table_get(guest, handle, KIND_POLLABLE)  # type: ignore[return-value]
 
 
-def wasi_io_poll_pollable_ready(host: Host, self: int) -> int:
-    return int(_pollable(host, self).ready(host))
+def wasi_io_poll_pollable_ready(guest: Guest, self: int) -> int:
+    return int(_pollable(guest, self).ready(guest))
 
 
-def wasi_io_poll_pollable_block(host: Host, self: int) -> None:
-    pollable = _pollable(host, self)
-    while not pollable.ready(host):
-        host.wait()
+def wasi_io_poll_pollable_block(guest: Guest, self: int) -> None:
+    pollable = _pollable(guest, self)
+    while not pollable.ready(guest):
+        guest.wait()
 
 
-def wasi_io_poll_pollable_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_POLLABLE)
+def wasi_io_poll_pollable_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_POLLABLE)
 
 
-def wasi_io_poll_poll(host: Host, comp: int, in_ptr: int, in_len: int, retptr: int) -> None:
+def wasi_io_poll_poll(guest: Guest, comp: int, in_ptr: int, in_len: int, retptr: int) -> None:
     """Waits until one of the pollables is ready and gives the indexes of all that are (a list of u32). An empty list is a trap."""
     if in_len == 0:
-        raise Trap("poll of an empty list")
-    pollables = [_pollable(host, load_u32(host, comp, in_ptr + 4 * i)) for i in range(in_len)]
-    while not (ready := [i for i, p in enumerate(pollables) if p.ready(host)]):
-        host.wait()
-    ptr = alloc(host, comp, 4, 4 * len(ready))
+        trap(guest, "poll of an empty list")
+    pollables = [_pollable(guest, load_u32(guest, comp, in_ptr + 4 * i)) for i in range(in_len)]
+    while not (ready := [i for i, p in enumerate(pollables) if p.ready(guest)]):
+        guest.wait()
+    ptr = alloc(guest, comp, 4, 4 * len(ready))
     for k, i in enumerate(ready):
-        store_u32(host, comp, ptr + 4 * k, i)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(ready))
+        store_u32(guest, comp, ptr + 4 * k, i)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(ready))
 
 
 # streams
 
 
-def _input(host: Host, handle: int) -> InputStream:
-    return table_get(host, handle, KIND_INPUT_STREAM)  # type: ignore[return-value]
+def _input(guest: Guest, handle: int) -> InputStream:
+    return table_get(guest, handle, KIND_INPUT_STREAM)  # type: ignore[return-value]
 
 
-def _output(host: Host, handle: int) -> OutputStream:
-    return table_get(host, handle, KIND_OUTPUT_STREAM)  # type: ignore[return-value]
+def _output(guest: Guest, handle: int) -> OutputStream:
+    return table_get(guest, handle, KIND_OUTPUT_STREAM)  # type: ignore[return-value]
 
 
-def _ok(host: Host, comp: int, retptr: int) -> None:
-    store_u8(host, comp, retptr, 0)
+def _ok(guest: Guest, comp: int, retptr: int) -> None:
+    store_u8(guest, comp, retptr, 0)
 
 
-def _err(host: Host, comp: int, retptr: int, error_at: int, exc: Exception) -> None:
+def _err(guest: Guest, comp: int, retptr: int, error_at: int, exc: Exception) -> None:
     """Writes `err(stream-error)`: the tag of the result at `retptr`, the variant at `error_at`."""
-    store_u8(host, comp, retptr, 1)
+    store_u8(guest, comp, retptr, 1)
     if isinstance(exc, StreamFailed):
-        store_u8(host, comp, error_at, 0)
-        store_u32(host, comp, error_at + 4, error_new(host, str(exc), exc.code, exc.network_code))
+        store_u8(guest, comp, error_at, 0)
+        store_u32(guest, comp, error_at + 4, error_new(guest, str(exc), exc.code, exc.network_code))
     else:
-        store_u8(host, comp, error_at, 1)
+        store_u8(guest, comp, error_at, 1)
 
 
-def _read(host: Host, stream: InputStream, n: int, block: bool) -> bytes:
+def _read(guest: Guest, stream: InputStream, n: int, block: bool) -> bytes:
     """Up to `n` bytes; when `block`, waits for at least one (a read of 0 bytes is empty at once)."""
     while True:
         data = _call(stream, stream.read, min(n, READ_CAP))
         if data or not block or n == 0:
             return data
-        host.wait()
+        guest.wait()
 
 
-def wasi_io_streams_input_stream_read(host: Host, comp: int, self: int, len: int, retptr: int) -> None:
-    _read_list(host, comp, self, len, retptr, False)
+def wasi_io_streams_input_stream_read(guest: Guest, comp: int, self: int, len: int, retptr: int) -> None:
+    _read_list(guest, comp, self, len, retptr, False)
 
 
-def wasi_io_streams_input_stream_blocking_read(host: Host, comp: int, self: int, len: int, retptr: int) -> None:
-    _read_list(host, comp, self, len, retptr, True)
+def wasi_io_streams_input_stream_blocking_read(guest: Guest, comp: int, self: int, len: int, retptr: int) -> None:
+    _read_list(guest, comp, self, len, retptr, True)
 
 
-def _read_list(host: Host, comp: int, self: int, n: int, retptr: int, block: bool) -> None:
-    stream = _input(host, self)
+def _read_list(guest: Guest, comp: int, self: int, n: int, retptr: int, block: bool) -> None:
+    stream = _input(guest, self)
     try:
-        data = _read(host, stream, n, block)
+        data = _read(guest, stream, n, block)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 4, exc)
+        _err(guest, comp, retptr, retptr + 4, exc)
         return
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, ptr)
-    store_u32(host, comp, retptr + 8, len(data))
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, ptr)
+    store_u32(guest, comp, retptr + 8, len(data))
 
 
-def _skip(host: Host, comp: int, self: int, n: int, retptr: int, block: bool) -> None:
-    stream = _input(host, self)
+def _skip(guest: Guest, comp: int, self: int, n: int, retptr: int, block: bool) -> None:
+    stream = _input(guest, self)
     try:
-        done = len(_read(host, stream, n, block))
+        done = len(_read(guest, stream, n, block))
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 8, exc)
+        _err(guest, comp, retptr, retptr + 8, exc)
         return
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, done)
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, done)
 
 
-def wasi_io_streams_input_stream_skip(host: Host, comp: int, self: int, len: int, retptr: int) -> None:
-    _skip(host, comp, self, len, retptr, False)
+def wasi_io_streams_input_stream_skip(guest: Guest, comp: int, self: int, len: int, retptr: int) -> None:
+    _skip(guest, comp, self, len, retptr, False)
 
 
-def wasi_io_streams_input_stream_blocking_skip(host: Host, comp: int, self: int, len: int, retptr: int) -> None:
-    _skip(host, comp, self, len, retptr, True)
+def wasi_io_streams_input_stream_blocking_skip(guest: Guest, comp: int, self: int, len: int, retptr: int) -> None:
+    _skip(guest, comp, self, len, retptr, True)
 
 
-def wasi_io_streams_input_stream_subscribe(host: Host, self: int) -> int:
-    return table_new(host, KIND_POLLABLE, StreamPollable(_input(host, self)))
+def wasi_io_streams_input_stream_subscribe(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_POLLABLE, StreamPollable(_input(guest, self)))
 
 
-def wasi_io_streams_input_stream_drop(host: Host, handle: int) -> None:
-    stream = _input(host, handle)
-    table_drop(host, handle, KIND_INPUT_STREAM)
-    if not any(stream is std for std in host.std.values()):  # a standard stream outlives the handles to it
+def wasi_io_streams_input_stream_drop(guest: Guest, handle: int) -> None:
+    stream = _input(guest, handle)
+    table_drop(guest, handle, KIND_INPUT_STREAM)
+    if not any(stream is std for std in guest.state.std.values()):  # a standard stream outlives the handles to it
         stream.close()
 
 
-def wasi_io_streams_output_stream_check_write(host: Host, comp: int, self: int, retptr: int) -> None:
-    stream = _output(host, self)
+def wasi_io_streams_output_stream_check_write(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    stream = _output(guest, self)
     try:
         budget = _call(stream, stream.check_write)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 8, exc)
+        _err(guest, comp, retptr, retptr + 8, exc)
         return
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, budget)
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, budget)
 
 
-def _write(host: Host, comp: int, stream: OutputStream, data: bytes, retptr: int) -> bool:
+def _write(guest: Guest, comp: int, stream: OutputStream, data: bytes, retptr: int) -> bool:
     """One write, limited by the budget (a bigger one traps); False if it wrote an error."""
     try:
         if len(data) > _call(stream, stream.check_write):
-            raise Trap("write of more than check-write allows")
+            trap(guest, "write of more than check-write allows")
         _call(stream, stream.write, data)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 4, exc)
+        _err(guest, comp, retptr, retptr + 4, exc)
         return False
     return True
 
 
-def wasi_io_streams_output_stream_write(host: Host, comp: int, self: int, ptr: int, len: int, retptr: int) -> None:
-    stream = _output(host, self)
-    if _write(host, comp, stream, load_bytes(host, comp, ptr, len), retptr):
-        _ok(host, comp, retptr)
+def wasi_io_streams_output_stream_write(guest: Guest, comp: int, self: int, ptr: int, len: int, retptr: int) -> None:
+    stream = _output(guest, self)
+    if _write(guest, comp, stream, load_bytes(guest, comp, ptr, len), retptr):
+        _ok(guest, comp, retptr)
 
 
-def _write_all_and_flush(host: Host, comp: int, stream: OutputStream, data: bytes, retptr: int) -> None:
+def _write_all_and_flush(guest: Guest, comp: int, stream: OutputStream, data: bytes, retptr: int) -> None:
     """Writes it all in pieces as the budget allows, waiting when it is 0, then flushes."""
     try:
         view = memoryview(data)
         while len(view):
             budget = _call(stream, stream.check_write)
             if budget == 0:
-                host.wait()
+                guest.wait()
                 continue
             _call(stream, stream.write, bytes(view[:budget]))
             view = view[budget:]
         _call(stream, stream.flush)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 4, exc)
+        _err(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
+    _ok(guest, comp, retptr)
 
 
 def wasi_io_streams_output_stream_blocking_write_and_flush(
-    host: Host, comp: int, self: int, ptr: int, len: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, len: int, retptr: int
 ) -> None:
-    _write_all_and_flush(host, comp, _output(host, self), load_bytes(host, comp, ptr, len), retptr)
+    _write_all_and_flush(guest, comp, _output(guest, self), load_bytes(guest, comp, ptr, len), retptr)
 
 
-def wasi_io_streams_output_stream_write_zeroes(host: Host, comp: int, self: int, len: int, retptr: int) -> None:
-    stream = _output(host, self)
-    if _write(host, comp, stream, bytes(len), retptr):
-        _ok(host, comp, retptr)
+def wasi_io_streams_output_stream_write_zeroes(guest: Guest, comp: int, self: int, len: int, retptr: int) -> None:
+    stream = _output(guest, self)
+    if _write(guest, comp, stream, bytes(len), retptr):
+        _ok(guest, comp, retptr)
 
 
 def wasi_io_streams_output_stream_blocking_write_zeroes_and_flush(
-    host: Host, comp: int, self: int, len: int, retptr: int
+    guest: Guest, comp: int, self: int, len: int, retptr: int
 ) -> None:
-    _write_all_and_flush(host, comp, _output(host, self), bytes(len), retptr)
+    _write_all_and_flush(guest, comp, _output(guest, self), bytes(len), retptr)
 
 
-def wasi_io_streams_output_stream_flush(host: Host, comp: int, self: int, retptr: int) -> None:
-    stream = _output(host, self)
+def wasi_io_streams_output_stream_flush(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    stream = _output(guest, self)
     try:
         _call(stream, stream.flush)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 4, exc)
+        _err(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
+    _ok(guest, comp, retptr)
 
 
-def wasi_io_streams_output_stream_blocking_flush(host: Host, comp: int, self: int, retptr: int) -> None:
-    wasi_io_streams_output_stream_flush(host, comp, self, retptr)
+def wasi_io_streams_output_stream_blocking_flush(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    wasi_io_streams_output_stream_flush(guest, comp, self, retptr)
 
 
-def _splice(host: Host, comp: int, self: int, src: int, n: int, retptr: int, block: bool) -> None:
-    out, source = _output(host, self), _input(host, src)
+def _splice(guest: Guest, comp: int, self: int, src: int, n: int, retptr: int, block: bool) -> None:
+    out, source = _output(guest, self), _input(guest, src)
     try:
         while True:
             budget = _call(out, out.check_write)
@@ -386,34 +386,34 @@ def _splice(host: Host, comp: int, self: int, src: int, n: int, retptr: int, blo
                 if not block:
                     data = b""
                     break
-                host.wait()
+                guest.wait()
                 continue
-            data = _read(host, source, min(n, budget), block)
+            data = _read(guest, source, min(n, budget), block)
             break
         _call(out, out.write, data)
     except (StreamClosed, StreamFailed) as exc:
-        _err(host, comp, retptr, retptr + 8, exc)
+        _err(guest, comp, retptr, retptr + 8, exc)
         return
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, len(data))
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, len(data))
 
 
-def wasi_io_streams_output_stream_splice(host: Host, comp: int, self: int, src: int, len: int, retptr: int) -> None:
-    _splice(host, comp, self, src, len, retptr, False)
+def wasi_io_streams_output_stream_splice(guest: Guest, comp: int, self: int, src: int, len: int, retptr: int) -> None:
+    _splice(guest, comp, self, src, len, retptr, False)
 
 
 def wasi_io_streams_output_stream_blocking_splice(
-    host: Host, comp: int, self: int, src: int, len: int, retptr: int
+    guest: Guest, comp: int, self: int, src: int, len: int, retptr: int
 ) -> None:
-    _splice(host, comp, self, src, len, retptr, True)
+    _splice(guest, comp, self, src, len, retptr, True)
 
 
-def wasi_io_streams_output_stream_subscribe(host: Host, self: int) -> int:
-    return table_new(host, KIND_POLLABLE, StreamPollable(_output(host, self)))
+def wasi_io_streams_output_stream_subscribe(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_POLLABLE, StreamPollable(_output(guest, self)))
 
 
-def wasi_io_streams_output_stream_drop(host: Host, handle: int) -> None:
-    stream = _output(host, handle)
-    table_drop(host, handle, KIND_OUTPUT_STREAM)
-    if not any(stream is std for std in host.std.values()):
+def wasi_io_streams_output_stream_drop(guest: Guest, handle: int) -> None:
+    stream = _output(guest, handle)
+    table_drop(guest, handle, KIND_OUTPUT_STREAM)
+    if not any(stream is std for std in guest.state.std.values()):
         stream.close()

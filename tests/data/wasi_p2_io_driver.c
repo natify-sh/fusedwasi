@@ -2,9 +2,9 @@
 #include <inttypes.h>
 #include "wasi_p2_io.h"
 
-static void trap(fusedwasi_p2_state *s, const char *m) { (void)s; printf("TRAP %s\n", m); exit(0); }
+static void trap(fusedwasi_p2_guest *s, const char *m) { (void)s; printf("TRAP %s\n", m); exit(0); }
 
-static uint32_t bump(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
+static uint32_t bump(fusedwasi_p2_guest *s, uint32_t comp, uint32_t old_ptr, uint32_t old_size, uint32_t align, uint32_t new_size) {
     uint32_t *next = (uint32_t *)s->user;
     (void)comp, (void)old_ptr, (void)old_size;
     uint32_t ptr = (*next + align - 1) / align * align;
@@ -15,19 +15,19 @@ static uint32_t bump(fusedwasi_p2_state *s, uint32_t comp, uint32_t old_ptr, uin
 static uint8_t memory[256];
 
 /* streams that fail: the first call is an error with a message, and then the stream is closed (the rule of stream-error) */
-static int failing_read(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream, uint8_t *buf, uint64_t len, uint64_t *got) {
+static int failing_read(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream, uint8_t *buf, uint64_t len, uint64_t *got) {
     (void)st, (void)buf, (void)len;
     *got = 0;
     stream->failure = "boom";
     return FUSEDWASI_P2_STREAM_FAILED;
 }
-static uint64_t failing_check_write(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream, int *status) {
+static uint64_t failing_check_write(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream, int *status) {
     (void)st;
     stream->failure = "boom";
     *status = FUSEDWASI_P2_STREAM_FAILED;
     return 0;
 }
-static int never_ready(fusedwasi_p2_state *st, fusedwasi_p2_stream *stream) { (void)st, (void)stream; return 0; }
+static int never_ready(fusedwasi_p2_guest *st, fusedwasi_p2_stream *stream) { (void)st, (void)stream; return 0; }
 
 static void dump(const char *what) {
     printf("%s ", what);
@@ -48,8 +48,10 @@ static void hex(const char *what, const uint8_t *p, uint64_t n) {
 int main(int argc, char **argv) {
     const char *scenario = argc > 1 ? argv[1] : "streams";
     uint32_t next = 160;
-    fusedwasi_p2_state s;
-    fusedwasi_p2_init(&s);
+    fusedwasi_p2_state world;
+    fusedwasi_p2_guest s;
+    fusedwasi_p2_init(&world);
+    fusedwasi_p2_guest_init(&s, &world);
     s.trap = trap;
     s.user = &next;
     s.realloc = strcmp(scenario, "no_realloc") ? bump : NULL;
@@ -114,7 +116,7 @@ int main(int argc, char **argv) {
     } else if (!strcmp(scenario, "no_realloc")) {
         fusedwasi_wasi_io_streams_input_stream_read(&s, 0, i, 4, 0);
     }
-    fusedwasi_p2_free(&s); /* the state first: it looks at the streams that are still alive */
+    fusedwasi_p2_free(&world); /* the state first: it looks at the streams that are still alive */
     fusedwasi_p2_buffer_output_release(bo);
     fusedwasi_p2_buffer_output_release(bo2);
     return 0;

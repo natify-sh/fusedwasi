@@ -41,9 +41,8 @@ from .wasi_p2_core import (
     USE_UDP_BIND,
     USE_UDP_CONNECT,
     USE_UDP_OUTGOING,
-    Host,
+    Guest,
     Pollable,
-    Trap,
     alloc,
     load_bytes,
     load_u8,
@@ -57,6 +56,7 @@ from .wasi_p2_core import (
     table_drop,
     table_get,
     table_new,
+    trap,
 )
 from .wasi_p2_io import (
     Error,
@@ -130,26 +130,26 @@ def _from_sockaddr(sa: tuple[Any, ...]) -> Addr:
     return (1, sa[1], words, sa[2], sa[3])
 
 
-def _write_addr(host: Host, comp: int, ptr: int, a: Addr) -> None:
+def _write_addr(guest: Guest, comp: int, ptr: int, a: Addr) -> None:
     """The `ip-socket-address` variant at `ptr` (32 bytes)."""
-    store_u8(host, comp, ptr, a[0])
-    store_u16(host, comp, ptr + 4, a[1])
+    store_u8(guest, comp, ptr, a[0])
+    store_u16(guest, comp, ptr + 4, a[1])
     if a[0] == 0:
-        store_bytes(host, comp, ptr + 6, bytes(a[2]))
+        store_bytes(guest, comp, ptr + 6, bytes(a[2]))
     else:
-        store_u32(host, comp, ptr + 8, a[3])
+        store_u32(guest, comp, ptr + 8, a[3])
         for i, w in enumerate(a[2]):
-            store_u16(host, comp, ptr + 12 + 2 * i, w)
-        store_u32(host, comp, ptr + 28, a[4])
+            store_u16(guest, comp, ptr + 12 + 2 * i, w)
+        store_u32(guest, comp, ptr + 28, a[4])
 
 
-def _read_addr(host: Host, comp: int, ptr: int) -> Addr:
-    tag = load_u8(host, comp, ptr)
-    port = load_u16(host, comp, ptr + 4)
+def _read_addr(guest: Guest, comp: int, ptr: int) -> Addr:
+    tag = load_u8(guest, comp, ptr)
+    port = load_u16(guest, comp, ptr + 4)
     if tag == 0:
-        return (0, port, tuple(load_bytes(host, comp, ptr + 6, 4)), 0, 0)
-    words = tuple(load_u16(host, comp, ptr + 12 + 2 * i) for i in range(8))
-    return (1, port, words, load_u32(host, comp, ptr + 8), load_u32(host, comp, ptr + 28))
+        return (0, port, tuple(load_bytes(guest, comp, ptr + 6, 4)), 0, 0)
+    words = tuple(load_u16(guest, comp, ptr + 12 + 2 * i) for i in range(8))
+    return (1, port, words, load_u32(guest, comp, ptr + 8), load_u32(guest, comp, ptr + 28))
 
 
 def _unicast(a: Addr) -> bool:
@@ -169,42 +169,47 @@ def _remote_ok(a: Addr) -> bool:
 # results
 
 
-def _ok(host: Host, comp: int, retptr: int) -> None:
-    store_u8(host, comp, retptr, 0)
+def _ok(guest: Guest, comp: int, retptr: int) -> None:
+    store_u8(guest, comp, retptr, 0)
 
 
-def _fail(host: Host, comp: int, retptr: int, at: int, exc: NetError) -> None:
-    store_u8(host, comp, retptr, 1)
-    store_u8(host, comp, at, exc.code)
+def _fail(guest: Guest, comp: int, retptr: int, at: int, exc: NetError) -> None:
+    store_u8(guest, comp, retptr, 1)
+    store_u8(guest, comp, at, exc.code)
 
 
-def _status(host: Host, comp: int, retptr: int, action: Callable[[], object]) -> None:
+def _status(guest: Guest, comp: int, retptr: int, action: Callable[[], object]) -> None:
     """For a `result<_, error-code>`."""
     try:
         action()
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 1, exc)
+        _fail(guest, comp, retptr, retptr + 1, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 1, _from_oserror(exc))
+        _fail(guest, comp, retptr, retptr + 1, _from_oserror(exc))
         return
-    _ok(host, comp, retptr)
+    _ok(guest, comp, retptr)
 
 
 def _value(
-    host: Host, comp: int, retptr: int, at: int, action: Callable[[], int], store: Callable[[Host, int, int, int], None]
+    guest: Guest,
+    comp: int,
+    retptr: int,
+    at: int,
+    action: Callable[[], int],
+    store: Callable[[Guest, int, int, int], None],
 ) -> None:
     """For a `result<number, error-code>`: the value is stored at `at`."""
     try:
         value = action()
     except NetError as exc:
-        _fail(host, comp, retptr, at, exc)
+        _fail(guest, comp, retptr, at, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, at, _from_oserror(exc))
+        _fail(guest, comp, retptr, at, _from_oserror(exc))
         return
-    _ok(host, comp, retptr)
-    store(host, comp, retptr + at, value)
+    _ok(guest, comp, retptr)
+    store(guest, comp, retptr + at, value)
 
 
 # the objects
@@ -236,7 +241,7 @@ class SocketPollable(Pollable):
     def __init__(self, ready: Callable[[], bool]) -> None:
         self.check = ready
 
-    def ready(self, host: Host) -> bool:
+    def ready(self, guest: Guest) -> bool:
         return self.check()
 
 
@@ -261,36 +266,36 @@ def _writable(sock: socket.socket) -> bool:
     return bool(writable) or (sys.platform == "win32" and bool(failed))
 
 
-def _network(host: Host, handle: int) -> None:
-    table_get(host, handle, KIND_NETWORK)
+def _network(guest: Guest, handle: int) -> None:
+    table_get(guest, handle, KIND_NETWORK)
 
 
-def _tcp(host: Host, handle: int) -> TcpSock:
-    return table_get(host, handle, KIND_TCP_SOCKET)  # type: ignore[return-value]
+def _tcp(guest: Guest, handle: int) -> TcpSock:
+    return table_get(guest, handle, KIND_TCP_SOCKET)  # type: ignore[return-value]
 
 
-def _udp(host: Host, handle: int) -> UdpSock:
-    return table_get(host, handle, KIND_UDP_SOCKET)  # type: ignore[return-value]
+def _udp(guest: Guest, handle: int) -> UdpSock:
+    return table_get(guest, handle, KIND_UDP_SOCKET)  # type: ignore[return-value]
 
 
 # network
 
 
-def wasi_sockets_network_network_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_NETWORK)
+def wasi_sockets_network_network_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_NETWORK)
 
 
-def wasi_sockets_network_network_error_code(host: Host, comp: int, err: int, retptr: int) -> None:
-    error: Error = table_get(host, err, KIND_ERROR)  # type: ignore[assignment]
+def wasi_sockets_network_network_error_code(guest: Guest, comp: int, err: int, retptr: int) -> None:
+    error: Error = table_get(guest, err, KIND_ERROR)  # type: ignore[assignment]
     if error.network_code is None:
-        store_u8(host, comp, retptr, 0)
+        store_u8(guest, comp, retptr, 0)
     else:
-        store_u8(host, comp, retptr, 1)
-        store_u8(host, comp, retptr + 1, error.network_code)
+        store_u8(guest, comp, retptr, 1)
+        store_u8(guest, comp, retptr + 1, error.network_code)
 
 
-def wasi_sockets_instance_network_instance_network(host: Host) -> int:
-    return table_new(host, KIND_NETWORK, Network())
+def wasi_sockets_instance_network_instance_network(guest: Guest) -> int:
+    return table_new(guest, KIND_NETWORK, Network())
 
 
 # the socket streams
@@ -348,19 +353,19 @@ class SocketOutput(OutputStream):
 # tcp-create-socket
 
 
-def wasi_sockets_tcp_create_socket_create_tcp_socket(host: Host, comp: int, address_family: int, retptr: int) -> None:
+def wasi_sockets_tcp_create_socket_create_tcp_socket(guest: Guest, comp: int, address_family: int, retptr: int) -> None:
     try:
-        handle = table_new(host, KIND_TCP_SOCKET, TcpSock(address_family))
+        handle = table_new(guest, KIND_TCP_SOCKET, TcpSock(address_family))
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, handle)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, handle)
 
 
-def wasi_sockets_tcp_tcp_socket_drop(host: Host, handle: int) -> None:
-    t = _tcp(host, handle)
-    table_drop(host, handle, KIND_TCP_SOCKET)
+def wasi_sockets_tcp_tcp_socket_drop(guest: Guest, handle: int) -> None:
+    t = _tcp(guest, handle)
+    table_drop(guest, handle, KIND_TCP_SOCKET)
     t.state = CLOSED
     t.sock.close()
 
@@ -370,72 +375,72 @@ def _open(t: TcpSock) -> None:
         raise NetError("invalid-state")
 
 
-def _check_bind(host: Host, family: int, a: Addr, use: int) -> None:
+def _check_bind(guest: Guest, family: int, a: Addr, use: int) -> None:
     if a[0] != family or not _unicast(a):
         raise NetError("invalid-argument")
-    if not host.socket_addr_check(_ip_text(a), a[1], use):
+    if not guest.state.socket_addr_check(_ip_text(a), a[1], use):
         raise NetError("access-denied")
 
 
-def _check_connect(host: Host, family: int, a: Addr, use: int) -> None:
+def _check_connect(guest: Guest, family: int, a: Addr, use: int) -> None:
     if a[0] != family or not _remote_ok(a):
         raise NetError("invalid-argument")
-    if not host.socket_addr_check(_ip_text(a), a[1], use):
+    if not guest.state.socket_addr_check(_ip_text(a), a[1], use):
         raise NetError("access-denied")
 
 
 def wasi_sockets_tcp_tcp_socket_start_bind(
-    host: Host, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
+    guest: Guest, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
 ) -> None:  # fmt: skip
-    t = _tcp(host, self)
-    _network(host, network)
+    t = _tcp(guest, self)
+    _network(guest, network)
     a = _from_flat(tag, (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11))
 
     def action() -> None:
         if t.state != UNBOUND:
             raise NetError("invalid-state")
-        _check_bind(host, t.family, a, USE_TCP_BIND)
+        _check_bind(guest, t.family, a, USE_TCP_BIND)
         if sys.platform != "win32":
             t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         t.sock.bind(_sockaddr(a))
         t.state = BIND_IN_PROGRESS
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_finish_bind(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_finish_bind(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> None:
         if t.state != BIND_IN_PROGRESS:
             raise NetError("not-in-progress")
         t.state = BOUND
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 def wasi_sockets_tcp_tcp_socket_start_connect(
-    host: Host, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
+    guest: Guest, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
 ) -> None:  # fmt: skip
-    t = _tcp(host, self)
-    _network(host, network)
+    t = _tcp(guest, self)
+    _network(guest, network)
     a = _from_flat(tag, (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11))
 
     def action() -> None:
         if t.state not in (UNBOUND, BOUND):
             raise NetError("invalid-state")
-        _check_connect(host, t.family, a, USE_TCP_CONNECT)
+        _check_connect(guest, t.family, a, USE_TCP_CONNECT)
         err = t.sock.connect_ex(_sockaddr(a))
         if err not in (0, errno.EINPROGRESS, errno.EWOULDBLOCK):
             t.state = CLOSED
             raise _from_oserror(OSError(err, ""))
         t.state = CONNECT_IN_PROGRESS
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_finish_connect(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_finish_connect(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
     try:
         if t.state != CONNECT_IN_PROGRESS:
             raise NetError("not-in-progress")
@@ -447,15 +452,15 @@ def wasi_sockets_tcp_tcp_socket_finish_connect(host: Host, comp: int, self: int,
             raise _from_oserror(OSError(err, ""))
         t.state = CONNECTED
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, input_stream_new(host, SocketInput(t)))
-    store_u32(host, comp, retptr + 8, output_stream_new(host, SocketOutput(t)))
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, input_stream_new(guest, SocketInput(t)))
+    store_u32(guest, comp, retptr + 8, output_stream_new(guest, SocketOutput(t)))
 
 
-def wasi_sockets_tcp_tcp_socket_start_listen(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_start_listen(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> None:
         if t.state != BOUND:
@@ -463,22 +468,22 @@ def wasi_sockets_tcp_tcp_socket_start_listen(host: Host, comp: int, self: int, r
         t.sock.listen(t.backlog)
         t.state = LISTEN_IN_PROGRESS
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_finish_listen(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_finish_listen(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> None:
         if t.state != LISTEN_IN_PROGRESS:
             raise NetError("not-in-progress")
         t.state = LISTENING
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_accept(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_accept(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
     try:
         if t.state != LISTENING:
             raise NetError("invalid-state")
@@ -491,61 +496,61 @@ def wasi_sockets_tcp_tcp_socket_accept(host: Host, comp: int, self: int, retptr:
         conn.setblocking(False)
         new = TcpSock(t.family, conn, CONNECTED)
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, table_new(host, KIND_TCP_SOCKET, new))
-    store_u32(host, comp, retptr + 8, input_stream_new(host, SocketInput(new)))
-    store_u32(host, comp, retptr + 12, output_stream_new(host, SocketOutput(new)))
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, table_new(guest, KIND_TCP_SOCKET, new))
+    store_u32(guest, comp, retptr + 8, input_stream_new(guest, SocketInput(new)))
+    store_u32(guest, comp, retptr + 12, output_stream_new(guest, SocketOutput(new)))
 
 
-def _address_result(host: Host, comp: int, retptr: int, action: Callable[[], Addr]) -> None:
+def _address_result(guest: Guest, comp: int, retptr: int, action: Callable[[], Addr]) -> None:
     try:
         a = action()
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
     except OSError as exc:
-        _fail(host, comp, retptr, retptr + 4, _from_oserror(exc))
+        _fail(guest, comp, retptr, retptr + 4, _from_oserror(exc))
         return
-    _ok(host, comp, retptr)
-    _write_addr(host, comp, retptr + 4, a)
+    _ok(guest, comp, retptr)
+    _write_addr(guest, comp, retptr + 4, a)
 
 
-def wasi_sockets_tcp_tcp_socket_local_address(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_local_address(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> Addr:
         if t.state in (UNBOUND, BIND_IN_PROGRESS, CLOSED):
             raise NetError("invalid-state")
         return _from_sockaddr(t.sock.getsockname())
 
-    _address_result(host, comp, retptr, action)
+    _address_result(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_remote_address(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_remote_address(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> Addr:
         if t.state != CONNECTED:
             raise NetError("invalid-state")
         return _from_sockaddr(t.sock.getpeername())
 
-    _address_result(host, comp, retptr, action)
+    _address_result(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_is_listening(host: Host, self: int) -> int:
-    return int(_tcp(host, self).state == LISTENING)
+def wasi_sockets_tcp_tcp_socket_is_listening(guest: Guest, self: int) -> int:
+    return int(_tcp(guest, self).state == LISTENING)
 
 
-def wasi_sockets_tcp_tcp_socket_address_family(host: Host, self: int) -> int:
-    return _tcp(host, self).family
+def wasi_sockets_tcp_tcp_socket_address_family(guest: Guest, self: int) -> int:
+    return _tcp(guest, self).family
 
 
 def wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    t = _tcp(host, self)
+    t = _tcp(guest, self)
 
     def action() -> None:
         _open(t)
@@ -557,7 +562,7 @@ def wasi_sockets_tcp_tcp_socket_set_listen_backlog_size(
         if t.state == LISTENING:
             t.sock.listen(t.backlog)
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 _WINDOWS_TCP_OPTIONS = {"TCP_KEEPIDLE": 3, "TCP_KEEPCNT": 16, "TCP_KEEPINTVL": 17}
@@ -577,43 +582,43 @@ def _seconds(ns: int) -> int:
     return max(1, min((ns + 999_999_999) // 1_000_000_000, 2**31 - 1))
 
 
-def wasi_sockets_tcp_tcp_socket_keep_alive_enabled(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_keep_alive_enabled(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def get() -> int:
         _open(t)
         return int(t.sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) != 0)
 
-    _value(host, comp, retptr, 1, get, store_u8)
+    _value(guest, comp, retptr, 1, get, store_u8)
 
 
 def wasi_sockets_tcp_tcp_socket_set_keep_alive_enabled(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    t = _tcp(host, self)
+    t = _tcp(guest, self)
 
     def action() -> None:
         _open(t)
         t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, int(bool(value)))
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def _keepalive(host: Host, comp: int, retptr: int, self: int, name: str, alt: str | None, factor: int) -> None:
-    t = _tcp(host, self)
+def _keepalive(guest: Guest, comp: int, retptr: int, self: int, name: str, alt: str | None, factor: int) -> None:
+    t = _tcp(guest, self)
 
     def get() -> int:
         _open(t)
         level, option = _sockopt(t.sock, socket.IPPROTO_TCP, name, alt)
         return t.sock.getsockopt(level, option) * factor
 
-    _value(host, comp, retptr, 8, get, store_u64)
+    _value(guest, comp, retptr, 8, get, store_u64)
 
 
 def _set_keepalive(
-    host: Host, comp: int, retptr: int, self: int, value: int, name: str, alt: str | None, seconds: bool
+    guest: Guest, comp: int, retptr: int, self: int, value: int, name: str, alt: str | None, seconds: bool
 ) -> None:
-    t = _tcp(host, self)
+    t = _tcp(guest, self)
 
     def action() -> None:
         _open(t)
@@ -622,42 +627,44 @@ def _set_keepalive(
         level, option = _sockopt(t.sock, socket.IPPROTO_TCP, name, alt)
         t.sock.setsockopt(level, option, _seconds(value) if seconds else min(value, 2**31 - 1))
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_tcp_tcp_socket_keep_alive_idle_time(host: Host, comp: int, self: int, retptr: int) -> None:
-    _keepalive(host, comp, retptr, self, "TCP_KEEPIDLE", "TCP_KEEPALIVE", 1_000_000_000)
+def wasi_sockets_tcp_tcp_socket_keep_alive_idle_time(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _keepalive(guest, comp, retptr, self, "TCP_KEEPIDLE", "TCP_KEEPALIVE", 1_000_000_000)
 
 
 def wasi_sockets_tcp_tcp_socket_set_keep_alive_idle_time(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    _set_keepalive(host, comp, retptr, self, value, "TCP_KEEPIDLE", "TCP_KEEPALIVE", True)
+    _set_keepalive(guest, comp, retptr, self, value, "TCP_KEEPIDLE", "TCP_KEEPALIVE", True)
 
 
-def wasi_sockets_tcp_tcp_socket_keep_alive_interval(host: Host, comp: int, self: int, retptr: int) -> None:
-    _keepalive(host, comp, retptr, self, "TCP_KEEPINTVL", None, 1_000_000_000)
+def wasi_sockets_tcp_tcp_socket_keep_alive_interval(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _keepalive(guest, comp, retptr, self, "TCP_KEEPINTVL", None, 1_000_000_000)
 
 
 def wasi_sockets_tcp_tcp_socket_set_keep_alive_interval(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    _set_keepalive(host, comp, retptr, self, value, "TCP_KEEPINTVL", None, True)
+    _set_keepalive(guest, comp, retptr, self, value, "TCP_KEEPINTVL", None, True)
 
 
-def wasi_sockets_tcp_tcp_socket_keep_alive_count(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_keep_alive_count(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def get() -> int:
         _open(t)
         level, option = _sockopt(t.sock, socket.IPPROTO_TCP, "TCP_KEEPCNT")
         return t.sock.getsockopt(level, option)
 
-    _value(host, comp, retptr, 4, get, store_u32)
+    _value(guest, comp, retptr, 4, get, store_u32)
 
 
-def wasi_sockets_tcp_tcp_socket_set_keep_alive_count(host: Host, comp: int, self: int, value: int, retptr: int) -> None:
-    _set_keepalive(host, comp, retptr, self, value, "TCP_KEEPCNT", None, False)
+def wasi_sockets_tcp_tcp_socket_set_keep_alive_count(
+    guest: Guest, comp: int, self: int, value: int, retptr: int
+) -> None:
+    _set_keepalive(guest, comp, retptr, self, value, "TCP_KEEPCNT", None, False)
 
 
 def _hop_get(sock: socket.socket, family: int) -> int:
@@ -682,44 +689,46 @@ def _buffer_set(sock: socket.socket, option: int, value: int) -> None:
     sock.setsockopt(socket.SOL_SOCKET, option, min(value, 2**31 - 1))
 
 
-def wasi_sockets_tcp_tcp_socket_hop_limit(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
-    _value(host, comp, retptr, 1, lambda: (_open(t), _hop_get(t.sock, t.family))[1], store_u8)
+def wasi_sockets_tcp_tcp_socket_hop_limit(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
+    _value(guest, comp, retptr, 1, lambda: (_open(t), _hop_get(t.sock, t.family))[1], store_u8)
 
 
-def wasi_sockets_tcp_tcp_socket_set_hop_limit(host: Host, comp: int, self: int, value: int, retptr: int) -> None:
-    t = _tcp(host, self)
-    _status(host, comp, retptr, lambda: (_open(t), _hop_set(t.sock, t.family, value)))
+def wasi_sockets_tcp_tcp_socket_set_hop_limit(guest: Guest, comp: int, self: int, value: int, retptr: int) -> None:
+    t = _tcp(guest, self)
+    _status(guest, comp, retptr, lambda: (_open(t), _hop_set(t.sock, t.family, value)))
 
 
-def wasi_sockets_tcp_tcp_socket_receive_buffer_size(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_receive_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
     _value(
-        host, comp, retptr, 8, lambda: (_open(t), t.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))[1], store_u64
+        guest, comp, retptr, 8, lambda: (_open(t), t.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))[1], store_u64
     )
 
 
 def wasi_sockets_tcp_tcp_socket_set_receive_buffer_size(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    t = _tcp(host, self)
-    _status(host, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_RCVBUF, value)))
+    t = _tcp(guest, self)
+    _status(guest, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_RCVBUF, value)))
 
 
-def wasi_sockets_tcp_tcp_socket_send_buffer_size(host: Host, comp: int, self: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_send_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    t = _tcp(guest, self)
     _value(
-        host, comp, retptr, 8, lambda: (_open(t), t.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))[1], store_u64
+        guest, comp, retptr, 8, lambda: (_open(t), t.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))[1], store_u64
     )
 
 
-def wasi_sockets_tcp_tcp_socket_set_send_buffer_size(host: Host, comp: int, self: int, value: int, retptr: int) -> None:
-    t = _tcp(host, self)
-    _status(host, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_SNDBUF, value)))
+def wasi_sockets_tcp_tcp_socket_set_send_buffer_size(
+    guest: Guest, comp: int, self: int, value: int, retptr: int
+) -> None:
+    t = _tcp(guest, self)
+    _status(guest, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_SNDBUF, value)))
 
 
-def wasi_sockets_tcp_tcp_socket_subscribe(host: Host, self: int) -> int:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_subscribe(guest: Guest, self: int) -> int:
+    t = _tcp(guest, self)
 
     def ready() -> bool:
         if t.state == CONNECT_IN_PROGRESS:
@@ -728,11 +737,11 @@ def wasi_sockets_tcp_tcp_socket_subscribe(host: Host, self: int) -> int:
             return _readable(t.sock)
         return True
 
-    return table_new(host, KIND_POLLABLE, SocketPollable(ready))
+    return table_new(guest, KIND_POLLABLE, SocketPollable(ready))
 
 
-def wasi_sockets_tcp_tcp_socket_shutdown(host: Host, comp: int, self: int, shutdown_type: int, retptr: int) -> None:
-    t = _tcp(host, self)
+def wasi_sockets_tcp_tcp_socket_shutdown(guest: Guest, comp: int, self: int, shutdown_type: int, retptr: int) -> None:
+    t = _tcp(guest, self)
 
     def action() -> None:
         if t.state != CONNECTED:
@@ -746,25 +755,25 @@ def wasi_sockets_tcp_tcp_socket_shutdown(host: Host, comp: int, self: int, shutd
         t.recv_shut |= how != socket.SHUT_WR
         t.send_shut |= how != socket.SHUT_RD
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 # udp-create-socket and udp
 
 
-def wasi_sockets_udp_create_socket_create_udp_socket(host: Host, comp: int, address_family: int, retptr: int) -> None:
+def wasi_sockets_udp_create_socket_create_udp_socket(guest: Guest, comp: int, address_family: int, retptr: int) -> None:
     try:
-        handle = table_new(host, KIND_UDP_SOCKET, UdpSock(address_family))
+        handle = table_new(guest, KIND_UDP_SOCKET, UdpSock(address_family))
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, handle)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, handle)
 
 
-def wasi_sockets_udp_udp_socket_drop(host: Host, handle: int) -> None:
-    u = _udp(host, handle)
-    table_drop(host, handle, KIND_UDP_SOCKET)
+def wasi_sockets_udp_udp_socket_drop(guest: Guest, handle: int) -> None:
+    u = _udp(guest, handle)
+    table_drop(guest, handle, KIND_UDP_SOCKET)
     u.closed = True
     u.sock.close()
 
@@ -775,31 +784,31 @@ def _uopen(u: UdpSock) -> None:
 
 
 def wasi_sockets_udp_udp_socket_start_bind(
-    host: Host, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
+    guest: Guest, comp: int, self: int, network: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
 ) -> None:  # fmt: skip
-    u = _udp(host, self)
-    _network(host, network)
+    u = _udp(guest, self)
+    _network(guest, network)
     a = _from_flat(tag, (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11))
 
     def action() -> None:
         if u.state != UNBOUND:
             raise NetError("invalid-state")
-        _check_bind(host, u.family, a, USE_UDP_BIND)
+        _check_bind(guest, u.family, a, USE_UDP_BIND)
         u.sock.bind(_sockaddr(a))
         u.state = BIND_IN_PROGRESS
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
-def wasi_sockets_udp_udp_socket_finish_bind(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
+def wasi_sockets_udp_udp_socket_finish_bind(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
 
     def action() -> None:
         if u.state != BIND_IN_PROGRESS:
             raise NetError("not-in-progress")
         u.state = BOUND
 
-    _status(host, comp, retptr, action)
+    _status(guest, comp, retptr, action)
 
 
 class IncomingDatagrams:
@@ -814,114 +823,126 @@ class OutgoingDatagrams:
 
 
 def wasi_sockets_udp_udp_socket_stream(
-    host: Host, comp: int, self: int, remote_tag: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
+    guest: Guest, comp: int, self: int, remote_tag: int, tag: int, p1: int, p2: int, p3: int, p4: int, p5: int, p6: int, p7: int, p8: int, p9: int, p10: int, p11: int, retptr: int
 ) -> None:  # fmt: skip
-    u = _udp(host, self)
+    u = _udp(guest, self)
     a = _from_flat(tag, (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11)) if remote_tag else None
     try:
         _uopen(u)
         if u.state != BOUND:
             raise NetError("invalid-state")
         if a is not None:
-            _check_connect(host, u.family, a, USE_UDP_CONNECT)
+            _check_connect(guest, u.family, a, USE_UDP_CONNECT)
         u.remote = a
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, table_new(host, KIND_INCOMING_DATAGRAM_STREAM, IncomingDatagrams(u)))
-    store_u32(host, comp, retptr + 8, table_new(host, KIND_OUTGOING_DATAGRAM_STREAM, OutgoingDatagrams(u)))
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, table_new(guest, KIND_INCOMING_DATAGRAM_STREAM, IncomingDatagrams(u)))
+    store_u32(guest, comp, retptr + 8, table_new(guest, KIND_OUTGOING_DATAGRAM_STREAM, OutgoingDatagrams(u)))
 
 
-def wasi_sockets_udp_udp_socket_local_address(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
+def wasi_sockets_udp_udp_socket_local_address(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
 
     def action() -> Addr:
         if u.state != BOUND or u.closed:
             raise NetError("invalid-state")
         return _from_sockaddr(u.sock.getsockname())
 
-    _address_result(host, comp, retptr, action)
+    _address_result(guest, comp, retptr, action)
 
 
-def wasi_sockets_udp_udp_socket_remote_address(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
+def wasi_sockets_udp_udp_socket_remote_address(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
 
     def action() -> Addr:
         if u.remote is None or u.closed:
             raise NetError("invalid-state")
         return u.remote
 
-    _address_result(host, comp, retptr, action)
+    _address_result(guest, comp, retptr, action)
 
 
-def wasi_sockets_udp_udp_socket_address_family(host: Host, self: int) -> int:
-    return _udp(host, self).family
+def wasi_sockets_udp_udp_socket_address_family(guest: Guest, self: int) -> int:
+    return _udp(guest, self).family
 
 
-def wasi_sockets_udp_udp_socket_unicast_hop_limit(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
-    _value(host, comp, retptr, 1, lambda: (_uopen(u), _hop_get(u.sock, u.family))[1], store_u8)
+def wasi_sockets_udp_udp_socket_unicast_hop_limit(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
+    _value(guest, comp, retptr, 1, lambda: (_uopen(u), _hop_get(u.sock, u.family))[1], store_u8)
 
 
 def wasi_sockets_udp_udp_socket_set_unicast_hop_limit(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    u = _udp(host, self)
-    _status(host, comp, retptr, lambda: (_uopen(u), _hop_set(u.sock, u.family, value)))
+    u = _udp(guest, self)
+    _status(guest, comp, retptr, lambda: (_uopen(u), _hop_set(u.sock, u.family, value)))
 
 
-def wasi_sockets_udp_udp_socket_receive_buffer_size(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
+def wasi_sockets_udp_udp_socket_receive_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
     _value(
-        host, comp, retptr, 8, lambda: (_uopen(u), u.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))[1], store_u64
+        guest,
+        comp,
+        retptr,
+        8,
+        lambda: (_uopen(u), u.sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF))[1],
+        store_u64,
     )
 
 
 def wasi_sockets_udp_udp_socket_set_receive_buffer_size(
-    host: Host, comp: int, self: int, value: int, retptr: int
+    guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
-    u = _udp(host, self)
-    _status(host, comp, retptr, lambda: (_uopen(u), _buffer_set(u.sock, socket.SO_RCVBUF, value)))
+    u = _udp(guest, self)
+    _status(guest, comp, retptr, lambda: (_uopen(u), _buffer_set(u.sock, socket.SO_RCVBUF, value)))
 
 
-def wasi_sockets_udp_udp_socket_send_buffer_size(host: Host, comp: int, self: int, retptr: int) -> None:
-    u = _udp(host, self)
+def wasi_sockets_udp_udp_socket_send_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    u = _udp(guest, self)
     _value(
-        host, comp, retptr, 8, lambda: (_uopen(u), u.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))[1], store_u64
+        guest,
+        comp,
+        retptr,
+        8,
+        lambda: (_uopen(u), u.sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF))[1],
+        store_u64,
     )
 
 
-def wasi_sockets_udp_udp_socket_set_send_buffer_size(host: Host, comp: int, self: int, value: int, retptr: int) -> None:
-    u = _udp(host, self)
-    _status(host, comp, retptr, lambda: (_uopen(u), _buffer_set(u.sock, socket.SO_SNDBUF, value)))
+def wasi_sockets_udp_udp_socket_set_send_buffer_size(
+    guest: Guest, comp: int, self: int, value: int, retptr: int
+) -> None:
+    u = _udp(guest, self)
+    _status(guest, comp, retptr, lambda: (_uopen(u), _buffer_set(u.sock, socket.SO_SNDBUF, value)))
 
 
-def wasi_sockets_udp_udp_socket_subscribe(host: Host, self: int) -> int:
-    u = _udp(host, self)
-    return table_new(host, KIND_POLLABLE, SocketPollable(lambda: _readable(u.sock) or _writable(u.sock)))
+def wasi_sockets_udp_udp_socket_subscribe(guest: Guest, self: int) -> int:
+    u = _udp(guest, self)
+    return table_new(guest, KIND_POLLABLE, SocketPollable(lambda: _readable(u.sock) or _writable(u.sock)))
 
 
-def wasi_sockets_udp_incoming_datagram_stream_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_INCOMING_DATAGRAM_STREAM)
+def wasi_sockets_udp_incoming_datagram_stream_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_INCOMING_DATAGRAM_STREAM)
 
 
-def wasi_sockets_udp_outgoing_datagram_stream_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_OUTGOING_DATAGRAM_STREAM)
+def wasi_sockets_udp_outgoing_datagram_stream_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_OUTGOING_DATAGRAM_STREAM)
 
 
-def _incoming(host: Host, handle: int) -> IncomingDatagrams:
-    return table_get(host, handle, KIND_INCOMING_DATAGRAM_STREAM)  # type: ignore[return-value]
+def _incoming(guest: Guest, handle: int) -> IncomingDatagrams:
+    return table_get(guest, handle, KIND_INCOMING_DATAGRAM_STREAM)  # type: ignore[return-value]
 
 
-def _outgoing(host: Host, handle: int) -> OutgoingDatagrams:
-    return table_get(host, handle, KIND_OUTGOING_DATAGRAM_STREAM)  # type: ignore[return-value]
+def _outgoing(guest: Guest, handle: int) -> OutgoingDatagrams:
+    return table_get(guest, handle, KIND_OUTGOING_DATAGRAM_STREAM)  # type: ignore[return-value]
 
 
 def wasi_sockets_udp_incoming_datagram_stream_receive(
-    host: Host, comp: int, self: int, max_results: int, retptr: int
+    guest: Guest, comp: int, self: int, max_results: int, retptr: int
 ) -> None:
-    u = _incoming(host, self).u
+    u = _incoming(guest, self).u
     received: list[tuple[bytes, Addr]] = []
     try:
         _uopen(u)
@@ -941,55 +962,55 @@ def wasi_sockets_udp_incoming_datagram_stream_receive(
                 continue  # a datagram from another address than the one the stream is for
             received.append((data, src))
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    ptr = alloc(host, comp, 4, 40 * len(received))
+    ptr = alloc(guest, comp, 4, 40 * len(received))
     for i, (data, src) in enumerate(received):
-        dptr = alloc(host, comp, 1, len(data))
-        store_bytes(host, comp, dptr, data)
-        store_u32(host, comp, ptr + 40 * i, dptr)
-        store_u32(host, comp, ptr + 40 * i + 4, len(data))
-        _write_addr(host, comp, ptr + 40 * i + 8, src)
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, ptr)
-    store_u32(host, comp, retptr + 8, len(received))
+        dptr = alloc(guest, comp, 1, len(data))
+        store_bytes(guest, comp, dptr, data)
+        store_u32(guest, comp, ptr + 40 * i, dptr)
+        store_u32(guest, comp, ptr + 40 * i + 4, len(data))
+        _write_addr(guest, comp, ptr + 40 * i + 8, src)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, ptr)
+    store_u32(guest, comp, retptr + 8, len(received))
 
 
-def wasi_sockets_udp_incoming_datagram_stream_subscribe(host: Host, self: int) -> int:
-    u = _incoming(host, self).u
-    return table_new(host, KIND_POLLABLE, SocketPollable(lambda: _readable(u.sock)))
+def wasi_sockets_udp_incoming_datagram_stream_subscribe(guest: Guest, self: int) -> int:
+    u = _incoming(guest, self).u
+    return table_new(guest, KIND_POLLABLE, SocketPollable(lambda: _readable(u.sock)))
 
 
-def wasi_sockets_udp_outgoing_datagram_stream_check_send(host: Host, comp: int, self: int, retptr: int) -> None:
-    o = _outgoing(host, self)
+def wasi_sockets_udp_outgoing_datagram_stream_check_send(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    o = _outgoing(guest, self)
     try:
         _uopen(o.u)
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 8, exc)
+        _fail(guest, comp, retptr, retptr + 8, exc)
         return
     o.permit = CHECK_SEND_PERMIT
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, CHECK_SEND_PERMIT)
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, CHECK_SEND_PERMIT)
 
 
 def wasi_sockets_udp_outgoing_datagram_stream_send(
-    host: Host, comp: int, self: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, self: int, ptr: int, length: int, retptr: int
 ) -> None:
-    o = _outgoing(host, self)
+    o = _outgoing(guest, self)
     u = o.u
     if length > o.permit:
-        raise Trap("send of more datagrams than check-send permitted")
+        trap(guest, "send of more datagrams than check-send permitted")
     o.permit = 0
     sent = 0
     try:
         _uopen(u)
         for i in range(length):
             base = ptr + 44 * i
-            data = load_bytes(host, comp, load_u32(host, comp, base), load_u32(host, comp, base + 4))
-            has_remote = load_u8(host, comp, base + 8)
+            data = load_bytes(guest, comp, load_u32(guest, comp, base), load_u32(guest, comp, base + 4))
+            has_remote = load_u8(guest, comp, base + 8)
             try:
                 if u.remote is not None:
-                    if has_remote and _read_addr(host, comp, base + 12) != u.remote:
+                    if has_remote and _read_addr(guest, comp, base + 12) != u.remote:
                         raise NetError(
                             "invalid-argument"
                         )  # the stream has its peer: the datagram names none, or exactly that one
@@ -997,8 +1018,8 @@ def wasi_sockets_udp_outgoing_datagram_stream_send(
                 else:
                     if not has_remote:
                         raise NetError("invalid-argument")
-                    target = _read_addr(host, comp, base + 12)
-                    _check_connect(host, u.family, target, USE_UDP_OUTGOING)
+                    target = _read_addr(guest, comp, base + 12)
+                    _check_connect(guest, u.family, target, USE_UDP_OUTGOING)
                 try:
                     u.sock.sendto(data, _sockaddr(target))
                 except BlockingIOError:
@@ -1011,15 +1032,15 @@ def wasi_sockets_udp_outgoing_datagram_stream_send(
                 raise
             sent += 1
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 8, exc)
+        _fail(guest, comp, retptr, retptr + 8, exc)
         return
-    _ok(host, comp, retptr)
-    store_u64(host, comp, retptr + 8, sent)
+    _ok(guest, comp, retptr)
+    store_u64(guest, comp, retptr + 8, sent)
 
 
-def wasi_sockets_udp_outgoing_datagram_stream_subscribe(host: Host, self: int) -> int:
-    u = _outgoing(host, self).u
-    return table_new(host, KIND_POLLABLE, SocketPollable(lambda: _writable(u.sock)))
+def wasi_sockets_udp_outgoing_datagram_stream_subscribe(guest: Guest, self: int) -> int:
+    u = _outgoing(guest, self).u
+    return table_new(guest, KIND_POLLABLE, SocketPollable(lambda: _writable(u.sock)))
 
 
 # ip-name-lookup
@@ -1037,12 +1058,12 @@ _GAI = {
 
 
 def wasi_sockets_ip_name_lookup_resolve_addresses(
-    host: Host, comp: int, network: int, ptr: int, length: int, retptr: int
+    guest: Guest, comp: int, network: int, ptr: int, length: int, retptr: int
 ) -> None:
-    _network(host, network)
-    raw = load_bytes(host, comp, ptr, length)
+    _network(guest, network)
+    raw = load_bytes(guest, comp, ptr, length)
     try:
-        if not host.allow_ip_name_lookup:
+        if not guest.state.allow_ip_name_lookup:
             raise NetError("access-denied")
         try:
             name = raw.decode("ascii")
@@ -1070,37 +1091,37 @@ def wasi_sockets_ip_name_lookup_resolve_addresses(
                 if ip.version == 4
                 else (1, tuple(int.from_bytes(ip.packed[i : i + 2], "big") for i in range(0, 16, 2)))
             )
-        handle = table_new(host, KIND_RESOLVE_STREAM, Resolved(found))
+        handle = table_new(guest, KIND_RESOLVE_STREAM, Resolved(found))
     except NetError as exc:
-        _fail(host, comp, retptr, retptr + 4, exc)
+        _fail(guest, comp, retptr, retptr + 4, exc)
         return
-    _ok(host, comp, retptr)
-    store_u32(host, comp, retptr + 4, handle)
+    _ok(guest, comp, retptr)
+    store_u32(guest, comp, retptr + 4, handle)
 
 
 def wasi_sockets_ip_name_lookup_resolve_address_stream_resolve_next_address(
-    host: Host, comp: int, self: int, retptr: int
+    guest: Guest, comp: int, self: int, retptr: int
 ) -> None:
-    r: Resolved = table_get(host, self, KIND_RESOLVE_STREAM)  # type: ignore[assignment]
-    _ok(host, comp, retptr)
+    r: Resolved = table_get(guest, self, KIND_RESOLVE_STREAM)  # type: ignore[assignment]
+    _ok(guest, comp, retptr)
     if r.pos >= len(r.addresses):
-        store_u8(host, comp, retptr + 2, 0)  # none
+        store_u8(guest, comp, retptr + 2, 0)  # none
         return
     family, parts = r.addresses[r.pos]
     r.pos += 1
-    store_u8(host, comp, retptr + 2, 1)
-    store_u8(host, comp, retptr + 4, family)
+    store_u8(guest, comp, retptr + 2, 1)
+    store_u8(guest, comp, retptr + 4, family)
     if family == 0:
-        store_bytes(host, comp, retptr + 6, bytes(parts))
+        store_bytes(guest, comp, retptr + 6, bytes(parts))
     else:
         for i, w in enumerate(parts):
-            store_u16(host, comp, retptr + 6 + 2 * i, w)
+            store_u16(guest, comp, retptr + 6 + 2 * i, w)
 
 
-def wasi_sockets_ip_name_lookup_resolve_address_stream_subscribe(host: Host, self: int) -> int:
-    table_get(host, self, KIND_RESOLVE_STREAM)
-    return table_new(host, KIND_POLLABLE, SocketPollable(lambda: True))
+def wasi_sockets_ip_name_lookup_resolve_address_stream_subscribe(guest: Guest, self: int) -> int:
+    table_get(guest, self, KIND_RESOLVE_STREAM)
+    return table_new(guest, KIND_POLLABLE, SocketPollable(lambda: True))
 
 
-def wasi_sockets_ip_name_lookup_resolve_address_stream_drop(host: Host, handle: int) -> None:
-    table_drop(host, handle, KIND_RESOLVE_STREAM)
+def wasi_sockets_ip_name_lookup_resolve_address_stream_drop(guest: Guest, handle: int) -> None:
+    table_drop(guest, handle, KIND_RESOLVE_STREAM)

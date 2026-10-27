@@ -44,9 +44,8 @@ from .wasi_p2_core import (
     KIND_POLLABLE,
     KIND_REQUEST_OPTIONS,
     KIND_RESPONSE_OUTPARAM,
-    Host,
+    Guest,
     Pollable,
-    Trap,
     alloc,
     load_bytes,
     load_u32,
@@ -58,6 +57,7 @@ from .wasi_p2_core import (
     table_drop,
     table_get,
     table_new,
+    trap,
 )
 from .wasi_p2_io import BufferOutput, MemoryInput, input_stream_new, output_stream_new
 
@@ -175,48 +175,48 @@ def _offsets(outer: bool, kinds: tuple[str, ...]) -> list[int]:
     return offs
 
 
-def _store_string(host: Host, comp: int, at: int, text: str | bytes) -> None:
+def _store_string(guest: Guest, comp: int, at: int, text: str | bytes) -> None:
     data = text.encode() if isinstance(text, str) else text
-    ptr = alloc(host, comp, 1, len(data))
-    store_bytes(host, comp, ptr, data)
-    store_u32(host, comp, at, ptr)
-    store_u32(host, comp, at + 4, len(data))
+    ptr = alloc(guest, comp, 1, len(data))
+    store_bytes(guest, comp, ptr, data)
+    store_u32(guest, comp, at, ptr)
+    store_u32(guest, comp, at + 4, len(data))
 
 
-def _store_opt_string(host: Host, comp: int, at: int, text: str | None) -> None:
-    store_u8(host, comp, at, 0 if text is None else 1)
+def _store_opt_string(guest: Guest, comp: int, at: int, text: str | None) -> None:
+    store_u8(guest, comp, at, 0 if text is None else 1)
     if text is not None:
-        _store_string(host, comp, at + 4, text)
+        _store_string(guest, comp, at + 4, text)
 
 
-def store_error_code(host: Host, comp: int, ptr: int, ec: ErrorCode) -> None:
+def store_error_code(guest: Guest, comp: int, ptr: int, ec: ErrorCode) -> None:
     """Writes an `error-code` (32 bytes) at `ptr`."""
     _, outer, kinds = CASES[_CASE_INDEX[ec.name]]
-    store_u8(host, comp, ptr, _CASE_INDEX[ec.name])
+    store_u8(guest, comp, ptr, _CASE_INDEX[ec.name])
     base = ptr + 8
     if outer:
-        store_u8(host, comp, base, 1 if ec.present else 0)
+        store_u8(guest, comp, base, 1 if ec.present else 0)
         if not ec.present:
             return
     for kind, off, value in zip(kinds, _offsets(outer, kinds), ec.values, strict=True):
         at = base + off
         if kind == "str":
-            _store_opt_string(host, comp, at, None if value is None else str(value))
+            _store_opt_string(guest, comp, at, None if value is None else str(value))
             continue
-        store_u8(host, comp, at, 0 if value is None else 1)
+        store_u8(guest, comp, at, 0 if value is None else 1)
         if value is not None:
             width = {"n8": 1, "n16": 2, "n32": 4, "n64": 8}[kind]
             data = int(value).to_bytes(width, "little")
             store_bytes(
-                host, comp, at + _LEAF[kind][1], data
+                guest, comp, at + _LEAF[kind][1], data
             )  # the value follows the tag, at the alignment of the number
 
 
-def lift_error_code_flat(host: Host, comp: int, flat: Sequence[int]) -> ErrorCode:
+def lift_error_code_flat(guest: Guest, comp: int, flat: Sequence[int]) -> ErrorCode:
     """An `error-code` that came as flat arguments: the tag, then the numbers of the payload (a string is a pointer and a length)."""
     tag = flat[0] & 0xFF if flat[0] < 256 else -1
     if not 0 <= tag < len(CASES):
-        raise Trap(f"bad error-code {flat[0]}")
+        trap(guest, f"bad error-code {flat[0]}")
     name, outer, kinds = CASES[tag]
     pos = 1
     present = True
@@ -231,7 +231,7 @@ def lift_error_code_flat(host: Host, comp: int, flat: Sequence[int]) -> ErrorCod
         has = flat[pos] & 0xFF
         if kind == "str":
             ptr, n = flat[pos + 1] & 0xFFFFFFFF, flat[pos + 2] & 0xFFFFFFFF
-            values.append(load_bytes(host, comp, ptr, n).decode("utf-8", "replace") if has else None)
+            values.append(load_bytes(guest, comp, ptr, n).decode("utf-8", "replace") if has else None)
             pos += 3
         else:
             width = {"n8": 8, "n16": 16, "n32": 32, "n64": 64}[kind]
@@ -264,75 +264,75 @@ def _check_entry(name: bytes, value: bytes) -> int | None:
     return None
 
 
-def fields_new(host: Host, entries: Sequence[tuple[str, bytes]] = (), immutable: bool = False) -> int:
-    return table_new(host, KIND_FIELDS, Fields([(n.lower(), v) for n, v in entries], immutable))
+def fields_new(guest: Guest, entries: Sequence[tuple[str, bytes]] = (), immutable: bool = False) -> int:
+    return table_new(guest, KIND_FIELDS, Fields([(n.lower(), v) for n, v in entries], immutable))
 
 
-def _fields(host: Host, handle: int) -> Fields:
-    return table_get(host, handle, KIND_FIELDS)  # type: ignore[return-value]
+def _fields(guest: Guest, handle: int) -> Fields:
+    return table_get(guest, handle, KIND_FIELDS)  # type: ignore[return-value]
 
 
-def _take_fields(host: Host, handle: int) -> Fields:
+def _take_fields(guest: Guest, handle: int) -> Fields:
     """An own `fields` given to a request, a response or a body: the handle is spent, the fields are not to be changed any more."""
-    f = _fields(host, handle)
-    table_drop(host, handle, KIND_FIELDS)
+    f = _fields(guest, handle)
+    table_drop(guest, handle, KIND_FIELDS)
     f.immutable = True
     return f
 
 
-def _load_list_pairs(host: Host, comp: int, ptr: int, n: int) -> list[tuple[bytes, bytes]]:
+def _load_list_pairs(guest: Guest, comp: int, ptr: int, n: int) -> list[tuple[bytes, bytes]]:
     out: list[tuple[bytes, bytes]] = []
     for i in range(n):
         at = ptr + 16 * i
-        name = load_bytes(host, comp, load_u32(host, comp, at), load_u32(host, comp, at + 4))
-        value = load_bytes(host, comp, load_u32(host, comp, at + 8), load_u32(host, comp, at + 12))
+        name = load_bytes(guest, comp, load_u32(guest, comp, at), load_u32(guest, comp, at + 4))
+        value = load_bytes(guest, comp, load_u32(guest, comp, at + 8), load_u32(guest, comp, at + 12))
         out.append((name, value))
     return out
 
 
-def _store_pairs(host: Host, comp: int, entries: Sequence[tuple[str, bytes]], retptr: int) -> None:
-    ptr = alloc(host, comp, 4, 16 * len(entries))
+def _store_pairs(guest: Guest, comp: int, entries: Sequence[tuple[str, bytes]], retptr: int) -> None:
+    ptr = alloc(guest, comp, 4, 16 * len(entries))
     for i, (name, value) in enumerate(entries):
         at = ptr + 16 * i
-        _store_string(host, comp, at, name)
-        _store_string(host, comp, at + 8, value)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(entries))
+        _store_string(guest, comp, at, name)
+        _store_string(guest, comp, at + 8, value)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(entries))
 
 
-def wasi_http_types_fields_new(host: Host) -> int:
-    return fields_new(host)
+def wasi_http_types_fields_new(guest: Guest) -> int:
+    return fields_new(guest)
 
 
-def wasi_http_types_fields_from_list(host: Host, comp: int, ptr: int, len: int, retptr: int) -> None:
-    pairs = _load_list_pairs(host, comp, ptr, len)
+def wasi_http_types_fields_from_list(guest: Guest, comp: int, ptr: int, len: int, retptr: int) -> None:
+    pairs = _load_list_pairs(guest, comp, ptr, len)
     for name, value in pairs:
         err = _check_entry(name, value)
         if err is not None:
-            store_u8(host, comp, retptr, 1)
-            store_u8(host, comp, retptr + 4, err)
+            store_u8(guest, comp, retptr, 1)
+            store_u8(guest, comp, retptr + 4, err)
             return
-    store_u8(host, comp, retptr, 0)
-    store_u32(host, comp, retptr + 4, fields_new(host, [(n.decode(), v) for n, v in pairs]))
+    store_u8(guest, comp, retptr, 0)
+    store_u32(guest, comp, retptr + 4, fields_new(guest, [(n.decode(), v) for n, v in pairs]))
 
 
-def wasi_http_types_fields_get(host: Host, comp: int, self: int, name_ptr: int, name_len: int, retptr: int) -> None:
-    values = _fields(host, self).get(load_bytes(host, comp, name_ptr, name_len).decode("latin-1"))
-    ptr = alloc(host, comp, 4, 8 * len(values))
+def wasi_http_types_fields_get(guest: Guest, comp: int, self: int, name_ptr: int, name_len: int, retptr: int) -> None:
+    values = _fields(guest, self).get(load_bytes(guest, comp, name_ptr, name_len).decode("latin-1"))
+    ptr = alloc(guest, comp, 4, 8 * len(values))
     for i, value in enumerate(values):
-        _store_string(host, comp, ptr + 8 * i, value)
-    store_u32(host, comp, retptr, ptr)
-    store_u32(host, comp, retptr + 4, len(values))
+        _store_string(guest, comp, ptr + 8 * i, value)
+    store_u32(guest, comp, retptr, ptr)
+    store_u32(guest, comp, retptr + 4, len(values))
 
 
-def wasi_http_types_fields_has(host: Host, comp: int, self: int, name_ptr: int, name_len: int) -> int:
-    return int(bool(_fields(host, self).get(load_bytes(host, comp, name_ptr, name_len).decode("latin-1"))))
+def wasi_http_types_fields_has(guest: Guest, comp: int, self: int, name_ptr: int, name_len: int) -> int:
+    return int(bool(_fields(guest, self).get(load_bytes(guest, comp, name_ptr, name_len).decode("latin-1"))))
 
 
-def _header_result(host: Host, comp: int, retptr: int, err: int | None) -> None:
-    store_u8(host, comp, retptr, 0 if err is None else 1)
+def _header_result(guest: Guest, comp: int, retptr: int, err: int | None) -> None:
+    store_u8(guest, comp, retptr, 0 if err is None else 1)
     if err is not None:
-        store_u8(host, comp, retptr + 1, err)
+        store_u8(guest, comp, retptr + 1, err)
 
 
 def _change(f: Fields, name: bytes, values: Sequence[bytes], replace: bool) -> int | None:
@@ -350,75 +350,77 @@ def _change(f: Fields, name: bytes, values: Sequence[bytes], replace: bool) -> i
 
 
 def wasi_http_types_fields_set(
-    host: Host, comp: int, self: int, name_ptr: int, name_len: int, value_ptr: int, value_len: int, retptr: int
+    guest: Guest, comp: int, self: int, name_ptr: int, name_len: int, value_ptr: int, value_len: int, retptr: int
 ) -> None:
     values = [
-        load_bytes(host, comp, load_u32(host, comp, value_ptr + 8 * i), load_u32(host, comp, value_ptr + 8 * i + 4))
+        load_bytes(guest, comp, load_u32(guest, comp, value_ptr + 8 * i), load_u32(guest, comp, value_ptr + 8 * i + 4))
         for i in range(value_len)
     ]
-    err = _change(_fields(host, self), load_bytes(host, comp, name_ptr, name_len), values, True)
-    _header_result(host, comp, retptr, err)
+    err = _change(_fields(guest, self), load_bytes(guest, comp, name_ptr, name_len), values, True)
+    _header_result(guest, comp, retptr, err)
 
 
-def wasi_http_types_fields_delete(host: Host, comp: int, self: int, name_ptr: int, name_len: int, retptr: int) -> None:
-    err = _change(_fields(host, self), load_bytes(host, comp, name_ptr, name_len), [], True)
-    _header_result(host, comp, retptr, err)
+def wasi_http_types_fields_delete(
+    guest: Guest, comp: int, self: int, name_ptr: int, name_len: int, retptr: int
+) -> None:
+    err = _change(_fields(guest, self), load_bytes(guest, comp, name_ptr, name_len), [], True)
+    _header_result(guest, comp, retptr, err)
 
 
 def wasi_http_types_fields_append(
-    host: Host, comp: int, self: int, name_ptr: int, name_len: int, value_ptr: int, value_len: int, retptr: int
+    guest: Guest, comp: int, self: int, name_ptr: int, name_len: int, value_ptr: int, value_len: int, retptr: int
 ) -> None:
-    value = load_bytes(host, comp, value_ptr, value_len)
-    err = _change(_fields(host, self), load_bytes(host, comp, name_ptr, name_len), [value], False)
-    _header_result(host, comp, retptr, err)
+    value = load_bytes(guest, comp, value_ptr, value_len)
+    err = _change(_fields(guest, self), load_bytes(guest, comp, name_ptr, name_len), [value], False)
+    _header_result(guest, comp, retptr, err)
 
 
-def wasi_http_types_fields_entries(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_pairs(host, comp, _fields(host, self).entries, retptr)
+def wasi_http_types_fields_entries(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_pairs(guest, comp, _fields(guest, self).entries, retptr)
 
 
-def wasi_http_types_fields_clone(host: Host, self: int) -> int:
-    return table_new(host, KIND_FIELDS, Fields(_fields(host, self).entries))
+def wasi_http_types_fields_clone(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_FIELDS, Fields(_fields(guest, self).entries))
 
 
-def wasi_http_types_fields_drop(host: Host, handle: int) -> None:
-    _fields(host, handle)
-    table_drop(host, handle, KIND_FIELDS)
+def wasi_http_types_fields_drop(guest: Guest, handle: int) -> None:
+    _fields(guest, handle)
+    table_drop(guest, handle, KIND_FIELDS)
 
 
 # method, scheme, authority, path
 
 
-def _lift_method(host: Host, comp: int, tag: int, ptr: int, n: int) -> str:
+def _lift_method(guest: Guest, comp: int, tag: int, ptr: int, n: int) -> str:
     if tag < 9:
         return STD_METHODS[tag]
     if tag > 9:
-        raise Trap(f"bad method {tag}")
-    return load_bytes(host, comp, ptr, n).decode("latin-1")
+        trap(guest, f"bad method {tag}")
+    return load_bytes(guest, comp, ptr, n).decode("latin-1")
 
 
-def _lift_scheme(host: Host, comp: int, tag: int, ptr: int, n: int) -> str:
+def _lift_scheme(guest: Guest, comp: int, tag: int, ptr: int, n: int) -> str:
     if tag < 2:
         return ("http", "https")[tag]
     if tag > 2:
-        raise Trap(f"bad scheme {tag}")
-    return load_bytes(host, comp, ptr, n).decode("latin-1")
+        trap(guest, f"bad scheme {tag}")
+    return load_bytes(guest, comp, ptr, n).decode("latin-1")
 
 
-def _store_method(host: Host, comp: int, at: int, method: str) -> None:
+def _store_method(guest: Guest, comp: int, at: int, method: str) -> None:
     if method in STD_METHODS:
-        store_u8(host, comp, at, STD_METHODS.index(method))
+        store_u8(guest, comp, at, STD_METHODS.index(method))
     else:
-        store_u8(host, comp, at, 9)
-        _store_string(host, comp, at + 4, method)
+        store_u8(guest, comp, at, 9)
+        _store_string(guest, comp, at + 4, method)
 
 
-def _store_scheme(host: Host, comp: int, at: int, scheme: str) -> None:
+def _store_scheme(guest: Guest, comp: int, at: int, scheme: str) -> None:
     if scheme in ("http", "https"):
-        store_u8(host, comp, at, ("http", "https").index(scheme))
+        store_u8(guest, comp, at, ("http", "https").index(scheme))
     else:
-        store_u8(host, comp, at, 2)
-        _store_string(host, comp, at + 4, scheme)
+        store_u8(guest, comp, at, 2)
+        _store_string(guest, comp, at + 4, scheme)
 
 
 def _valid_path(path: str) -> bool:
@@ -490,153 +492,155 @@ class RequestOptions:
         self.between_bytes: int | None = None
 
 
-def _request(host: Host, handle: int) -> OutgoingRequest:
-    return table_get(host, handle, KIND_OUTGOING_REQUEST)  # type: ignore[return-value]
+def _request(guest: Guest, handle: int) -> OutgoingRequest:
+    return table_get(guest, handle, KIND_OUTGOING_REQUEST)  # type: ignore[return-value]
 
 
-def wasi_http_types_outgoing_request_new(host: Host, headers: int) -> int:
-    return table_new(host, KIND_OUTGOING_REQUEST, OutgoingRequest(_take_fields(host, headers)))
+def wasi_http_types_outgoing_request_new(guest: Guest, headers: int) -> int:
+    return table_new(guest, KIND_OUTGOING_REQUEST, OutgoingRequest(_take_fields(guest, headers)))
 
 
 def _new_body(
-    host: Host, comp: int, owner_headers: Fields, kind: str, slot: OutgoingBody | None, retptr: int
+    guest: Guest, comp: int, owner_headers: Fields, kind: str, slot: OutgoingBody | None, retptr: int
 ) -> OutgoingBody | None:
     if slot is not None:
-        store_u8(host, comp, retptr, 1)
+        store_u8(guest, comp, retptr, 1)
         return None
     body = OutgoingBody(_declared_length(owner_headers), kind)
-    store_u8(host, comp, retptr, 0)
-    store_u32(host, comp, retptr + 4, table_new(host, KIND_OUTGOING_BODY, body))
+    store_u8(guest, comp, retptr, 0)
+    store_u32(guest, comp, retptr + 4, table_new(guest, KIND_OUTGOING_BODY, body))
     return body
 
 
-def wasi_http_types_outgoing_request_body(host: Host, comp: int, self: int, retptr: int) -> None:
-    req = _request(host, self)
-    body = _new_body(host, comp, req.headers, "request", req.body, retptr)
+def wasi_http_types_outgoing_request_body(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    req = _request(guest, self)
+    body = _new_body(guest, comp, req.headers, "request", req.body, retptr)
     if body is not None:
         req.body = body
 
 
-def wasi_http_types_outgoing_request_method(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_method(host, comp, retptr, _request(host, self).method)
+def wasi_http_types_outgoing_request_method(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_method(guest, comp, retptr, _request(guest, self).method)
 
 
-def wasi_http_types_outgoing_request_set_method(host: Host, comp: int, self: int, tag: int, ptr: int, len: int) -> int:
-    method = _lift_method(host, comp, tag, ptr, len)
+def wasi_http_types_outgoing_request_set_method(
+    guest: Guest, comp: int, self: int, tag: int, ptr: int, len: int
+) -> int:
+    method = _lift_method(guest, comp, tag, ptr, len)
     if not _TOKEN.fullmatch(method.encode("latin-1")):
         return 1
-    _request(host, self).method = method
+    _request(guest, self).method = method
     return 0
 
 
-def _store_opt_text(host: Host, comp: int, retptr: int, text: str | None) -> None:
-    _store_opt_string(host, comp, retptr, text)
+def _store_opt_text(guest: Guest, comp: int, retptr: int, text: str | None) -> None:
+    _store_opt_string(guest, comp, retptr, text)
 
 
-def wasi_http_types_outgoing_request_path_with_query(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_opt_text(host, comp, retptr, _request(host, self).path)
+def wasi_http_types_outgoing_request_path_with_query(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_opt_text(guest, comp, retptr, _request(guest, self).path)
 
 
 def wasi_http_types_outgoing_request_set_path_with_query(
-    host: Host, comp: int, self: int, tag: int, ptr: int, len: int
+    guest: Guest, comp: int, self: int, tag: int, ptr: int, len: int
 ) -> int:
-    req = _request(host, self)
-    path = load_bytes(host, comp, ptr, len).decode("latin-1") if tag else None
+    req = _request(guest, self)
+    path = load_bytes(guest, comp, ptr, len).decode("latin-1") if tag else None
     if path is not None and not _valid_path(path):
         return 1
     req.path = path
     return 0
 
 
-def wasi_http_types_outgoing_request_scheme(host: Host, comp: int, self: int, retptr: int) -> None:
-    scheme = _request(host, self).scheme
-    store_u8(host, comp, retptr, 0 if scheme is None else 1)
+def wasi_http_types_outgoing_request_scheme(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    scheme = _request(guest, self).scheme
+    store_u8(guest, comp, retptr, 0 if scheme is None else 1)
     if scheme is not None:
-        _store_scheme(host, comp, retptr + 4, scheme)
+        _store_scheme(guest, comp, retptr + 4, scheme)
 
 
 def wasi_http_types_outgoing_request_set_scheme(
-    host: Host, comp: int, self: int, tag: int, scheme_tag: int, ptr: int, len: int
+    guest: Guest, comp: int, self: int, tag: int, scheme_tag: int, ptr: int, len: int
 ) -> int:
-    req = _request(host, self)
-    scheme = _lift_scheme(host, comp, scheme_tag, ptr, len) if tag else None
+    req = _request(guest, self)
+    scheme = _lift_scheme(guest, comp, scheme_tag, ptr, len) if tag else None
     if scheme is not None and not _SCHEME.fullmatch(scheme):
         return 1
     req.scheme = scheme
     return 0
 
 
-def wasi_http_types_outgoing_request_authority(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_opt_text(host, comp, retptr, _request(host, self).authority)
+def wasi_http_types_outgoing_request_authority(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_opt_text(guest, comp, retptr, _request(guest, self).authority)
 
 
 def wasi_http_types_outgoing_request_set_authority(
-    host: Host, comp: int, self: int, tag: int, ptr: int, len: int
+    guest: Guest, comp: int, self: int, tag: int, ptr: int, len: int
 ) -> int:
-    req = _request(host, self)
-    authority = load_bytes(host, comp, ptr, len).decode("latin-1") if tag else None
+    req = _request(guest, self)
+    authority = load_bytes(guest, comp, ptr, len).decode("latin-1") if tag else None
     if authority is not None and split_authority(authority, 80) is None:
         return 1
     req.authority = authority
     return 0
 
 
-def wasi_http_types_outgoing_request_headers(host: Host, self: int) -> int:
-    return table_new(host, KIND_FIELDS, _request(host, self).headers)
+def wasi_http_types_outgoing_request_headers(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_FIELDS, _request(guest, self).headers)
 
 
-def wasi_http_types_outgoing_request_drop(host: Host, handle: int) -> None:
-    _request(host, handle)
-    table_drop(host, handle, KIND_OUTGOING_REQUEST)
+def wasi_http_types_outgoing_request_drop(guest: Guest, handle: int) -> None:
+    _request(guest, handle)
+    table_drop(guest, handle, KIND_OUTGOING_REQUEST)
 
 
 # request-options
 
 
-def _options(host: Host, handle: int) -> RequestOptions:
-    return table_get(host, handle, KIND_REQUEST_OPTIONS)  # type: ignore[return-value]
+def _options(guest: Guest, handle: int) -> RequestOptions:
+    return table_get(guest, handle, KIND_REQUEST_OPTIONS)  # type: ignore[return-value]
 
 
-def wasi_http_types_request_options_new(host: Host) -> int:
-    return table_new(host, KIND_REQUEST_OPTIONS, RequestOptions())
+def wasi_http_types_request_options_new(guest: Guest) -> int:
+    return table_new(guest, KIND_REQUEST_OPTIONS, RequestOptions())
 
 
-def _get_timeout(host: Host, comp: int, value: int | None, retptr: int) -> None:
-    store_u8(host, comp, retptr, 0 if value is None else 1)
+def _get_timeout(guest: Guest, comp: int, value: int | None, retptr: int) -> None:
+    store_u8(guest, comp, retptr, 0 if value is None else 1)
     if value is not None:
-        store_u64(host, comp, retptr + 8, value)
+        store_u64(guest, comp, retptr + 8, value)
 
 
-def wasi_http_types_request_options_connect_timeout(host: Host, comp: int, self: int, retptr: int) -> None:
-    _get_timeout(host, comp, _options(host, self).connect, retptr)
+def wasi_http_types_request_options_connect_timeout(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _get_timeout(guest, comp, _options(guest, self).connect, retptr)
 
 
-def wasi_http_types_request_options_set_connect_timeout(host: Host, self: int, tag: int, value: int) -> int:
-    _options(host, self).connect = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
+def wasi_http_types_request_options_set_connect_timeout(guest: Guest, self: int, tag: int, value: int) -> int:
+    _options(guest, self).connect = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
     return 0
 
 
-def wasi_http_types_request_options_first_byte_timeout(host: Host, comp: int, self: int, retptr: int) -> None:
-    _get_timeout(host, comp, _options(host, self).first_byte, retptr)
+def wasi_http_types_request_options_first_byte_timeout(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _get_timeout(guest, comp, _options(guest, self).first_byte, retptr)
 
 
-def wasi_http_types_request_options_set_first_byte_timeout(host: Host, self: int, tag: int, value: int) -> int:
-    _options(host, self).first_byte = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
+def wasi_http_types_request_options_set_first_byte_timeout(guest: Guest, self: int, tag: int, value: int) -> int:
+    _options(guest, self).first_byte = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
     return 0
 
 
-def wasi_http_types_request_options_between_bytes_timeout(host: Host, comp: int, self: int, retptr: int) -> None:
-    _get_timeout(host, comp, _options(host, self).between_bytes, retptr)
+def wasi_http_types_request_options_between_bytes_timeout(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _get_timeout(guest, comp, _options(guest, self).between_bytes, retptr)
 
 
-def wasi_http_types_request_options_set_between_bytes_timeout(host: Host, self: int, tag: int, value: int) -> int:
-    _options(host, self).between_bytes = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
+def wasi_http_types_request_options_set_between_bytes_timeout(guest: Guest, self: int, tag: int, value: int) -> int:
+    _options(guest, self).between_bytes = (value & 0xFFFFFFFFFFFFFFFF) if tag else None
     return 0
 
 
-def wasi_http_types_request_options_drop(host: Host, handle: int) -> None:
-    _options(host, handle)
-    table_drop(host, handle, KIND_REQUEST_OPTIONS)
+def wasi_http_types_request_options_drop(guest: Guest, handle: int) -> None:
+    _options(guest, handle)
+    table_drop(guest, handle, KIND_REQUEST_OPTIONS)
 
 
 # bodies
@@ -651,39 +655,39 @@ class IncomingBody:
 
 
 class ReadyPollable(Pollable):
-    def ready(self, host: Host) -> bool:
+    def ready(self, guest: Guest) -> bool:
         return True
 
 
-def _incoming_body(host: Host, handle: int) -> IncomingBody:
-    return table_get(host, handle, KIND_INCOMING_BODY)  # type: ignore[return-value]
+def _incoming_body(guest: Guest, handle: int) -> IncomingBody:
+    return table_get(guest, handle, KIND_INCOMING_BODY)  # type: ignore[return-value]
 
 
-def _outgoing_body(host: Host, handle: int) -> OutgoingBody:
-    return table_get(host, handle, KIND_OUTGOING_BODY)  # type: ignore[return-value]
+def _outgoing_body(guest: Guest, handle: int) -> OutgoingBody:
+    return table_get(guest, handle, KIND_OUTGOING_BODY)  # type: ignore[return-value]
 
 
 def _consume(
-    host: Host, comp: int, data: tuple[bytes, Fields | None] | None, retptr: int
+    guest: Guest, comp: int, data: tuple[bytes, Fields | None] | None, retptr: int
 ) -> tuple[bytes, Fields | None] | None:
     """`result<incoming-body>`: the body once, then err."""
     if data is None:
-        store_u8(host, comp, retptr, 1)
+        store_u8(guest, comp, retptr, 1)
         return None
-    store_u8(host, comp, retptr, 0)
-    store_u32(host, comp, retptr + 4, table_new(host, KIND_INCOMING_BODY, IncomingBody(*data)))
+    store_u8(guest, comp, retptr, 0)
+    store_u32(guest, comp, retptr + 4, table_new(guest, KIND_INCOMING_BODY, IncomingBody(*data)))
     return data
 
 
-def wasi_http_types_incoming_body_stream(host: Host, comp: int, self: int, retptr: int) -> None:
-    body = _incoming_body(host, self)
+def wasi_http_types_incoming_body_stream(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    body = _incoming_body(guest, self)
     if body.stream_taken:
-        store_u8(host, comp, retptr, 1)
+        store_u8(guest, comp, retptr, 1)
         return
     body.stream_taken = True
-    body.stream_handle = input_stream_new(host, MemoryInput(body.data))
-    store_u8(host, comp, retptr, 0)
-    store_u32(host, comp, retptr + 4, body.stream_handle)
+    body.stream_handle = input_stream_new(guest, MemoryInput(body.data))
+    store_u8(guest, comp, retptr, 0)
+    store_u32(guest, comp, retptr + 4, body.stream_handle)
 
 
 class FutureTrailers:
@@ -692,81 +696,81 @@ class FutureTrailers:
         self.taken = False
 
 
-def wasi_http_types_incoming_body_finish(host: Host, this: int) -> int:
-    body = _incoming_body(host, this)
-    if body.stream_handle is not None and table_alive(host, body.stream_handle, 3):  # KIND_INPUT_STREAM
-        raise Trap("incoming-body.finish with its stream alive")
-    table_drop(host, this, KIND_INCOMING_BODY)
-    return table_new(host, KIND_FUTURE_TRAILERS, FutureTrailers(body.trailers))
+def wasi_http_types_incoming_body_finish(guest: Guest, this: int) -> int:
+    body = _incoming_body(guest, this)
+    if body.stream_handle is not None and table_alive(guest, body.stream_handle, 3):  # KIND_INPUT_STREAM
+        trap(guest, "incoming-body.finish with its stream alive")
+    table_drop(guest, this, KIND_INCOMING_BODY)
+    return table_new(guest, KIND_FUTURE_TRAILERS, FutureTrailers(body.trailers))
 
 
-def wasi_http_types_incoming_body_drop(host: Host, handle: int) -> None:
-    _incoming_body(host, handle)
-    table_drop(host, handle, KIND_INCOMING_BODY)
+def wasi_http_types_incoming_body_drop(guest: Guest, handle: int) -> None:
+    _incoming_body(guest, handle)
+    table_drop(guest, handle, KIND_INCOMING_BODY)
 
 
-def _future_trailers(host: Host, handle: int) -> FutureTrailers:
-    return table_get(host, handle, KIND_FUTURE_TRAILERS)  # type: ignore[return-value]
+def _future_trailers(guest: Guest, handle: int) -> FutureTrailers:
+    return table_get(guest, handle, KIND_FUTURE_TRAILERS)  # type: ignore[return-value]
 
 
-def wasi_http_types_future_trailers_subscribe(host: Host, self: int) -> int:
-    _future_trailers(host, self)
-    return table_new(host, KIND_POLLABLE, ReadyPollable())
+def wasi_http_types_future_trailers_subscribe(guest: Guest, self: int) -> int:
+    _future_trailers(guest, self)
+    return table_new(guest, KIND_POLLABLE, ReadyPollable())
 
 
-def wasi_http_types_future_trailers_get(host: Host, comp: int, self: int, retptr: int) -> None:
-    future = _future_trailers(host, self)
-    store_u8(host, comp, retptr, 1)
+def wasi_http_types_future_trailers_get(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    future = _future_trailers(guest, self)
+    store_u8(guest, comp, retptr, 1)
     if future.taken:
-        store_u8(host, comp, retptr + 8, 1)  # err: it was already taken
+        store_u8(guest, comp, retptr + 8, 1)  # err: it was already taken
         return
     future.taken = True
-    store_u8(host, comp, retptr + 8, 0)
-    store_u8(host, comp, retptr + 16, 0)  # ok: no error-code
+    store_u8(guest, comp, retptr + 8, 0)
+    store_u8(guest, comp, retptr + 16, 0)  # ok: no error-code
     if future.trailers is None:
-        store_u8(host, comp, retptr + 24, 0)
+        store_u8(guest, comp, retptr + 24, 0)
     else:
-        store_u8(host, comp, retptr + 24, 1)
-        store_u32(host, comp, retptr + 28, table_new(host, KIND_FIELDS, future.trailers))
+        store_u8(guest, comp, retptr + 24, 1)
+        store_u32(guest, comp, retptr + 28, table_new(guest, KIND_FIELDS, future.trailers))
 
 
-def wasi_http_types_future_trailers_drop(host: Host, handle: int) -> None:
-    _future_trailers(host, handle)
-    table_drop(host, handle, KIND_FUTURE_TRAILERS)
+def wasi_http_types_future_trailers_drop(guest: Guest, handle: int) -> None:
+    _future_trailers(guest, handle)
+    table_drop(guest, handle, KIND_FUTURE_TRAILERS)
 
 
-def wasi_http_types_outgoing_body_write(host: Host, comp: int, self: int, retptr: int) -> None:
-    body = _outgoing_body(host, self)
+def wasi_http_types_outgoing_body_write(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    body = _outgoing_body(guest, self)
     if body.stream_handle is not None:
-        store_u8(host, comp, retptr, 1)
+        store_u8(guest, comp, retptr, 1)
         return
-    body.stream_handle = output_stream_new(host, body.stream)
-    store_u8(host, comp, retptr, 0)
-    store_u32(host, comp, retptr + 4, body.stream_handle)
+    body.stream_handle = output_stream_new(guest, body.stream)
+    store_u8(guest, comp, retptr, 0)
+    store_u32(guest, comp, retptr + 4, body.stream_handle)
 
 
 def wasi_http_types_outgoing_body_finish(
-    host: Host, comp: int, this: int, tag: int, trailers: int, retptr: int
+    guest: Guest, comp: int, this: int, tag: int, trailers: int, retptr: int
 ) -> None:
-    body = _outgoing_body(host, this)
-    if body.stream_handle is not None and table_alive(host, body.stream_handle, KIND_OUTPUT_STREAM):
-        raise Trap("outgoing-body.finish with its stream alive")
+    body = _outgoing_body(guest, this)
+    if body.stream_handle is not None and table_alive(guest, body.stream_handle, KIND_OUTPUT_STREAM):
+        trap(guest, "outgoing-body.finish with its stream alive")
     if tag:
-        body.trailers = _take_fields(host, trailers)
-    table_drop(host, this, KIND_OUTGOING_BODY)
+        body.trailers = _take_fields(guest, trailers)
+    table_drop(guest, this, KIND_OUTGOING_BODY)
     size = len(body.stream.data)
     if body.expected is not None and body.expected != size:
-        store_u8(host, comp, retptr, 1)
-        store_error_code(host, comp, retptr + 8, ErrorCode(f"HTTP-{body.kind}-body-size", size))
+        store_u8(guest, comp, retptr, 1)
+        store_error_code(guest, comp, retptr + 8, ErrorCode(f"HTTP-{body.kind}-body-size", size))
         body.abandoned = True
         return
     body.finished = True
-    store_u8(host, comp, retptr, 0)
+    store_u8(guest, comp, retptr, 0)
 
 
-def wasi_http_types_outgoing_body_drop(host: Host, handle: int) -> None:
-    body = _outgoing_body(host, handle)
-    table_drop(host, handle, KIND_OUTGOING_BODY)
+def wasi_http_types_outgoing_body_drop(guest: Guest, handle: int) -> None:
+    body = _outgoing_body(guest, handle)
+    table_drop(guest, handle, KIND_OUTGOING_BODY)
     if not body.finished:
         body.abandoned = True
 
@@ -1049,7 +1053,7 @@ class FutureIncomingResponse:
         self.result: IncomingResponse | ErrorCode | None = None
         self.taken = False
 
-    def advance(self, host: Host) -> bool:
+    def advance(self, guest: Guest) -> bool:
         if self.result is not None:
             return True
         body = self.request.body
@@ -1062,7 +1066,7 @@ class FutureIncomingResponse:
             self.prepared.body = body.data()
             if body.trailers is not None:
                 self.prepared.trailers = list(body.trailers.entries)
-        send = host.http_send or default_send
+        send = guest.state.http_send or default_send
         try:
             response = send(self.prepared)
         except ErrorCode as e:
@@ -1083,15 +1087,15 @@ class FuturePollable(Pollable):
     def __init__(self, future: FutureIncomingResponse) -> None:
         self.future = future
 
-    def ready(self, host: Host) -> bool:
-        return self.future.advance(host)
+    def ready(self, guest: Guest) -> bool:
+        return self.future.advance(guest)
 
 
-def _future(host: Host, handle: int) -> FutureIncomingResponse:
-    return table_get(host, handle, KIND_FUTURE_INCOMING_RESPONSE)  # type: ignore[return-value]
+def _future(guest: Guest, handle: int) -> FutureIncomingResponse:
+    return table_get(guest, handle, KIND_FUTURE_INCOMING_RESPONSE)  # type: ignore[return-value]
 
 
-def _prepare(host: Host, req: OutgoingRequest, options: RequestOptions | None) -> HttpRequest:
+def _prepare(guest: Guest, req: OutgoingRequest, options: RequestOptions | None) -> HttpRequest:
     """The request as the transport takes it, or the `ErrorCode` for what is wrong with it (also: the policy)."""
     if not _TOKEN.fullmatch(req.method.encode("latin-1")):
         raise ErrorCode("HTTP-request-method-invalid")
@@ -1100,7 +1104,7 @@ def _prepare(host: Host, req: OutgoingRequest, options: RequestOptions | None) -
         raise ErrorCode("HTTP-request-URI-invalid")
     if split_authority(req.authority, 80) is None:
         raise ErrorCode("HTTP-request-URI-invalid")
-    if not host.http_check(scheme, req.authority):
+    if not guest.state.http_check(scheme, req.authority):
         raise ErrorCode("HTTP-request-denied")
     options = options or RequestOptions()
     return HttpRequest(
@@ -1116,77 +1120,77 @@ def _prepare(host: Host, req: OutgoingRequest, options: RequestOptions | None) -
 
 
 def wasi_http_outgoing_handler_handle(
-    host: Host, comp: int, request: int, opt_tag: int, opt_handle: int, retptr: int
+    guest: Guest, comp: int, request: int, opt_tag: int, opt_handle: int, retptr: int
 ) -> None:
-    req = _request(host, request)
-    options = _options(host, opt_handle) if opt_tag else None
-    table_drop(host, request, KIND_OUTGOING_REQUEST)
+    req = _request(guest, request)
+    options = _options(guest, opt_handle) if opt_tag else None
+    table_drop(guest, request, KIND_OUTGOING_REQUEST)
     if opt_tag:
-        table_drop(host, opt_handle, KIND_REQUEST_OPTIONS)
+        table_drop(guest, opt_handle, KIND_REQUEST_OPTIONS)
     try:
-        prepared = _prepare(host, req, options)
+        prepared = _prepare(guest, req, options)
     except ErrorCode as e:
-        store_u8(host, comp, retptr, 1)
-        store_error_code(host, comp, retptr + 8, e)
+        store_u8(guest, comp, retptr, 1)
+        store_error_code(guest, comp, retptr + 8, e)
         return
-    store_u8(host, comp, retptr, 0)
+    store_u8(guest, comp, retptr, 0)
     store_u32(
-        host,
+        guest,
         comp,
         retptr + 8,
-        table_new(host, KIND_FUTURE_INCOMING_RESPONSE, FutureIncomingResponse(req, options, prepared)),
+        table_new(guest, KIND_FUTURE_INCOMING_RESPONSE, FutureIncomingResponse(req, options, prepared)),
     )
 
 
-def wasi_http_types_future_incoming_response_subscribe(host: Host, self: int) -> int:
-    return table_new(host, KIND_POLLABLE, FuturePollable(_future(host, self)))
+def wasi_http_types_future_incoming_response_subscribe(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_POLLABLE, FuturePollable(_future(guest, self)))
 
 
-def wasi_http_types_future_incoming_response_get(host: Host, comp: int, self: int, retptr: int) -> None:
-    future = _future(host, self)
-    if not future.advance(host):
-        store_u8(host, comp, retptr, 0)
+def wasi_http_types_future_incoming_response_get(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    future = _future(guest, self)
+    if not future.advance(guest):
+        store_u8(guest, comp, retptr, 0)
         return
-    store_u8(host, comp, retptr, 1)
+    store_u8(guest, comp, retptr, 1)
     if future.taken:
-        store_u8(host, comp, retptr + 8, 1)
+        store_u8(guest, comp, retptr + 8, 1)
         return
     future.taken = True
-    store_u8(host, comp, retptr + 8, 0)
+    store_u8(guest, comp, retptr + 8, 0)
     if isinstance(future.result, ErrorCode):
-        store_u8(host, comp, retptr + 16, 1)
-        store_error_code(host, comp, retptr + 24, future.result)
+        store_u8(guest, comp, retptr + 16, 1)
+        store_error_code(guest, comp, retptr + 24, future.result)
     else:
-        store_u8(host, comp, retptr + 16, 0)
-        store_u32(host, comp, retptr + 24, table_new(host, KIND_INCOMING_RESPONSE, future.result))
+        store_u8(guest, comp, retptr + 16, 0)
+        store_u32(guest, comp, retptr + 24, table_new(guest, KIND_INCOMING_RESPONSE, future.result))
 
 
-def wasi_http_types_future_incoming_response_drop(host: Host, handle: int) -> None:
-    _future(host, handle)
-    table_drop(host, handle, KIND_FUTURE_INCOMING_RESPONSE)
+def wasi_http_types_future_incoming_response_drop(guest: Guest, handle: int) -> None:
+    _future(guest, handle)
+    table_drop(guest, handle, KIND_FUTURE_INCOMING_RESPONSE)
 
 
-def _response(host: Host, handle: int) -> IncomingResponse:
-    return table_get(host, handle, KIND_INCOMING_RESPONSE)  # type: ignore[return-value]
+def _response(guest: Guest, handle: int) -> IncomingResponse:
+    return table_get(guest, handle, KIND_INCOMING_RESPONSE)  # type: ignore[return-value]
 
 
-def wasi_http_types_incoming_response_status(host: Host, self: int) -> int:
-    return _response(host, self).status
+def wasi_http_types_incoming_response_status(guest: Guest, self: int) -> int:
+    return _response(guest, self).status
 
 
-def wasi_http_types_incoming_response_headers(host: Host, self: int) -> int:
-    return table_new(host, KIND_FIELDS, _response(host, self).headers)
+def wasi_http_types_incoming_response_headers(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_FIELDS, _response(guest, self).headers)
 
 
-def wasi_http_types_incoming_response_consume(host: Host, comp: int, self: int, retptr: int) -> None:
-    resp = _response(host, self)
-    if _consume(host, comp, resp.body, retptr) is not None:
+def wasi_http_types_incoming_response_consume(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    resp = _response(guest, self)
+    if _consume(guest, comp, resp.body, retptr) is not None:
         resp.body = None
 
 
-def wasi_http_types_incoming_response_drop(host: Host, handle: int) -> None:
-    _response(host, handle)
-    table_drop(host, handle, KIND_INCOMING_RESPONSE)
+def wasi_http_types_incoming_response_drop(guest: Guest, handle: int) -> None:
+    _response(guest, handle)
+    table_drop(guest, handle, KIND_INCOMING_RESPONSE)
 
 
 # the server side: what an embedder gives a component that exports incoming-handler, and what it gets back
@@ -1208,7 +1212,7 @@ class IncomingRequest:
 
 
 def incoming_request_new(
-    host: Host,
+    guest: Guest,
     method: str,
     path: str | None,
     scheme: str | None,
@@ -1221,46 +1225,46 @@ def incoming_request_new(
     fields = Fields([(n.lower(), v) for n, v in headers], True)
     t = None if trailers is None else Fields([(n.lower(), v) for n, v in trailers], True)
     return table_new(
-        host, KIND_INCOMING_REQUEST, IncomingRequest(method, path, scheme, authority, fields, (bytes(body), t))
+        guest, KIND_INCOMING_REQUEST, IncomingRequest(method, path, scheme, authority, fields, (bytes(body), t))
     )
 
 
-def _incoming_request(host: Host, handle: int) -> IncomingRequest:
-    return table_get(host, handle, KIND_INCOMING_REQUEST)  # type: ignore[return-value]
+def _incoming_request(guest: Guest, handle: int) -> IncomingRequest:
+    return table_get(guest, handle, KIND_INCOMING_REQUEST)  # type: ignore[return-value]
 
 
-def wasi_http_types_incoming_request_method(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_method(host, comp, retptr, _incoming_request(host, self).method)
+def wasi_http_types_incoming_request_method(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_method(guest, comp, retptr, _incoming_request(guest, self).method)
 
 
-def wasi_http_types_incoming_request_path_with_query(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_opt_text(host, comp, retptr, _incoming_request(host, self).path)
+def wasi_http_types_incoming_request_path_with_query(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_opt_text(guest, comp, retptr, _incoming_request(guest, self).path)
 
 
-def wasi_http_types_incoming_request_scheme(host: Host, comp: int, self: int, retptr: int) -> None:
-    scheme = _incoming_request(host, self).scheme
-    store_u8(host, comp, retptr, 0 if scheme is None else 1)
+def wasi_http_types_incoming_request_scheme(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    scheme = _incoming_request(guest, self).scheme
+    store_u8(guest, comp, retptr, 0 if scheme is None else 1)
     if scheme is not None:
-        _store_scheme(host, comp, retptr + 4, scheme)
+        _store_scheme(guest, comp, retptr + 4, scheme)
 
 
-def wasi_http_types_incoming_request_authority(host: Host, comp: int, self: int, retptr: int) -> None:
-    _store_opt_text(host, comp, retptr, _incoming_request(host, self).authority)
+def wasi_http_types_incoming_request_authority(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    _store_opt_text(guest, comp, retptr, _incoming_request(guest, self).authority)
 
 
-def wasi_http_types_incoming_request_headers(host: Host, self: int) -> int:
-    return table_new(host, KIND_FIELDS, _incoming_request(host, self).headers)
+def wasi_http_types_incoming_request_headers(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_FIELDS, _incoming_request(guest, self).headers)
 
 
-def wasi_http_types_incoming_request_consume(host: Host, comp: int, self: int, retptr: int) -> None:
-    req = _incoming_request(host, self)
-    if _consume(host, comp, req.body, retptr) is not None:
+def wasi_http_types_incoming_request_consume(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    req = _incoming_request(guest, self)
+    if _consume(guest, comp, req.body, retptr) is not None:
         req.body = None
 
 
-def wasi_http_types_incoming_request_drop(host: Host, handle: int) -> None:
-    _incoming_request(host, handle)
-    table_drop(host, handle, KIND_INCOMING_REQUEST)
+def wasi_http_types_incoming_request_drop(guest: Guest, handle: int) -> None:
+    _incoming_request(guest, handle)
+    table_drop(guest, handle, KIND_INCOMING_REQUEST)
 
 
 class OutgoingResponse:
@@ -1290,77 +1294,77 @@ class OutParam:
         self.done = False
 
 
-def response_outparam_new(host: Host) -> tuple[int, OutParam]:
+def response_outparam_new(guest: Guest) -> tuple[int, OutParam]:
     param = OutParam()
-    return table_new(host, KIND_RESPONSE_OUTPARAM, param), param
+    return table_new(guest, KIND_RESPONSE_OUTPARAM, param), param
 
 
-def _outparam(host: Host, handle: int) -> OutParam:
-    return table_get(host, handle, KIND_RESPONSE_OUTPARAM)  # type: ignore[return-value]
+def _outparam(guest: Guest, handle: int) -> OutParam:
+    return table_get(guest, handle, KIND_RESPONSE_OUTPARAM)  # type: ignore[return-value]
 
 
 def wasi_http_types_response_outparam_set(
-    host: Host, comp: int, param: int, tag: int, a1: int, a2: int, a3: int, a4: int, a5: int, a6: int, a7: int
+    guest: Guest, comp: int, param: int, tag: int, a1: int, a2: int, a3: int, a4: int, a5: int, a6: int, a7: int
 ) -> None:
-    out = _outparam(host, param)
+    out = _outparam(guest, param)
     if tag == 0:
-        response: OutgoingResponse = table_get(host, a1, KIND_OUTGOING_RESPONSE)  # type: ignore[assignment]
-        table_drop(host, a1, KIND_OUTGOING_RESPONSE)
+        response: OutgoingResponse = table_get(guest, a1, KIND_OUTGOING_RESPONSE)  # type: ignore[assignment]
+        table_drop(guest, a1, KIND_OUTGOING_RESPONSE)
         out.response = response
     elif tag == 1:
-        out.error = lift_error_code_flat(host, comp, [a1, a2, a3, a4, a5, a6, a7])
+        out.error = lift_error_code_flat(guest, comp, [a1, a2, a3, a4, a5, a6, a7])
     else:
-        raise Trap(f"bad result {tag}")
+        trap(guest, f"bad result {tag}")
     out.done = True
-    table_drop(host, param, KIND_RESPONSE_OUTPARAM)
+    table_drop(guest, param, KIND_RESPONSE_OUTPARAM)
 
 
-def wasi_http_types_response_outparam_drop(host: Host, handle: int) -> None:
-    out = _outparam(host, handle)
-    table_drop(host, handle, KIND_RESPONSE_OUTPARAM)
+def wasi_http_types_response_outparam_drop(guest: Guest, handle: int) -> None:
+    out = _outparam(guest, handle)
+    table_drop(guest, handle, KIND_RESPONSE_OUTPARAM)
     if not out.done:
         out.error = ErrorCode("internal-error", "response-outparam dropped without a response")
         out.done = True
 
 
-def _outgoing_response(host: Host, handle: int) -> OutgoingResponse:
-    return table_get(host, handle, KIND_OUTGOING_RESPONSE)  # type: ignore[return-value]
+def _outgoing_response(guest: Guest, handle: int) -> OutgoingResponse:
+    return table_get(guest, handle, KIND_OUTGOING_RESPONSE)  # type: ignore[return-value]
 
 
-def wasi_http_types_outgoing_response_new(host: Host, headers: int) -> int:
-    return table_new(host, KIND_OUTGOING_RESPONSE, OutgoingResponse(_take_fields(host, headers)))
+def wasi_http_types_outgoing_response_new(guest: Guest, headers: int) -> int:
+    return table_new(guest, KIND_OUTGOING_RESPONSE, OutgoingResponse(_take_fields(guest, headers)))
 
 
-def wasi_http_types_outgoing_response_status_code(host: Host, self: int) -> int:
-    return _outgoing_response(host, self).status
+def wasi_http_types_outgoing_response_status_code(guest: Guest, self: int) -> int:
+    return _outgoing_response(guest, self).status
 
 
-def wasi_http_types_outgoing_response_set_status_code(host: Host, self: int, status: int) -> int:
+def wasi_http_types_outgoing_response_set_status_code(guest: Guest, self: int, status: int) -> int:
     if not 100 <= status <= 599:
         return 1
-    _outgoing_response(host, self).status = status
+    _outgoing_response(guest, self).status = status
     return 0
 
 
-def wasi_http_types_outgoing_response_headers(host: Host, self: int) -> int:
-    return table_new(host, KIND_FIELDS, _outgoing_response(host, self).headers)
+def wasi_http_types_outgoing_response_headers(guest: Guest, self: int) -> int:
+    return table_new(guest, KIND_FIELDS, _outgoing_response(guest, self).headers)
 
 
-def wasi_http_types_outgoing_response_body(host: Host, comp: int, self: int, retptr: int) -> None:
-    resp = _outgoing_response(host, self)
-    body = _new_body(host, comp, resp.headers, "response", resp.body, retptr)
+def wasi_http_types_outgoing_response_body(guest: Guest, comp: int, self: int, retptr: int) -> None:
+    resp = _outgoing_response(guest, self)
+    body = _new_body(guest, comp, resp.headers, "response", resp.body, retptr)
     if body is not None:
         resp.body = body
 
 
-def wasi_http_types_outgoing_response_drop(host: Host, handle: int) -> None:
-    _outgoing_response(host, handle)
-    table_drop(host, handle, KIND_OUTGOING_RESPONSE)
+def wasi_http_types_outgoing_response_drop(guest: Guest, handle: int) -> None:
+    _outgoing_response(guest, handle)
+    table_drop(guest, handle, KIND_OUTGOING_RESPONSE)
 
 
 # errors of the io resource
 
 
-def wasi_http_types_http_error_code(host: Host, comp: int, err: int, retptr: int) -> None:
-    table_get(host, err, KIND_ERROR)
-    store_u8(host, comp, retptr, 0)  # a stream of a body never fails here, so no error carries an http error-code
+def wasi_http_types_http_error_code(guest: Guest, comp: int, err: int, retptr: int) -> None:
+    table_get(guest, err, KIND_ERROR)
+    store_u8(guest, comp, retptr, 0)  # a stream of a body never fails here, so no error carries an http error-code

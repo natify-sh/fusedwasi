@@ -525,7 +525,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_fsync(const fusedwasi_p2_descriptor *d, int
 FUSEDWASI_P2_FN int fusedwasi_p2_name_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
 /* the names of a directory, sorted, without . and .., with their types; the caller frees them */
-FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out, fusedwasi_p2_state *s) {
+FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char ***names_out, uint8_t **types_out, uint32_t *count_out, fusedwasi_p2_guest *g) {
     char pattern[FUSEDWASI_P2_PATH_MAX];
     if (strlen(d->path) + 3 >= sizeof pattern) return FUSEDWASI_P2_E_NAME_TOO_LONG;
     snprintf(pattern, sizeof pattern, "%s\\*", d->path);
@@ -537,7 +537,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
     if (h == INVALID_HANDLE_VALUE) return fusedwasi_p2_win_last();
     uint32_t count = 0, capacity = 16;
     char **names = (char **)malloc(capacity * sizeof *names);
-    if (!names) s->trap(s, "out of memory");
+    if (!names) g->trap(g, "out of memory");
     do {
         if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
         char text[FUSEDWASI_P2_NAME_MAX * 4 + 4];
@@ -545,16 +545,16 @@ FUSEDWASI_P2_FN int fusedwasi_p2_sys_list(const fusedwasi_p2_descriptor *d, char
         if (count == capacity) {
             capacity *= 2;
             names = (char **)realloc(names, capacity * sizeof *names);
-            if (!names) s->trap(s, "out of memory");
+            if (!names) g->trap(g, "out of memory");
         }
         names[count] = (char *)malloc(strlen(text) + 1);
-        if (!names[count]) s->trap(s, "out of memory");
+        if (!names[count]) g->trap(g, "out of memory");
         fusedwasi_p2_str_set(names[count++], text);
     } while (FindNextFileW(h, &fd));
     FindClose(h);
     qsort(names, count, sizeof *names, fusedwasi_p2_name_cmp);
     uint8_t *types = (uint8_t *)malloc(count ? count : 1);
-    if (!types) s->trap(s, "out of memory");
+    if (!types) g->trap(g, "out of memory");
     uint32_t kept = 0;
     for (uint32_t i = 0; i < count; i++) {
         fusedwasi_p2_stat st;

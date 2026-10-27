@@ -10,9 +10,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_random as rnd
-from fusedwasi.p2.wasi_p2_core import Host, Trap
+from fusedwasi.p2.wasi_p2_core import Trap
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_random_driver.c"
@@ -46,7 +47,7 @@ def python_output(scenario: str) -> str:
     def failing(n: int) -> bytes:
         raise Trap("the source of random bytes failed")
 
-    host = Host([memory], realloc=bump, random_bytes=counter(0), insecure_random_bytes=counter(128))
+    host = guest_of([memory], realloc=bump, random_bytes=counter(0), insecure_random_bytes=counter(128))
     lines: list[str] = []
 
     def dump(what: str) -> None:
@@ -66,7 +67,7 @@ def python_output(scenario: str) -> str:
             dump("empty")
             lines.append(f"realloc calls {calls[0]}")  # also the empty list asked for memory
         elif scenario == "default_source":
-            host.random_bytes = os.urandom
+            host.state.random_bytes = os.urandom
             first = rnd.wasi_random_random_get_random_u64(host)
             second = rnd.wasi_random_random_get_random_u64(host)
             lines.append(f"distinct {int(first != second)}")
@@ -77,7 +78,7 @@ def python_output(scenario: str) -> str:
         elif scenario == "too_many":
             rnd.wasi_random_random_get_random_bytes(host, 0, 1 << 40, 0)
         elif scenario == "failing":
-            host.random_bytes = failing
+            host.state.random_bytes = failing
             rnd.wasi_random_random_get_random_u64(host)
     except Trap:
         lines.append("TRAP")

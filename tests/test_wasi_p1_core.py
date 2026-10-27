@@ -86,18 +86,38 @@ def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     assert "realtime e803000000000000" in lines  # the hook of the clock: 1000
     assert "out 1 68656c6c6f20" in lines and "nwritten 0c000000" in lines
     assert "prestat 0000000005000000" in lines  # a directory, the name "/data" is 5 bytes
-    assert "proc_raise trapped" in lines and "end 2 9" in lines
-    # the end is what a call leaves, not a state of the instance: the signal 9 did not stop the program (the script goes on), and the last call, proc_exit, leaves its code
-    assert lines[-3:] == [
+    # proc_raise asks the hook `signal` of the guest: 31 is INVAL and 0 is success whatever the hook; with no hook 20, 27 and 9 are NOTSUP (58) and the program goes on
+    first = lines.index("proc_raise 28")
+    assert lines[first : first + 5] == [
+        "proc_raise 28",
+        "proc_raise 0",
+        "proc_raise 58",
+        "proc_raise 58",
+        "proc_raise 58",
+    ]
+    # with the hook: it is told the number; 20 is accepted, 27 is refused (PERM, 63), and 9 ends the program by the trap of the guest, which leaves no code
+    assert lines[first + 5 : first + 14] == [
+        "proc_raise 28",
+        "proc_raise 0",
+        "signal 20",
+        "proc_raise 0",
+        "signal 27",
+        "proc_raise 63",
+        "signal 9",
+        "proc_raise trapped",
+        "exit 0 0",
+    ]
+    assert lines[first + 14] == "proc_raise 58"  # the hook is taken away
+    # the end is what a call leaves, not a state of the world: the signal 9 did not stop the program (the script goes on), and the last call, proc_exit, leaves its code
+    assert lines[-2:] == [
         "proc_exit trapped",
-        "end 2 9",
         "exit 1 7",
     ]  # (the host clears the record before a call; the script does not)
 
 
 def test_proc_exit_is_the_end_of_wasi_02(tmp_path: Path) -> None:
     """The code of proc_exit is where a host of 0.2 reads an exit: `exited` and `exit_code` of the state of 0.2, in C and in Python."""
-    assert run(DATA / "p1" / "exit.txt", str(tmp_path)) == ["proc_exit trapped", "end 0 0", "exit 1 7"]
+    assert run(DATA / "p1" / "exit.txt", str(tmp_path)) == ["proc_exit trapped", "exit 1 7"]
 
 
 def test_what_the_second_stage_gives(tmp_path: Path) -> None:
@@ -120,12 +140,12 @@ def test_what_the_second_stage_gives(tmp_path: Path) -> None:
 _NATIVE_POLL = """
 import struct, sys
 from fusedwasi.p1 import wasi_p1
-from fusedwasi.p1.wasi_p1_core import State
+from fusedwasi.p1.wasi_p1_core import Guest, State
 from fusedwasi.p2.wasi_p2_cli import FdInput
-from fusedwasi.p2.wasi_p2_core import Host
+from fusedwasi.p2.wasi_p2_core import State as P2State
 
 memory = bytearray(4096)
-s = State(memory, core=Host(stdin=FdInput(0)))  # the descriptor of the process, not the Python stream
+s = Guest(State(core=P2State(stdin=FdInput(0))), memory)  # the descriptor of the process, not the Python stream
 struct.pack_into("<QBxxxxxxxI", memory, 0, 1, 1, 0)  # fd_read of fd 0
 struct.pack_into("<QBxxxxxxxIxxxxQQHxxxxxx", memory, 48, 2, 0, 1, 20_000_000, 0, 0)  # a clock of 20 ms
 rc = wasi_p1.poll_oneoff(s, 0, 1000, 2, 900)
