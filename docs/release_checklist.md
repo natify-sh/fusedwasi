@@ -8,7 +8,7 @@ This file is a list of what to settle first. It is written 2026-10-26 from the c
 
 **Done 2026-10-27 (step 5).** The public names are listed in [`public_api.md`](public_api.md), made from `src/fusedwasi/public_api.json` (C and Python, a line of purpose each, the fields of the public structs; wasi:http and wasi:sockets marked unstable). Every other name is private and carries a mark (a double underscore after the prefix in C, a leading underscore in Python; `design_model.md`, section 5), and `tests/test_public_api.py` fails when a name is neither listed nor marked, when a listed name does not exist, and when a neutral user (`tests/neutral/`) uses a private name. The names that changed are in [`private_names.md`](private_names.md). The function of each import (`fusedwasi_p1_<name>`, `fusedwasi_wasi_<package>_<interface>_<name>`) is bound by name by the generators; those 247 names are public by being in the tables of signatures.
 
-What the owner still has to confirm (they were chosen, not decided): the helpers of the canonical ABI (`mem`, `load_*`, `store_*`, `alloc`, `string`, `table_get`) are private; the kinds `FUSEDWASI_P2_KIND_*` are public; the transport and the server side of http are public and unstable.
+**Decided by the owner, 2026-10-27:** the helpers of the canonical ABI (`mem`, `load_*`, `store_*`, `alloc`, `string`, `table_get`) stay private; the kinds `FUSEDWASI_P2_KIND_*` (and `KIND_*` in Python) are public in both languages; the names of the transport and of the server side of `wasi:http` are public and marked unstable in the alpha.
 
 ## 2. Behaviour not yet checked against a real host
 

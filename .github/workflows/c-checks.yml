@@ -42,8 +42,10 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           set INC=src\fusedwasi\include\fusedwasi
-          for %%v in (p1\wasi_p1_core.h p1\wasi_p1.h p1\wasi_p1_unstable.h) do (
+          set FAIL=0
+          for %%v in (p1\wasi_p1_core.h p1\wasi_p1.h p1\wasi_p1_unstable.h p2\wasi_p2_core.h p2\wasi_p2_cli.h p2\wasi_p2_clocks.h p2\wasi_p2_filesystem.h p2\wasi_p2_http.h p2\wasi_p2_io.h p2\wasi_p2_random.h p2\wasi_p2_sockets.h) do (
             echo #include "%%~nxv"> check.c
             echo int main^(void^) { return 0; }>> check.c
-            cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 /I%INC%\p2 check.c || exit /b 1
+            cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 /I%INC%\p2 check.c || set FAIL=1
           )
+          exit /b %FAIL%

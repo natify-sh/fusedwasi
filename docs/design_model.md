@@ -6,9 +6,9 @@ Status: a draft for the owner, 2026-10-27. Steps 1 and 3 (the split, and 0.1 ove
 
 **Why it exists.** The WASI of the existing runtimes is not usable outside them: in Wasmtime it is built on its own types (`WasiCtx` lives in the `Store<T>`, `ResourceTable` is `wasmtime::component`'s, the functions are generated for its `Linker`); uvwasi has WASI 0.1 only, takes host pointers, and carries a libuv loop (`uv_loop_t *loop`) in its state. fusedwasi was started because none of them could be taken by another engine. That is the test of every decision here: *could an engine that nobody here has heard of use this?* Section 11 is how it is checked.
 
-fusedwasi is **a set of ready, cross-platform functions of WASI 0.1 and 0.2**, in C (headers) and in Python (the twin), with the state those functions need. It is not a host and it is not an engine. It knows nothing of the runtime that calls it (`wasm2c`, Wasmtime, a browser) and nothing of the user that wraps it (`wasmext`, `wasmhost`, a new one). A user depends on fusedwasi; fusedwasi never depends on a user, in code, in names, or in comments that describe how a user works.
+fusedwasi is **a set of ready, cross-platform functions of WASI 0.1 and 0.2**, in C (headers) and in Python (the twin), with the state those functions need. It is not a host and it is not an engine. It knows nothing of the runtime that calls it (`wasm2c`, Wasmtime, a browser) and nothing of the user that wraps it (any host, an existing one or a new one). A user depends on fusedwasi; fusedwasi never depends on a user, in code, in names, or in comments that describe how a user works.
 
-The rule for a change: it is made when it is right for **any** user. "It is convenient for wasmext" is not a reason; "two users would otherwise write the same workaround" is.
+The rule for a change: it is made when it is right for **any** user. "It is convenient for one host" is not a reason; "two users would otherwise write the same workaround" is.
 
 ## 2. Who owns what
 
@@ -185,7 +185,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 
 ## 8. What the users do after
 
-Nothing before the doc is agreed. Then each user adapts in its own repository (wasmext: one guest for each instance, one state for a `Store`; wasmhost: the same in Python), and the C3 work in wasmext waits for it.
+Nothing before the doc is agreed. Then each user adapts in its own repository (a C host: one guest for each instance, one state for a `Store`; a Python host: the same in Python), and the C3 work in wasmext waits for it.
 
 ## 9. What the others hold (checked 2026-10-27)
 
@@ -195,7 +195,7 @@ Nothing before the doc is agreed. Then each user adapts in its own repository (w
 
 What this says for fusedwasi:
 
-* Both keep the world apart from the caller. That is the split of section 3 (state and guest), so the split is not a wasmext idea.
+* Both keep the world apart from the caller. That is the split of section 3 (state and guest), so the split is not the idea of one host.
 * uvwasi avoids the guest by making the embedder translate every guest address; for `fd_write` the embedder builds an array of host `iovec`s from the guest's, on every call. fusedwasi chose the other way (the library reads the guest memory itself), which is cheaper for an engine like wasm2c where the memory is a flat array already, and is why it needs a guest at all. Keeping that choice is deliberate; a user that prefers the uvwasi way can still give a guest whose memory is the whole host address space (base 0), but that is not a goal.
 * Neither has a hook for `trap` or `realloc`, because neither calls into the guest. fusedwasi does (a list or a string for the guest in 0.2), so the guest carries them.
 
@@ -203,7 +203,7 @@ What this says for fusedwasi:
 
 * `WasiCtx` holds the stdio (`StdinStream` and `StdoutStream` objects), the clocks, the random sources, the policies of the sockets, the environment, the arguments and the preopens. It holds **no memory, no trap, no realloc and no exit status**. This is the same cut as the table above.
 * **The end of the program** leaves the call as its error: `proc_exit` returns `I32Exit(status)` (status of 126 and more is refused with an error); nothing is stored in `WasiP1Ctx` or `WasiCtx`. So the end is the result of one call, which is why `exited` and the others belong to the guest.
-* `proc_raise` answers `NOTSUP` in Wasmtime. fusedwasi ends the program with the signal (`finished`, `end_value`). That is a difference from Wasmtime, not from the WASI text; it came with the code moved from wasmext (`8f35972`, `5058d6a`), and wasmhost answers `ENOSYS` and does not end the program (its README). Decided in section 10.
+* `proc_raise` answers `NOTSUP` in Wasmtime. fusedwasi ends the program with the signal (`finished`, `end_value`). That is a difference from Wasmtime, not from the WASI text; it came with the code moved from the first user (`8f35972`, `5058d6a`), and another host answers `ENOSYS` and does not end the program (its README). Decided in section 10.
 * **Waiting**: Wasmtime has no `wait` hook. A blocking `poll_oneoff` is an `await` point of the caller's task, or, when `allow_blocking_current_thread` is set and there is one relative clock, a `thread::sleep`. The wait belongs to the caller (it is where the caller can yield or be interrupted); fusedwasi is synchronous, so the hook stands for the `await`, and it is on the guest.
 * **`user`**: the data of the user is the `T` of `Store<T>`; `WasiCtx` has no pointer of the user, because Rust closures carry their own data. C has no closures, so each side has a `user`.
 
@@ -215,11 +215,11 @@ What a signal does to a program is the host's decision, not WASI's: the guest on
 * The default (no hook): answers `NOTSUP`, as Wasmtime does. The program goes on.
 * `sig > 30` stays `INVAL`; `0` stays success (no signal).
 * `finished`, `end_value`, `FUSEDWASI_P1_END_SIGNAL` and `FUSEDWASI_P1_END_NONE`/`END_EXIT` go away from the state: what remains of the end of a call is `exited` and `exit_code`, on the guest (section 3). Python: `WasiSignal` and `Signal` go away; the hook is a callable of the `Guest`.
-* The user that wants today's behaviour of wasmext (a signal that kills ends the program, with the number and the name) writes it as the hook; the table of which signals end a process moves to that user. The test `tests/test_wasi_p1_core.py` (`proc_raise trapped`, `end 2 9`) is rewritten for the hook.
+* The user that wants today's behaviour of the first user (a signal that kills ends the program, with the number and the name) writes it as the hook; the table of which signals end a process moves to that user. The test `tests/test_wasi_p1_core.py` (`proc_raise trapped`, `end 2 9`) is rewritten for the hook.
 
 ## 11. The proof of neutrality (accepted by the owner, 2026-10-27)
 
-"fusedwasi does not care who uses it" is shown, not claimed. The rework is not done until fusedwasi has, **inside this repository**, two small users that have nothing to do with `wasm2c`, `wasmext` or `wasmhost`, and that use only the public API of this document:
+"fusedwasi does not care who uses it" is shown, not claimed. The rework is not done until fusedwasi has, **inside this repository**, two small users that have nothing to do with `wasm2c` or any particular host, and that use only the public API of this document:
 
 1. **A Python user over an engine that is not ours**: the Python twin driven by `wasmtime-py` (the `State` and a `Guest` per instance, the memory as a function that gives the memory of the instance in call, `trap` and `exit` as exceptions), running a small WASI 0.1 program and a small WASI 0.2 command (as a core module) and checking the result against the same program under Wasmtime's own WASI. Lives in `examples/` or `tests/neutral/`, with its own test.
 2. **A C user over an engine that is not `wasm2c`**: a small C driver (a tiny interpreter or an existing small engine such as `wasm3` or `WAMR`, whichever can be had in CI without a heavy dependency) with its own `Guest`, memory source, `trap` and `realloc`. If no engine is practical, the driver runs the C functions on a hand-made guest memory, as the existing C tests do, and says plainly that this proves the C interface but not an engine.

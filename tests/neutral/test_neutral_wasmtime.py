@@ -1,4 +1,4 @@
-"""fusedwasi used by a program that knows nothing of wasm2c, wasmext or wasmhost: wasmtime-py runs the modules, `neutral_wasmtime.py` is the user.
+"""fusedwasi used by a program that knows nothing of wasm2c or any particular host: wasmtime-py runs the modules, `neutral_wasmtime.py` is the user.
 
 Each program is run twice, under the functions of fusedwasi and under Wasmtime's own WASI (the module of 0.1 with `define_wasi`, the command of 0.2 as the component
 `p2_command.component.wat`), and what the program can see from outside is compared: what it wrote, its status, the files it left.

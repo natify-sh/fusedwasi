@@ -112,6 +112,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__target(const char *dir, const char *leaf, char
     }
     if (slash) {
         fusedwasi_p2__stat st;
+        memset(&st, 0, sizeof st);
         if (fusedwasi_p2__win_stat_path(out, 1, &st) == FUSEDWASI_P2__OK && st.type != FUSEDWASI_P2__T_DIRECTORY) return FUSEDWASI_P2_E_NOT_DIRECTORY;
     }
     return FUSEDWASI_P2__OK;
@@ -415,6 +416,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__sys_open_at(fusedwasi_p2__dirref dir, const ch
     int rc = fusedwasi_p2__target(dir, leaf, full, sizeof full);
     if (rc != FUSEDWASI_P2__OK) return rc;
     fusedwasi_p2__stat st;
+    memset(&st, 0, sizeof st);
     int have = fusedwasi_p2__win_stat_path(full, 0, &st);
     if (have != FUSEDWASI_P2__OK && have != FUSEDWASI_P2_E_NO_ENTRY) return have;
     int exists = have == FUSEDWASI_P2__OK;

@@ -1178,9 +1178,9 @@ static inline int fusedwasi_p1__dirlist_add(fusedwasi_p1__dirlist *list, const c
 
 /* the names of the directory (descriptor.read-directory), with "." and ".." first, the inode of each from a stat of the name */
 static inline uint32_t fusedwasi_p1__list(const fusedwasi_p2__descriptor *d, fusedwasi_p1__dirlist *list) {
-    char **names;
-    uint8_t *types;
-    uint32_t count;
+    char **names = NULL;
+    uint8_t *types = NULL;
+    uint32_t count = 0;
     int code = fusedwasi_p2__fs_read_directory(d, &names, &types, &count);
     if (code != FUSEDWASI_P2__OK) return fusedwasi_p1__of_code(code);
     uint32_t rc = FUSEDWASI_P1_E_SUCCESS;

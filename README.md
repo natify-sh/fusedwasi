@@ -32,7 +32,7 @@ flowchart TB
     build -- "AOT: wasm2c · runtime: any engine" --> run
 ```
 
-**AOT and runtime.** The library asks the engine for two things only: the memory of each component (a base and a size) and a way to call a function for each import. So it does not matter how the module runs: compiled ahead of time to C with `wasm2c` (the C headers are included into the generated glue, nothing is needed at run time), or in an interpreter or a JIT that calls the same functions through its import table (the C headers from an embedder, the Python twin from a Python host). Only the AOT route has been run so far (wasmext, `wasm2c`); the runtime route follows from the interface and is not tested.
+**AOT and runtime.** The library asks the engine for two things only: the memory of each component (a base and a size) and a way to call a function for each import. So it does not matter how the module runs: compiled ahead of time to C with `wasm2c` (the C headers are included into the generated glue, nothing is needed at run time), or in an interpreter or a JIT that calls the same functions through its import table (the C headers from an embedder, the Python twin from a Python host). The AOT route (`wasm2c`) is run by users outside this repository; the runtime route is run here by the neutral users in `tests/neutral/` (C over wasm3, Python over wasmtime-py and over pywasm3).
 
 ## The API (planned; the shape of the current code)
 
@@ -98,7 +98,7 @@ Every function is `static inline` and nothing is global or thread-local, so a mo
 
 ## Who uses it
 
-Any host that can give a memory and call a function for each import. In C: the glue of a module compiled with `wasm2c` includes the headers and needs nothing at run time. In Python: the twin in `.py` under the engines a Python host supports. The two users that exist today are `wasmext` (C) and `wasmhost` (Python); neither is special, and the library knows nothing of them.
+Any host that can give a memory and call a function for each import. In C: the glue of a module compiled with `wasm2c` includes the headers and needs nothing at run time. In Python: the twin in `.py` under the engines a Python host supports. The library knows nothing of the host that calls it: three small neutral hosts in `tests/neutral/` (C over wasm3, Python over wasmtime-py and over pywasm3) show that the public names are enough.
 
 ## Not here
 

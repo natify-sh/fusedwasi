@@ -32,7 +32,7 @@ PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 def test_the_c_and_the_python_have_a_function_for_the_same_imports() -> None:
     """There is a function for every import of WASI 0.2 that the host knows, in both, and no catch-all: a name that is not here is not answered by the library (the
-    generator of the module decides what that means: wasmext refuses to build the glue, `GenError`)."""
+    generator of the module decides what that means: a generator of glue may refuse to build it)."""
     c_names: set[str] = set()
     for header in C_P2.glob("wasi_p2_*.h"):
         for m in re.finditer(

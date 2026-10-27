@@ -337,7 +337,7 @@ int main(int argc, char **argv) {
                 at += 24 + have;
             }
         } else if (!strcmp(t[0], "call")) {
-            size_t i = 0;
+            volatile size_t i = 0; /* read after the longjmp of a trap */
             while (i < sizeof calls / sizeof *calls && strcmp(calls[i].name, t[1])) i++;
             if (i == sizeof calls / sizeof *calls) {
                 printf("unknown call %s\n", t[1]);

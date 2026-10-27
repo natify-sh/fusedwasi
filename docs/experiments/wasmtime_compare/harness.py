@@ -486,7 +486,7 @@ class FusedP2(FusedBase):
             return lambda *a: fn(self.host, *a)
 
         self._core(wasm_core, bind)
-        self.host.memories.append(self.view)
+        self.host._memories.append(self.view)
 
     def _realloc(self, comp: int, old_ptr: int, old_size: int, align: int, new_size: int) -> int:
         # the guest's own allocator: its export `cabi_realloc`
@@ -516,7 +516,7 @@ class FusedP1(FusedBase):
             return lambda *a: fn(self.host, *a)
 
         self._core(wasm_core, bind)
-        self.host.memories.append(self.view)
+        self.host._memories.append(self.view)
 
     def stdout_text(self) -> bytes:
         return bytes(self.out.data)

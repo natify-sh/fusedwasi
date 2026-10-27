@@ -361,6 +361,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2__fs_open_at(const fusedwasi_p2__descriptor *d, 
     fusedwasi_p2__walk w;
     int rc = fusedwasi_p2__fs_walk(&w, d, path, len, (path_flags & FUSEDWASI_P2__SYMLINK_FOLLOW) != 0, opts);
     if (rc != FUSEDWASI_P2__OK) return rc;
+    memset(made, 0, sizeof *made);
     rc = fusedwasi_p2__sys_open_at(w.dir, w.leaf, open_flags, flags, made);
     fusedwasi_p2__walk_close(&w);
     if (rc == FUSEDWASI_P2__OK) made->flags = made->is_dir ? (d->flags & (FUSEDWASI_P2__READ | FUSEDWASI_P2__MUTATE)) : flags;
@@ -692,9 +693,9 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_write(fusedwasi_
 
 FUSEDWASI_P2_FN void fusedwasi_wasi_filesystem_types_descriptor_read_directory(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2__descriptor *d = fusedwasi_p2__descriptor_get(g, self);
-    char **names;
-    uint8_t *types;
-    uint32_t count;
+    char **names = NULL;
+    uint8_t *types = NULL;
+    uint32_t count = 0;
     int rc = fusedwasi_p2__fs_read_directory(d, &names, &types, &count);
     if (rc != FUSEDWASI_P2__OK) {
         fusedwasi_p2__handle_result(g, comp, retptr, rc, 0);

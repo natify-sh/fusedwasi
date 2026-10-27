@@ -1,6 +1,6 @@
 """A user of fusedwasi over wasmtime-py: the imports of a core module are the functions of fusedwasi, one `Guest` for each instance, one `State` for as many instances as the caller wants.
 
-It knows nothing of wasm2c, wasmext or wasmhost and it touches only what fusedwasi publishes: the family packages `fusedwasi.p1` and `fusedwasi.p2` (`State`, `Guest`, `Exit`, ...), the table of
+It knows nothing of wasm2c or any particular host and it touches only what fusedwasi publishes: the family packages `fusedwasi.p1` and `fusedwasi.p2` (`State`, `Guest`, `Exit`, ...), the table of
 imports `fusedwasi.signatures` (`find_import` gives the Python function of an import and whether it takes the number of the memory) and the functions it points to. What it needed
 that is not published is listed in `docs/design_model.md`, section 11.
 

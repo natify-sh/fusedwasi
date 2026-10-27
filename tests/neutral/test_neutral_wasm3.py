@@ -1,4 +1,4 @@
-"""fusedwasi used from C by a program that knows nothing of wasm2c, wasmext or wasmhost: wasm3 runs the modules, `c_wasm3/neutral_wasm3.c` is the user.
+"""fusedwasi used from C by a program that knows nothing of wasm2c or any particular host: wasm3 runs the modules, `c_wasm3/neutral_wasm3.c` is the user.
 
 The driver is built here from the public headers and from the glue that `c_wasm3/gen_wasm3_glue.py` writes out of the public table of signatures; wasm3 is not in this repository: set
 WASM3_SRC to a checkout of https://github.com/wasm3/wasm3 (the CI job uses the tag v0.5.0, commit 6b8bcb1e07bf26ebef09a7211b0a37a446eafd52). Without it these tests are skipped.
@@ -82,6 +82,38 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     out = work / "neutral_wasm3"
     subprocess.run([CC, *flags, *paths, str(HERE / "neutral_wasm3.c"), *objects, "-lm", "-o", str(out)], check=True)
     return out
+
+
+@pytest.mark.parametrize("level", ["-O1", "-O2", "-O3", "-Os"])
+@pytest.mark.parametrize("compiler", [c for c in ("gcc", "clang", "x86_64-w64-mingw32-gcc") if shutil.which(c)])
+def test_the_user_and_its_glue_build_without_a_warning(compiler: str, level: str, tmp_path: Path) -> None:
+    """The C of the neutral user and the glue generated for it, optimised, with the warnings as errors: a user's build of the headers (no `-Wno` flag)."""
+    if "WASM3_SRC" not in os.environ:
+        pytest.skip("WASM3_SRC is not set: it is a checkout of https://github.com/wasm3/wasm3 (tag v0.5.0)")
+    spec = importlib.util.spec_from_file_location("gen_wasm3_glue", HERE / "gen_wasm3_glue.py")
+    assert spec is not None and spec.loader is not None
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    generator.main(str(tmp_path / "neutral_glue.h"))
+    command = [
+        compiler,
+        "-std=gnu11",
+        level,
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-c",
+        f"-I{Path(os.environ['WASM3_SRC']) / 'source'}",
+    ]
+    command += [
+        f"-I{fusedwasi.get_include()}",
+        f"-I{tmp_path}",
+        str(HERE / "neutral_wasm3.c"),
+        "-o",
+        str(tmp_path / "neutral.o"),
+    ]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
 
 
 def assemble(tmp_path: Path, name: str, text: str | None = None) -> Path:
