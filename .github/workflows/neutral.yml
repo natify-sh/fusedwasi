@@ -14,8 +14,12 @@ permissions:
 
 jobs:
   python-wasmtime:
-    name: Python over wasmtime-py, with the official wasi-testsuite of 0.1 (ubuntu)
+    name: Python over wasmtime-py, with the official wasi-testsuite of 0.1 (ubuntu, Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]  # the lowest the tests are written for, and the one the runner of the testsuite needs (it uses Path.relative_to(walk_up=), 3.12 and later)
     steps:
       - uses: actions/checkout@v7
       # the branch with the compiled tests, at the commit the 72 tests of 0.1 were counted on
@@ -27,11 +31,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - run: uv sync --group neutral
       - name: The programs, against Wasmtime's own WASI
         run: uv run --no-sync pytest tests/neutral -q
       - name: The official wasi-testsuite (WASI 0.1), with fusedwasi as the WASI of wasmtime-py
+        if: matrix.python == '3.13'
         working-directory: wasi-testsuite
         run: |
           uv run --no-sync --project .. python run-tests --disable-colors --runtime-adapter ../tests/neutral/wasi_testsuite_adapter.py --json-output-location "$RUNNER_TEMP/report.json"
