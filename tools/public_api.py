@@ -49,7 +49,7 @@ COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
 MEMBER = re.compile(r"(?:\.|->)\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 # files the renaming leaves alone: the review of 2026-10-26 and the lists of what changed are a record of the names of their day
-RECORDS = {"docs/interface_review.md", "docs/public_api.md", "docs/private_names.md"}
+RECORDS = {"docs/interface_review.md", "docs/public_api.md", "docs/private_names.md", "tests/test_public_api.py"}
 TEXT_SUFFIXES = {".h", ".c", ".py", ".md", ".txt", ".cmake", ".in", ".yml", ".toml"}
 
 

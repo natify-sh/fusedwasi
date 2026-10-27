@@ -469,6 +469,16 @@ FUSEDWASI_P2_FN int fusedwasi_p2__sys_open_directory(const char *path, fusedwasi
     int rc = FUSEDWASI_P2__OK;
     HANDLE h = fusedwasi_p2__win_open(path, FILE_READ_ATTRIBUTES, 1, &rc);
     if (h == INVALID_HANDLE_VALUE) return rc;
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(h, &info)) {
+        rc = fusedwasi_p2__win_last();
+        CloseHandle(h);
+        return rc;
+    }
+    if (!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) { /* O_DIRECTORY of the other systems */
+        CloseHandle(h);
+        return FUSEDWASI_P2_E_NOT_DIRECTORY;
+    }
     wchar_t wide[FUSEDWASI_P2__PATH_MAX];
     DWORD n = GetFinalPathNameByHandleW(h, wide, FUSEDWASI_P2__PATH_MAX, VOLUME_NAME_DOS);
     CloseHandle(h);

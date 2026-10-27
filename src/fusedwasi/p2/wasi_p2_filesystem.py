@@ -351,6 +351,10 @@ if sys.platform == "win32":
 
     def _open_directory(path: str, flags: int) -> Descriptor:
         real = os.path.realpath(path).removeprefix("\\\\?\\").rstrip("\\/")
+        if not stat_module.S_ISDIR(
+            os.stat(real).st_mode
+        ):  # the directory has to be there, as O_DIRECTORY has it elsewhere
+            raise NotADirectoryError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), path)
         return Descriptor(-1, flags, True, "\\\\?\\" + real)
 
 else:

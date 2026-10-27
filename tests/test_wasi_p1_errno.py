@@ -46,13 +46,15 @@ def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> 
             str(binary),
         ],
     )
-    known = {name: getattr(errno, name) for name in WASI if hasattr(errno, name)}
+    # on Windows Python's errno module has the Winsock numbers (10048 for EADDRINUSE) for the socket errors, and the C library has its own: those are left out there
+    known = {name: getattr(errno, name) for name in WASI if hasattr(errno, name) and getattr(errno, name) < 10000}
     out = subprocess.run([str(binary), *map(str, known.values())], capture_output=True, text=True, check=True).stdout
     got = {int(a): int(b) for a, b in (line.split() for line in out.splitlines())}
     for name, value in known.items():
         assert got[value] == WASI[name], f"{name} ({value}) should be {WASI[name]}, is {got[value]}"
     # the names that are other names for the same number are not a case of their own
-    assert got[errno.EWOULDBLOCK] == WASI["EAGAIN"]
+    if errno.EWOULDBLOCK < 10000:
+        assert got[errno.EWOULDBLOCK] == WASI["EAGAIN"]
     # an errno that has no number in the specification is an I/O error, as before
     assert subprocess.run([str(binary), "99999"], capture_output=True, text=True, check=True).stdout.split()[1] == str(
         WASI["EIO"]
