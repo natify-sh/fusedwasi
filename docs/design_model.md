@@ -19,31 +19,31 @@ The rule for a change: it is made when it is right for **any** user. "It is conv
 | How a trap leaves a function, how `cabi_realloc` of the guest is called | **the user** gives it | an engine decides (a `longjmp`, an exception, a returned code) |
 | What happens at the end of a program (`exit`, a signal), what the caller sees | fusedwasi **records** it, the user reads it | the contract of section 5 |
 
-## 3. The model: a state and a session
+## 3. The model: a state and a guest
 
 Today one struct (`fusedwasi_p2_state`, `fusedwasi_p1_state`; in Python `Host` and `State`) holds both the world and the way into the module that calls. That is why a user that shares one world between several instances has to rewrite the memory and a pointer before each call (`user`, "the first member is the instance"): the library has no place for "who is calling now", only the one state.
 
 The draft splits them.
 
 * **State**: the world. Configuration, the tables of descriptors and handles, the policies, the sources of time and random bytes, the end of the program. One for everything that shares files and sockets (a Wasmtime `Store`). Made once, freed once, by the user.
-* **Session**: the way into the module that is calling. The memory (or memories, for a module fused from components), the trap, the `cabi_realloc`, and a pointer of the user (`call`, never touched by the library) that the hooks get back. One for each instance, made once, never rewritten per call; many sessions point to one state.
+* **Guest**: the way into the module that is calling. The memory (or memories, for a module fused from components), the trap, the `cabi_realloc`, and a pointer of the user (`call`, never touched by the library) that the hooks get back. One for each instance, made once, never rewritten per call; many guests point to one state.
 
-The functions keep their names and their parameters. Only the first one changes its type: it was the state, it is the session (which reaches the state). The table of signatures and the Protocols (`signatures/`) do not change, because they never named that parameter.
+The functions keep their names and their parameters. Only the first one changes its type: it was the state, it is the guest (which reaches the state). The table of signatures and the Protocols (`signatures/`) do not change, because they never named that parameter.
 
-A session is what Wasmtime gives a call as `GuestMemory` and `Caller`: the memory of the caller and the way back into it. Wasmtime builds it for each call; a user of fusedwasi may do the same (a small struct on the stack, filled by the glue) or make it once for each instance and pass a pointer. The library asks for neither: it only reads the session it is given.
+A guest is what Wasmtime gives a call as `GuestMemory` and `Caller`: the memory of the caller and the way back into it. Wasmtime builds it for each call; a user of fusedwasi may do the same (a small struct on the stack, filled by the glue) or make it once for each instance and pass a pointer. The library asks for neither: it only reads the guest it is given.
 
 What is on which side (settled 2026-10-27 after reading Wasmtime, section 9):
 
-| State (world) | Session (caller) |
+| State (world) | Guest (caller) |
 | --- | --- |
 | `args`, `env`, `initial_cwd`, `preopens` | the memory source (`bind_memory`, `set_memory` stay as the easy way to make one) |
 | the tables: descriptors, handles, streams, pollables | `trap` |
 | the standard streams `std[3]` (typed `fusedwasi_p2_stream *`; `std_default` is private) and `terminals` | `realloc` (the `cabi_realloc` of the module) |
 | `socket_addr_check`, `allow_ip_name_lookup`, `http_check`, `http_send` | `wait` (it can trap: it is the point where the caller may be interrupted) |
 | `clock`, `resolution_ns`, `sleep`, `random_bytes`, `insecure_random_bytes` | the end of the call: `exit` (hook), `exited`, `exit_code`, `finished`, `end_value` |
-| `user`, the pointer of whoever made the state, given back to the hooks of the world | `user`, the pointer of whoever made the session, given back to the hooks of the session |
+| `user`, the pointer of whoever made the state, given back to the hooks of the world | `user`, the pointer of whoever made the guest, given back to the hooks of the guest |
 
-The name is **Session**. The hooks of the world take the state; the hooks of the session take the session.
+The name is **Guest**. The hooks of the world take the state; the hooks of the guest take the guest.
 
 ## 4. 0.1 and 0.2 over one state (decided by the owner, 2026-10-27)
 
@@ -53,13 +53,13 @@ Why not "a shared table only": a descriptor of 0.2 is a resource with its own po
 
 What it costs: the 46 functions of 0.1 are rewritten over 0.2, in C and in Python. What guards it: the official wasi-testsuite (72 tests for 0.1, run in the CI of wasmext), `tests/test_parity_surface.py`, and the drivers that compare the C with the Python.
 
-Order: it is done after the split of section 3 (the session), on the finished session, not together with it. Until then 0.1 keeps its own state.
+Order: it is done after the split of section 3 (the guest), on the finished guest, not together with it. Until then 0.1 keeps its own state.
 
 ## 5. Public and private
 
 Written once, kept (section 4 of `interface_review.md` has the list; this draft only adds the rule):
 
-* **Public**: the configuration fields, the hooks, the session's memory and hooks, the end of the program (`exited`, `exit_code`, `finished`, `end_value`, the host clears the flags before the next call), the constants, the functions.
+* **Public**: the configuration fields, the hooks, the guest's memory and hooks, the end of the program (`exited`, `exit_code`, `finished`, `end_value`, the host clears the flags before the next call), the constants, the functions.
 * **Private**: the tables and their layout (handles, slots, entries), every `*_sys_*`, `*_walk_*`, `*_default_*`. A private name carries a mark (a double underscore or a `_private` tail); a comment block "Host API" at the top of each header lists the public ones.
 
 Dead names go: `FUSEDWASI_P1_HOOK_TRAP`; `FUSEDWASI_P1_END_EXIT` is set by `proc_exit` or removed; the macros `MALLOC`, `CALLOC`, `FREE` become private (the caller owns its strings, `create` copies).
@@ -69,21 +69,21 @@ Dead names go: `FUSEDWASI_P1_HOOK_TRAP`; `FUSEDWASI_P1_END_EXIT` is set by `proc
 Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in Python in the same commit, with a test that runs both and compares** (`tests/test_parity_surface.py` already does this for the memory binding).
 
 * `State` is the same world in Python (today: `fusedwasi.p1.wasi_p1_core.State`, `fusedwasi.p2.wasi_p2_core.Host`).
-* `Session` is new in Python: `Session(state, memory=..., realloc=..., call=...)`, `memory` a buffer or a function that gives it (as now). Python functions take the session first, as the C functions do.
+* `Guest` is new in Python: `Guest(state, memory=..., realloc=..., call=...)`, `memory` a buffer or a function that gives it (as now). Python functions take the guest first, as the C functions do.
 * Traps are exceptions; the end of a program is the exception `Exit` or `Signal` and also the fields, as now.
 * A feature that only Python has (`files=`, booleans for the network) stays Python-only, marked as such in `interface_review.md`; it is not an excuse for a different shape of the common part.
 
 ## 7. Open decisions (the owner)
 
 1. ~~One state for 0.1 and 0.2~~ decided: 0.1 over 0.2 (section 4).
-2. ~~The name~~ decided: Session. Open: whether the first parameter keeps the name `s`.
+2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). Open: whether the first parameter keeps the name `s`.
 3. ~~The border cases~~ settled (section 3). Open from it: keep `proc_raise` as the end of the program with a signal, or answer `NOTSUP` as Wasmtime does.
 4. ~~Typed `std[3]`~~ decided with the split: `fusedwasi_p2_stream *std[3]` (a forward declaration), the one-line casts of derived structs in the drivers are fixed in the same change.
-5. **Order**: the doc is reviewed, then the C and the twin of the memory and the session (one change), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
+5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
 
 ## 8. What the users do after
 
-Nothing before the doc is agreed. Then each user adapts in its own repository (wasmext: one session for each instance, one state for a `Store`; wasmhost: the same in Python), and the C3 work in wasmext waits for it.
+Nothing before the doc is agreed. Then each user adapts in its own repository (wasmext: one guest for each instance, one state for a `Store`; wasmhost: the same in Python), and the C3 work in wasmext waits for it.
 
 ## 9. What the others hold (checked 2026-10-27)
 
@@ -93,14 +93,14 @@ Nothing before the doc is agreed. Then each user adapts in its own repository (w
 
 What this says for fusedwasi:
 
-* Both keep the world apart from the caller. That is the split of section 3 (state and session), so the split is not a wasmext idea.
-* uvwasi avoids the session by making the embedder translate every guest address; for `fd_write` the embedder builds an array of host `iovec`s from the guest's, on every call. fusedwasi chose the other way (the library reads the guest memory itself), which is cheaper for an engine like wasm2c where the memory is a flat array already, and is why it needs a session at all. Keeping that choice is deliberate; a user that prefers the uvwasi way can still give a session whose memory is the whole host address space (base 0), but that is not a goal.
-* Neither has a hook for `trap` or `realloc`, because neither calls into the guest. fusedwasi does (a list or a string for the guest in 0.2), so the session carries them.
+* Both keep the world apart from the caller. That is the split of section 3 (state and guest), so the split is not a wasmext idea.
+* uvwasi avoids the guest by making the embedder translate every guest address; for `fd_write` the embedder builds an array of host `iovec`s from the guest's, on every call. fusedwasi chose the other way (the library reads the guest memory itself), which is cheaper for an engine like wasm2c where the memory is a flat array already, and is why it needs a guest at all. Keeping that choice is deliberate; a user that prefers the uvwasi way can still give a guest whose memory is the whole host address space (base 0), but that is not a goal.
+* Neither has a hook for `trap` or `realloc`, because neither calls into the guest. fusedwasi does (a list or a string for the guest in 0.2), so the guest carries them.
 
 ### Wasmtime on the border cases (read 2026-10-27: `ctx.rs`, `p1.rs`; `cli.rs` did not show `I32Exit` or `wasi:cli/exit`)
 
 * `WasiCtx` holds the stdio (`StdinStream` and `StdoutStream` objects), the clocks, the random sources, the policies of the sockets, the environment, the arguments and the preopens. It holds **no memory, no trap, no realloc and no exit status**. This is the same cut as the table above.
-* **The end of the program** leaves the call as its error: `proc_exit` returns `I32Exit(status)` (status of 126 and more is refused with an error); nothing is stored in `WasiP1Ctx` or `WasiCtx`. So the end is the result of one call, which is why `exited` and the others belong to the session.
+* **The end of the program** leaves the call as its error: `proc_exit` returns `I32Exit(status)` (status of 126 and more is refused with an error); nothing is stored in `WasiP1Ctx` or `WasiCtx`. So the end is the result of one call, which is why `exited` and the others belong to the guest.
 * `proc_raise` answers `NOTSUP` in Wasmtime. fusedwasi ends the program with the signal (`finished`, `end_value`). That is a difference from Wasmtime, not from the WASI text; it is open whether to keep it (section 7).
-* **Waiting**: Wasmtime has no `wait` hook. A blocking `poll_oneoff` is an `await` point of the caller's task, or, when `allow_blocking_current_thread` is set and there is one relative clock, a `thread::sleep`. The wait belongs to the caller (it is where the caller can yield or be interrupted); fusedwasi is synchronous, so the hook stands for the `await`, and it is on the session.
+* **Waiting**: Wasmtime has no `wait` hook. A blocking `poll_oneoff` is an `await` point of the caller's task, or, when `allow_blocking_current_thread` is set and there is one relative clock, a `thread::sleep`. The wait belongs to the caller (it is where the caller can yield or be interrupted); fusedwasi is synchronous, so the hook stands for the `await`, and it is on the guest.
 * **`user`**: the data of the user is the `T` of `Store<T>`; `WasiCtx` has no pointer of the user, because Rust closures carry their own data. C has no closures, so each side has a `user`.
