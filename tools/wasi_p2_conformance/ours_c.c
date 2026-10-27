@@ -1,5 +1,6 @@
 #ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS /* strdup, strtok and fopen as they are */
+#define _CRT_SECURE_NO_WARNINGS /* strtok and fopen as they are */
+#define _CRT_NONSTDC_NO_WARNINGS /* strdup as it is */
 #endif
 /* The C host of fusedwasi (include/fusedwasi/p2/wasi_p2_filesystem.h) driven by script_fs.txt: a port of ours.py, printing the same lines.
  *

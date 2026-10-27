@@ -6,6 +6,7 @@ Found by comparing with uvwasi, which maps 56 errnos; there were 27, and everyth
 import errno
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -59,4 +60,6 @@ def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> 
     assert subprocess.run([str(binary), "99999"], capture_output=True, text=True, check=True).stdout.split()[1] == str(
         WASI["EIO"]
     )
-    assert len(known) >= 60  # the platform has nearly all of them
+    assert len(known) >= (
+        45 if sys.platform == "win32" else 60
+    )  # the platform has nearly all of them (Windows: the C library has fewer, the rest are Winsock numbers)
