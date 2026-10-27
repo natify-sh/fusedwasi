@@ -22,8 +22,8 @@ flowchart TB
 
     subgraph run["2. Run"]
         direction LR
-        H["C host (.h)<br/>wasmext, other C hosts"] --> FW
-        Y["Python host (.py)<br/>wasmhost"] --> FW
+        H["C host (.h)<br/>wasm2c glue, other C hosts"] --> FW
+        Y["Python host (.py)<br/>Python engines"] --> FW
         FW["fusedwasi<br/>state: handles, memories, hooks<br/>one function per import:<br/>cli · clocks · random · io · filesystem · sockets · http"]
     end
 
@@ -94,9 +94,7 @@ Every function is `static inline` and nothing is global or thread-local, so a mo
 
 ## Who uses it
 
-- **wasmext** (C, through `wasm2c`): the glue of a module includes the headers; no Python at run time.
-- **wasmhost** (Python): the twin in `.py` under the engines it supports.
-- **Any other host** that can give a memory and call a function for each import.
+Any host that can give a memory and call a function for each import. In C: the glue of a module compiled with `wasm2c` includes the headers and needs nothing at run time. In Python: the twin in `.py` under the engines a Python host supports. The two users that exist today are `wasmext` (C) and `wasmhost` (Python); neither is special, and the library knows nothing of them.
 
 ## Not here
 
