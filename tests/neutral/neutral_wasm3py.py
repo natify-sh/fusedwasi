@@ -13,7 +13,7 @@ from typing import Any
 
 from neutral_binding import implementation, signed, unsigned
 
-from fusedwasi import p1, p2
+from fusedwasi import p2
 
 wasm3: Any = importlib.import_module("wasm3")  # no types, no stubs
 P1_MODULE = "wasi_snapshot_preview1"
@@ -70,7 +70,7 @@ class Instance:
     def __init__(
         self,
         wasm: bytes,
-        state: p1.State | p2.State,
+        state: p2.State,
         *,
         p1_signal: Callable[[int], int] | None = None,
     ) -> None:
@@ -78,11 +78,9 @@ class Instance:
         self.runtime = self.environment.new_runtime(64 * 1024)
         self.module = self.environment.parse_module(wasm)
         self.runtime.load(self.module)
-        self.guest: p1.Guest | p2.Guest
-        if isinstance(state, p1.State):
-            self.guest = p1.Guest(state, self.memory, signal=p1_signal)
-        else:
-            self.guest = p2.Guest(state, [self.memory], realloc=self.realloc)
+        self.guest = p2.Guest(
+            state, [self.memory], realloc=self.realloc, signal=p1_signal
+        )  # one guest for both families
         self._realloc: Any = None
         for module, name in function_imports(wasm):
             self._link(module, name)

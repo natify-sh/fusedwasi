@@ -549,27 +549,6 @@ class _Walked:
             os.close(fd)
 
 
-# The system layer that wasi_p1_files still stands on (removed when the adapter of 0.1 moves over the operations below).
-sys_ref = _ref
-sys_walk = _walk
-SysWalked = _Walked
-sys_lstat = _lstat
-sys_readlink = _readlink
-sys_fstat = _fstat
-sys_mkdir = _mkdir
-sys_rmdir = _rmdir
-sys_unlink = _unlink
-sys_rename = _rename
-sys_link = _link
-sys_symlink = _symlink
-sys_utime = _utime
-sys_utime_fd = _utime_d
-sys_listdir = _listdir
-sys_open_at = _open_at
-sys_open_directory = _open_directory
-sys_error_name = ERROR_CODES
-
-
 # writing results
 
 

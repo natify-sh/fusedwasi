@@ -5,7 +5,7 @@ Header-only C host for the WASI Component Model, for core modules fused from com
 **Alpha: nothing is released yet.** Two hosts, each as C headers (and the one of 0.2 with a Python twin):
 
 * **WASI 0.2** (`fusedwasi/p2/`, `fusedwasi.p2`): all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
-* **WASI 0.1** (`fusedwasi/p1/`, `fusedwasi.p1`): `wasi_snapshot_preview1` and `wasi_unstable`, in C and in Python (`fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`; the sockets are the four calls that answer NOTSOCK, since a program of 0.1 cannot make one). The C is the core that `wasmext` builds into every module that imports them. It reads the memory of the module through a pointer to its base and one to its size (`fusedwasi_p1_bind`), so it knows nothing of `wasm2c`. **The state of 0.1 is over the state of 0.2** (`fusedwasi_p1_create(&config, &p2_state, ...)`): the arguments, the environment, the clocks, the random bytes, the sleep and the standard streams are those of the state of 0.2 that the host fills, the files are the system layer of 0.2 (`fusedwasi_p2_sys_*`, POSIX and Win32; in Python `fusedwasi.p2.wasi_p2_filesystem.sys_*`). The end of a call is the guest's (`proc_exit` leaves `exited` and `exit_code` there); `proc_raise` no longer ends the program: it asks the hook `signal` of the guest and answers NOTSUP without one. What stays 0.1's own: the descriptors with their rights and positions, `poll_oneoff` and the errno table. The Python twin is checked against the C: the same script of calls (`tests/data/p1/*.txt`) is run by a C driver and by Python, and the lines they print are compared.
+* **WASI 0.1** (`fusedwasi/p1/`, `fusedwasi.p1`): `wasi_snapshot_preview1` and `wasi_unstable`, in C and in Python (`fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`; the sockets are the four calls that answer NOTSOCK, since a program of 0.1 cannot make one). **WASI 0.1 is implemented over WASI 0.2, as Wasmtime does it: there is one state and one guest for both families.** The arguments, the environment, the standard streams, the preopens, the clocks, the random bytes and the sleep are the fields of the one `fusedwasi_p2_state`; the memory of an instance of 0.1 is memory 0 of its `fusedwasi_p2_guest`; a file or a directory opened by a module of 0.1 is a `descriptor` in the table of that state, the same resource a module of 0.2 sees in it, and the functions of 0.1 work through the operations of 0.2 (`fusedwasi_p2_fs_*`; in Python the methods of `State.filesystem`). What 0.1 keeps for itself: the rights of each descriptor, its position, the name of a preopen, and the errno table. A function of 0.1 traps like one of 0.2 (`g->trap`); the end of a call is the guest's (`proc_exit` is `wasi:cli/exit`: it leaves `exited` and `exit_code` there); `proc_raise` asks the hook `signal` of the guest and answers NOTSUP without one. The Python twin is checked against the C: the same script of calls (`tests/data/p1/*.txt`) is run by a C driver and by Python, and the lines they print are compared; the official wasi-testsuite of 0.1 runs through `tests/neutral`.
 
 ## The idea
 
@@ -57,7 +57,7 @@ fusedwasi_p2_free(&state);           /* after the guests are done with it */
 ```
 
 ```python
-from fusedwasi.p2 import Guest, State  # fusedwasi.p1 has a State and a Guest of its own, for WASI 0.1
+from fusedwasi.p2 import Guest, State  # the same State and Guest serve WASI 0.1 (fusedwasi.p1.State is this class)
 from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers
 
 state = State(args=["prog"])  # the world: files, sockets, the clocks
@@ -74,14 +74,14 @@ fusedwasi_p2_fd_stream *out = fusedwasi_p2_fd_output_new(&state, 1);   /* NULL w
 state.std[1] = &out->base;
 ```
 
-For 0.1 the same two parts: `fusedwasi_p1_state` (made by `fusedwasi_p1_create` over a state of 0.2) and `fusedwasi_p1_guest` (`fusedwasi_p1_guest_init(&g, p1_state)`; its guest of 0.2 is `g.core`, and `fusedwasi_p1_bind(&g, &m->data, &m->size)` binds the memory); in Python `fusedwasi.p1.State` and `fusedwasi.p1.Guest` (each family has its own `State`, `Guest` and `Exit`: `fusedwasi.p1.State` and `fusedwasi.p2.State` are different classes). `fusedwasi.signatures.find_import(module, name)` gives, for an import of a core module (of 0.1, or of any `0.2.N`), the row of the table of signatures with the C symbol, the Python function (`python_function()`) and whether it takes the number of the memory (`takes_comp`).
+For 0.1 the same two parts, the same types: a function is `fusedwasi_p1_<name>(&g, ...)` with the guest `g` of 0.2 (`#include "wasi_p1.h"`; the memory of the instance is `fusedwasi_p2_bind_memory(&g, 0, ...)`), it answers the errno of WASI and traps through `g.trap`. The descriptors of 0.1 are made by the first call of a function of 0.1, or by `fusedwasi_p1_open_descriptors(&state, &err, &bad)`, which tells a preopen that cannot be opened; `fusedwasi_p2_free` frees them. In Python `fusedwasi.p1.State`, `Guest` and `Exit` are the classes of `fusedwasi.p2` (`guest = Guest(state, memory)` with one memory for an instance of 0.1) and `fusedwasi.p1.wasi_p1.fd_write(guest, ...)` is the call; `State(filesystem=...)` gives the files behind both families (Python only). `fusedwasi.signatures.find_import(module, name)` gives, for an import of a core module (of 0.1, or of any `0.2.N`), the row of the table of signatures with the C symbol, the Python function (`python_function()`) and whether it takes the number of the memory (`takes_comp`).
 
 | Part | What the host gives | What the library does |
 |---|---|---|
 | memory (of the guest) | a base and a size for each component, bound by pointer (`fusedwasi_p2_bind_memory`, primary: read at each access, so a moved base is followed) or set by value (`fusedwasi_p2_set_memory`, the convenience) | checked, little-endian loads and stores; a pointer outside is a trap |
 | handles | nothing | the table of `own` and `borrow` (generation + index), `[resource-drop]` |
 | lists and strings it returns | `realloc` of the guest (the `cabi_realloc` of the component) | placing them in the guest's memory |
-| files | the preopened directories (`path`, `name`, `writable`) | paths confined below the preopen (POSIX and Windows) |
+| files | the preopened directories (`path`, `name`, `writable`); Python: optionally `filesystem=` | paths confined below the preopen (POSIX and Windows) |
 | sockets | `socket_addr_check`, `allow_ip_name_lookup`; refused by default | TCP, UDP, name lookup (POSIX and Winsock) |
 | http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only), the types of `wasi:http` |
 | time, random (state); trap, exit, wait, signal (guest) | a hook, or the system's own | the rest |

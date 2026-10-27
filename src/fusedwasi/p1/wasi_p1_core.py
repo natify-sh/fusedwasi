@@ -1,29 +1,27 @@
-"""The state and the guest of WASI 0.1 and the helpers that every call uses (the twin of `include/fusedwasi/p1/wasi_p1_core.h`).
+"""What the functions of WASI 0.1 share (the twin of `include/fusedwasi/p1/wasi_p1_core.h`): the constants of the specification, the descriptor map and the access to the memory of a guest.
 
-No mutable state at the level of the module. The `State` is the world of 0.1 (the descriptors, over the state of WASI 0.2); the `Guest` is the caller (the memory, the end of its call,
-the hook `signal`), and it is the first argument of every call of `wasi_p1`. A call returns the errno of WASI (0 is success) and writes its results into the memory of the module; a
-trap is an exception (a hook may raise any), `Exit` is the end of the program (`proc_exit`). `proc_raise` asks the hook `signal` of the guest. The memory is any writable buffer
-(`bytearray`, `memoryview`) or a function that gives it (an engine whose memory moves when it grows).
+There is one `State` and one `Guest` for both families (`fusedwasi.p2.wasi_p2_core`, re-exported by `fusedwasi.p1`). The configuration of 0.1 is the state's: arguments, environment, standard
+streams, preopens, clocks, random bytes. A descriptor of 0.1 is a map to a resource of 0.2 plus what 0.1 keeps for each descriptor (rights, position, the name of a preopen): a file or a
+directory is a `descriptor` in the table of the state, the same resource that a module of 0.2 sees in it, and the functions of `wasi_p1` work through the operations of 0.2
+(`State.filesystem`, the standard streams of the state). The map (`state.p1`) is private; `open_descriptors` makes it now.
+
+A function of 0.1 returns the errno of WASI (0 is success) and writes its results into the memory of the module (memory 0 of the guest); a trap is an exception (`trap(guest, message)`). The end of
+the program is the guest's, as in 0.2: `proc_exit` is `wasi:cli/exit`. `proc_raise` asks the hook `signal` of the guest.
 """
 
 from __future__ import annotations
 
 import errno as _errno
-import os
 import stat as _stat
 import struct
-import time
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..p2.wasi_p2_cli import FdInput, FdOutput, std
-from ..p2.wasi_p2_core import State as P2State
-from ..p2.wasi_p2_core import flat_view
+from ..p2.wasi_p2_core import INDEX_BITS, INDEX_MASK, KIND_DESCRIPTOR, Guest, State, flat_view, table_add
+from ..p2.wasi_p2_core import Exit as Exit  # noqa: PLC0414 (one class of exit for both families, re-exported)
+from ..p2.wasi_p2_filesystem import MUTATE, READ, FsError
 from ..p2.wasi_p2_io import StreamClosed, StreamFailed
-
-if TYPE_CHECKING:
-    from .wasi_p1_files import Files, Listing
 
 # errno of WASI (not the C library's): the whole list of the specification
 E_SUCCESS, E_2BIG, E_ACCES, E_ADDRINUSE, E_ADDRNOTAVAIL, E_AFNOSUPPORT, E_AGAIN, E_ALREADY, E_BADF, E_BADMSG = range(10)
@@ -185,14 +183,6 @@ def errno_of(number: int | None) -> int:
     return _ERRNO.get(number or 0, E_IO)
 
 
-class Exit(Exception):
-    """`proc_exit`: the program is over with this code."""
-
-    def __init__(self, code: int) -> None:
-        super().__init__(f"exit {code}")
-        self.code = code
-
-
 class WasiError(Exception):
     """What a hook raises to give the program an errno of WASI as it is (any other exception is a trap)."""
 
@@ -221,24 +211,6 @@ class Stat:
     filetype: int = 0
 
 
-class Entry:
-    """An open descriptor: a standard stream, a file (an operating system descriptor) or a directory."""
-
-    __slots__ = ("fd", "filetype", "flags", "inheriting", "kind", "listing", "owns_fd", "path", "preopen", "rights")
-
-    def __init__(self, kind: int = K_NONE) -> None:
-        self.kind = kind
-        self.filetype = 0
-        self.flags = 0  # fdflags
-        self.fd = -1  # a file or a directory; for a standard stream, which one it is (0, 1 or 2)
-        self.owns_fd = False
-        self.path: str | None = None  # a directory on Windows (where a directory has no descriptor): where it is
-        self.rights = 0
-        self.inheriting = 0
-        self.preopen: bytes | None = None  # the name the program sees, for a preopen
-        self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
-
-
 def filetype_of(mode: int) -> int:
     kind = _stat.S_IFMT(mode)
     return {
@@ -251,55 +223,62 @@ def filetype_of(mode: int) -> int:
     }.get(kind, FT_UNKNOWN)
 
 
-def _bytes(text: str | bytes) -> bytes:
-    return text if isinstance(text, bytes) else os.fsencode(text)
+_ERRNO_OF_CODE = {  # the errno of WASI for an error-code of 0.2 (by name); a way out of the directory is `escape`
+    "access": E_ACCES, "would-block": E_AGAIN, "already": E_ALREADY, "bad-descriptor": E_BADF, "busy": E_BUSY, "deadlock": E_DEADLK, "quota": E_DQUOT, "exist": E_EXIST,
+    "file-too-large": E_FBIG, "illegal-byte-sequence": E_ILSEQ, "in-progress": E_INPROGRESS, "interrupted": E_INTR, "invalid": E_INVAL, "io": E_IO, "is-directory": E_ISDIR,
+    "loop": E_LOOP, "too-many-links": E_MLINK, "message-size": E_MSGSIZE, "name-too-long": E_NAMETOOLONG, "no-device": E_NODEV, "no-entry": E_NOENT, "no-lock": E_NOLCK,
+    "insufficient-memory": E_NOMEM, "insufficient-space": E_NOSPC, "not-directory": E_NOTDIR, "not-empty": E_NOTEMPTY, "not-recoverable": E_NOTRECOVERABLE,
+    "unsupported": E_NOSYS, "no-tty": E_NOTTY, "no-such-device": E_NXIO, "overflow": E_OVERFLOW, "not-permitted": E_PERM, "pipe": E_PIPE, "read-only": E_ROFS,
+    "invalid-seek": E_SPIPE, "text-file-busy": E_TXTBSY, "cross-device": E_XDEV,
+}  # fmt: skip
 
 
-class State:
-    """The world of 0.1 (the twin of `fusedwasi_p1_state`): the descriptors with their rights, over the state of WASI 0.2 (`core`). Many `Guest`s may point to one state."""
+def errno_of_error(caught: FsError) -> int:
+    """The errno of WASI for a failure of an operation of 0.2 (the host of Wasmtime does the same for 0.1 over 0.2): a way out of the directory is not a capability the program has."""
+    return E_NOTCAPABLE if caught.escape else _ERRNO_OF_CODE.get(caught.name, E_IO)
 
-    def __init__(
-        self,
-        *,
-        core: P2State | None = None,
-        preopens: Sequence[tuple[str, str] | tuple[str, str, bool]] = (),
-        files: Files | None = None,
-        user: object = None,
-    ) -> None:
-        self.user = user  # the pointer of whoever made the state: the library never reads or writes it (the twin of `fusedwasi_p1_state.user`)
-        self.core = (
-            core if core is not None else P2State()
-        )  # the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes
-        if files is None:  # the backend of the system's files; a host without files gives `Files()`
-            from .wasi_p1_files import SystemFiles
 
-            files = SystemFiles()
-        self.files = files
-        # the standard streams, the clocks, the random bytes and the sleep are those of `core`. The end of the program is not a hook and not a state of the world: it is on the `Guest`
-        # (`proc_exit` records the code there and raises `Exit`). A hook of `core` that raises `WasiError(n)` gives the program the errno n; any other exception is a trap and goes on to the caller.
+_ERRNO_OF_NAME = {
+    "access": _errno.EACCES,
+    "no-entry": _errno.ENOENT,
+    "not-directory": _errno.ENOTDIR,
+    "name-too-long": _errno.ENAMETOOLONG,
+    "insufficient-memory": _errno.ENOMEM,
+}
+
+
+class Entry:
+    """An entry of the descriptor map. `kind`: a standard stream (`handle` is 0, 1 or 2: the place in `std` of the state), a file or a directory (`handle` is the handle of a `descriptor` in
+    the table of the state: the resource of 0.2). The rest is what 0.1 keeps for the descriptor."""
+
+    __slots__ = ("filetype", "flags", "handle", "inheriting", "kind", "listing", "position", "preopen", "rights")
+
+    def __init__(self, kind: int = K_NONE) -> None:
+        self.kind = kind
+        self.filetype = 0
+        self.flags = 0  # fdflags
+        self.handle = 0
+        self.rights = 0
+        self.inheriting = 0
+        self.position = 0  # the offset of the next fd_read and fd_write of a file (0.2 has none in a descriptor)
+        self.preopen: bytes | None = None  # the name the program sees, for a preopen
+        self.listing: list[Listing] | None = None  # fd_readdir: the names of the directory, made at cookie 0
+
+
+@dataclass
+class Listing:
+    """One name of a directory as `fd_readdir` gives it."""
+
+    name: bytes
+    ino: int
+    filetype: int
+
+
+class Fds:
+    """The descriptors of 0.1 of a state: 0, 1, 2 the standard streams, 3 and up the preopens in order, then what `path_open` opens."""
+
+    def __init__(self) -> None:
         self.entries: list[Entry] = []
-        for stream in range(3):
-            entry = Entry(K_STD)
-            entry.fd = stream  # which stream it is, wherever it is renumbered to
-            self.entries.append(entry)
-        for index, item in enumerate(preopens):
-            host, name = item[0], item[1]
-            writable = item[2] if len(item) > 2 else True  # type: ignore[misc]
-            entry = Entry(K_DIR)
-            try:
-                self.files.preopen(host, entry)
-            except OSError as caught:
-                self.close_all()
-                failure = PreopenError(caught.errno, caught.strerror, host)
-                failure.index = index
-                raise failure from None
-            entry.filetype = FT_DIR
-            entry.owns_fd = True
-            entry.rights = entry.inheriting = R_ALL if writable else R_ALL & ~R_MUTATING
-            entry.preopen = _bytes(name)
-            self.entries.append(entry)
-
-    # ---- descriptors --------------------------------------------------------------------------------------------------------
 
     def new_fd(self) -> int:
         """The lowest free number from 3 on (the table grows by one when there is none)."""
@@ -328,226 +307,256 @@ class State:
             return number, entry
         return (E_SUCCESS if entry.kind == K_DIR else E_NOTDIR), entry
 
-    def release(self, entry: Entry) -> int:
-        """Closes what the descriptor holds; 0, or the errno of the C library of the close of a file."""
-        number = 0
-        if entry.owns_fd:
-            number = self.files.close(entry)
-        entry.__init__()  # type: ignore[misc]
-        return number
 
-    def close_all(self) -> None:
-        for entry in self.entries:
-            self.release(entry)
+def release(state: State, entry: Entry) -> None:
+    """Lets go of what the entry holds: a file or a directory is dropped from the table of the state (and closed), a standard stream stays the state's."""
+    if entry.kind in (K_FILE, K_DIR):
+        descriptor = descriptor_of(state, entry)
+        if descriptor is not None:
+            index = entry.handle & INDEX_MASK
+            state.slots[index].live, state.slots[index].obj = False, None
+            state.filesystem.close(descriptor)
+    entry.__init__()  # type: ignore[misc]
 
-    def hooked(self, hook: Callable[..., Any] | None, *args: Any) -> tuple[int, Any]:
-        """Calls a hook: (errno of WASI, result)."""
-        assert hook is not None
-        try:
-            return E_SUCCESS, hook(*args)
-        except WasiError as caught:
-            return caught.number, None
 
-    # ---- the standard streams -----------------------------------------------------------------------------------------------
+def descriptor_of(state: State, entry: Entry) -> Any:
+    """The resource of 0.2 behind a file or a directory (None if it is gone)."""
+    index = entry.handle & INDEX_MASK
+    if index == 0 or index >= len(state.slots):
+        return None
+    slot = state.slots[index]
+    if not slot.live or slot.kind != KIND_DESCRIPTOR or slot.generation != entry.handle >> INDEX_BITS:
+        return None
+    return slot.obj
 
-    def std_stream(self, fd: int) -> Any:
-        """The standard stream `fd` (0, 1, 2) of the state of 0.2."""
-        return std(self.core, ("stdin", "stdout", "stderr")[fd])
 
-    def std_is_real(self, entry: Entry) -> bool:
-        """A standard stream that is the descriptor of the process (`FdInput`, `FdOutput`): it is what the system says it is."""
-        stream = self.core.std.get(("stdin", "stdout", "stderr")[entry.fd]) if entry.kind == K_STD else None
-        return isinstance(stream, (FdInput, FdOutput)) and stream.fd == entry.fd
-
-    def std_filetype(self, entry: Entry) -> int:
-        if self.std_is_real(entry):
+def open_descriptors(state: State) -> Fds:
+    """Makes the descriptors of 0.1 of the state now (the functions of 0.1 do it at their first call when this was not called): 0, 1 and 2 are the standard streams, 3 and up the preopens in
+    order. Raises `PreopenError` (`index` is the place of the directory in `preopens`) when a directory cannot be opened; nothing is made then."""
+    if state.p1 is not None:
+        return state.p1
+    fds = Fds()
+    for stream in range(3):
+        entry = Entry(K_STD)
+        entry.handle = stream  # which stream it is, wherever it is renumbered to
+        fds.entries.append(entry)
+    try:
+        for index, (host, name, writable) in enumerate(state.preopens):
             try:
-                return filetype_of(os.fstat(entry.fd).st_mode)  # a pipe is unknown: not a terminal
-            except OSError:
-                pass
-        return FT_CHAR
+                made = state.filesystem.open_directory(host, READ | (MUTATE if writable else 0))
+            except FsError as caught:
+                failure = PreopenError(_ERRNO_OF_NAME.get(caught.name, _errno.EIO), caught.name, host)
+                failure.index = index
+                raise failure from None
+            handle = table_add(state, KIND_DESCRIPTOR, made)
+            entry = Entry(K_DIR)
+            entry.handle = handle
+            entry.filetype = FT_DIR
+            entry.rights = entry.inheriting = R_ALL if writable else R_ALL & ~R_MUTATING
+            entry.preopen = name.encode()
+            fds.entries.append(entry)
+    except BaseException:
+        for entry in fds.entries:
+            release(state, entry)
+        raise
+    state.p1 = fds
+    return fds
 
-    @staticmethod
-    def stream_status(failure: StreamClosed | StreamFailed) -> int:
-        """A closed stream is a broken pipe; the errno of the system, when the stream knows it, as it is."""
-        if isinstance(failure, StreamClosed):
-            return E_PIPE
-        return errno_of(failure.errno) if failure.errno else E_IO
 
-    def clock_ns(self, ident: int) -> tuple[int, int]:
-        """(errno, nanoseconds) of the clock `ident` of WASI (0 real time, 1 monotonic, 2 of the process, 3 of the thread): the clock of `core`; one that cannot be read is NOTSUP."""
-        if ident > 3:
-            return E_INVAL, 0
+def fds_of(guest: Guest) -> Fds | int:
+    """The descriptors of the state of the guest, made if they were not; or the errno of WASI of the failure to make them."""
+    if guest.state.p1 is not None:
+        return guest.state.p1
+    try:
+        return open_descriptors(guest.state)
+    except PreopenError as caught:
+        return errno_of(caught.errno)
+
+
+# ---- the memory of the instance (memory 0 of the guest; little-endian, as WebAssembly says) ---------------------------------------
+
+
+def _buffer(guest: Guest) -> tuple[memoryview | None, Any]:
+    """(a view of the memory, else None; the memory as the host gave it). The memory is a buffer (a `bytearray`, a `memoryview`, `mmap`) or, for an engine
+    that keeps it out of this process, an object with `read(offset, length)`, `write(offset, data)` and `len()` (what a call then costs is a copy of what it touches)."""
+    if not guest.memories:
+        return None, None
+    memory = guest.memories[0]
+    if callable(memory):
+        memory = memory()
+    if memory is None:
+        return None, None
+    try:
+        return flat_view(memory), memory
+    except TypeError:
+        return None, memory
+
+
+def mem_size(guest: Guest) -> int:
+    view, memory = _buffer(guest)
+    return len(view) if view is not None else len(memory) if memory is not None else 0
+
+
+def load(guest: Guest, ptr: int, length: int) -> bytes:
+    view, memory = _buffer(guest)
+    if view is not None:
+        return bytes(view[ptr : ptr + length])
+    return bytes(memory.read(ptr, length)) if length else b""
+
+
+def store(guest: Guest, ptr: int, data: bytes) -> None:
+    view, memory = _buffer(guest)
+    if view is not None:
+        view[ptr : ptr + len(data)] = data
+    elif data:
+        memory.write(ptr, data)
+
+
+def in_memory(guest: Guest, ptr: int, length: int) -> bool:
+    return ptr + length <= mem_size(guest)
+
+
+def put_bytes(guest: Guest, ptr: int, data: bytes) -> bool:
+    if not in_memory(guest, ptr, len(data)):
+        return False
+    store(guest, ptr, data)
+    return True
+
+
+def put(guest: Guest, ptr: int, fmt: str, *values: int) -> bool:
+    return put_bytes(guest, ptr, struct.pack("<" + fmt, *values))
+
+
+def put_u8(guest: Guest, ptr: int, value: int) -> bool:
+    return put_bytes(guest, ptr, bytes((value & 0xFF,)))
+
+
+def put_u16(guest: Guest, ptr: int, value: int) -> bool:
+    return put(guest, ptr, "H", value & 0xFFFF)
+
+
+def put_u32(guest: Guest, ptr: int, value: int) -> bool:
+    return put(guest, ptr, "I", value & 0xFFFFFFFF)
+
+
+def put_u64(guest: Guest, ptr: int, value: int) -> bool:
+    return put(guest, ptr, "Q", value & 0xFFFFFFFFFFFFFFFF)
+
+
+def get_u32(guest: Guest, ptr: int) -> int | None:
+    if not in_memory(guest, ptr, 4):
+        return None
+    return struct.unpack("<I", load(guest, ptr, 4))[0]
+
+
+def read_bytes(guest: Guest, ptr: int, length: int) -> bytes:
+    return load(guest, ptr, length)
+
+
+def iov(guest: Guest, iovs: int, index: int) -> tuple[int, int]:
+    """(base, length) of the buffer `index` of an iovec that `iovs_valid` has looked at."""
+    return get_u32(guest, iovs + 8 * index) or 0, get_u32(guest, iovs + 8 * index + 4) or 0
+
+
+def path_at(guest: Guest, ptr: int, length: int) -> bytes | None:
+    """The bytes of a path in the memory, or None if they are not all there."""
+    return read_bytes(guest, ptr, length) if in_memory(guest, ptr, length) else None
+
+
+def iovs_valid(guest: Guest, iovs: int, count: int) -> int:
+    """All the buffers of a call are looked at before any of them is used: a bad one in the middle must not leave the data before it already written."""
+    if not in_memory(guest, iovs, count * 8):
+        return E_FAULT
+    for i in range(count):
+        base, length = get_u32(guest, iovs + 8 * i), get_u32(guest, iovs + 8 * i + 4)
+        assert base is not None and length is not None
+        if not in_memory(guest, base, length):
+            return E_FAULT
+    return E_SUCCESS
+
+
+# ---- the standard streams (`std` of the state, else the descriptors of the process) -------------------------------------------------
+
+
+def std_stream(state: State, which: int) -> Any:
+    """The standard stream `which` (0, 1, 2) of the state."""
+    return std(state, ("stdin", "stdout", "stderr")[which])
+
+
+def std_is_real(state: State, entry: Entry) -> bool:
+    """A standard stream that is the descriptor of the process (`FdInput`, `FdOutput`): it is what the system says it is."""
+    stream = state.std.get(("stdin", "stdout", "stderr")[entry.handle]) if entry.kind == K_STD else None
+    return isinstance(stream, (FdInput, FdOutput)) and stream.fd == entry.handle
+
+
+def std_filetype(state: State, entry: Entry) -> int:
+    if std_is_real(state, entry):
+        import os
+
         try:
-            return E_SUCCESS, int(self.core.clock(ident))
+            return filetype_of(os.fstat(entry.handle).st_mode)  # a pipe is unknown: not a terminal
         except OSError:
-            return E_NOTSUP, 0
+            pass
+    return FT_CHAR
 
 
-class Guest:
-    """The caller of 0.1 (the twin of `fusedwasi_p1_guest`): the memory of the instance, `wait`, the hook `signal` and the end of its call, over a `State`.
+def stream_status(failure: StreamClosed | StreamFailed) -> int:
+    """A closed stream is a broken pipe; the errno of the system, when the stream knows it, as it is."""
+    if isinstance(failure, StreamClosed):
+        return E_PIPE
+    return errno_of(failure.errno) if failure.errno else E_IO
 
-    One for each instance, made once; many guests may point to one state, and nothing is rebound per call. `memory` is any writable buffer (`bytearray`, `memoryview`) or a function
-    that gives it (an engine whose memory moves when it grows), or an object with `read`, `write` and `len`. The hooks are callables of no `Guest` argument: `wait()` is what a
-    blocking read does between two looks at the standard input; `signal(number) -> errno` is asked by `proc_raise` (it returns the errno of WASI for the call, or ends the program by
-    raising; without it the answer is NOTSUP and the program goes on).
-    """
 
-    def __init__(
-        self,
-        state: State,
-        memory: object | Callable[[], object] | None = None,
-        *,
-        wait: Callable[[], None] = lambda: time.sleep(0.001),
-        signal: Callable[[int], int] | None = None,
-        user: object = None,
-    ) -> None:
-        self.state = state
-        self.memory = memory
-        self.wait = wait
-        self.signal = signal
-        self.exited = False  # `proc_exit` was called: ... with `exit_code`; `Exit` is raised as well. The host clears it before the next call
-        self.exit_code = 0
-        self.user = user  # the pointer of whoever made the guest: the library never reads or writes it
-
-    # ---- the memory of the instance (little-endian, as WebAssembly says) ----------------------------------------------------
-
-    def _buffer(self) -> tuple[memoryview | None, Any]:
-        """(a view of the memory, else None; the memory as the host gave it). The memory is a buffer (a `bytearray`, a `memoryview`, `mmap`) or, for an engine
-        that keeps it out of this process, an object with `read(offset, length)`, `write(offset, data)` and `len()` (what a call then costs is a copy of what it touches)."""
-        memory = self.memory() if callable(self.memory) else self.memory
-        if memory is None:
-            return None, None
+def write_std(guest: Guest, which: int, iovs: int, count: int, nwritten: int) -> int:
+    bad = iovs_valid(guest, iovs, count)
+    if bad:
+        return bad
+    stream = std_stream(guest.state, which)
+    total = 0
+    for i in range(count):
+        base, length = get_u32(guest, iovs + 8 * i), get_u32(guest, iovs + 8 * i + 4)
+        assert base is not None and length is not None
+        if length == 0:
+            continue
         try:
-            return flat_view(memory), memory
-        except TypeError:
-            return None, memory
+            stream.write(read_bytes(guest, base, length))
+        except (
+            StreamClosed,
+            StreamFailed,
+        ) as failure:  # what was written is reported (a short write); the error comes with the next call
+            if total == 0:
+                return stream_status(failure)
+            break
+        total += length
+    return E_SUCCESS if put_u32(guest, nwritten, total) else E_FAULT
 
-    def mem(self) -> memoryview | None:
-        """The memory as a view, when it is a buffer."""
-        return self._buffer()[0]
 
-    def size(self) -> int:
-        view, memory = self._buffer()
-        return len(view) if view is not None else len(memory) if memory is not None else 0
-
-    def load(self, ptr: int, length: int) -> bytes:
-        view, memory = self._buffer()
-        if view is not None:
-            return bytes(view[ptr : ptr + length])
-        return bytes(memory.read(ptr, length)) if length else b""
-
-    def store(self, ptr: int, data: bytes) -> None:
-        view, memory = self._buffer()
-        if view is not None:
-            view[ptr : ptr + len(data)] = data
-        elif data:
-            memory.write(ptr, data)
-
-    def in_memory(self, ptr: int, length: int) -> bool:
-        return ptr + length <= self.size()
-
-    def put_u8(self, ptr: int, value: int) -> bool:
-        return self.put_bytes(ptr, bytes((value & 0xFF,)))
-
-    def put(self, ptr: int, fmt: str, *values: int) -> bool:
-        return self.put_bytes(ptr, struct.pack("<" + fmt, *values))
-
-    def put_u16(self, ptr: int, value: int) -> bool:
-        return self.put(ptr, "H", value & 0xFFFF)
-
-    def put_u32(self, ptr: int, value: int) -> bool:
-        return self.put(ptr, "I", value & 0xFFFFFFFF)
-
-    def put_u64(self, ptr: int, value: int) -> bool:
-        return self.put(ptr, "Q", value & 0xFFFFFFFFFFFFFFFF)
-
-    def get_u32(self, ptr: int) -> int | None:
-        if not self.in_memory(ptr, 4):
-            return None
-        return struct.unpack("<I", self.load(ptr, 4))[0]
-
-    def put_bytes(self, ptr: int, data: bytes) -> bool:
-        if not self.in_memory(ptr, len(data)):
-            return False
-        self.store(ptr, data)
-        return True
-
-    def read_bytes(self, ptr: int, length: int) -> bytes:
-        return self.load(ptr, length)
-
-    def iov(self, iovs: int, index: int) -> tuple[int, int]:
-        """(base, length) of the buffer `index` of an iovec that `iovs_valid` has looked at."""
-        return self.get_u32(iovs + 8 * index) or 0, self.get_u32(iovs + 8 * index + 4) or 0
-
-    def path_at(self, ptr: int, length: int) -> bytes | None:
-        """The bytes of a path in the memory, or None if they are not all there."""
-        return self.read_bytes(ptr, length) if self.in_memory(ptr, length) else None
-
-    def iovs_valid(self, iovs: int, count: int) -> int:
-        """All the buffers of a call are looked at before any of them is used: a bad one in the middle must not leave the data before it already written."""
-        if not self.in_memory(iovs, count * 8):
-            return E_FAULT
-        for i in range(count):
-            base, length = self.get_u32(iovs + 8 * i), self.get_u32(iovs + 8 * i + 4)
-            assert base is not None and length is not None
-            if not self.in_memory(base, length):
-                return E_FAULT
-        return E_SUCCESS
-
-    def write_std(self, fd: int, iovs: int, count: int, nwritten: int) -> int:
-        bad = self.iovs_valid(iovs, count)
-        if bad:
-            return bad
-        stream = self.state.std_stream(fd)
-        total = 0
-        for i in range(count):
-            base, length = self.get_u32(iovs + 8 * i), self.get_u32(iovs + 8 * i + 4)
-            assert base is not None and length is not None
-            if length == 0:
-                continue
-            try:
-                stream.write(self.read_bytes(base, length))
-            except (
-                StreamClosed,
-                StreamFailed,
-            ) as failure:  # what was written is reported (a short write); the error comes with the next call
-                if total == 0:
-                    return self.state.stream_status(failure)
-                break
-            total += length
-        return E_SUCCESS if self.put_u32(nwritten, total) else E_FAULT
-
-    def read_std(self, iovs: int, count: int, nread: int) -> int:
-        bad = self.iovs_valid(iovs, count)
-        if bad:
-            return bad
-        base = length = 0
-        for i in range(count):  # the first buffer that is not empty: a short read is allowed
-            base, length = self.get_u32(iovs + 8 * i) or 0, self.get_u32(iovs + 8 * i + 4) or 0
-            if length:
-                break
-        if not self.in_memory(base, length):
-            return E_FAULT
-        data = b""
+def read_std(guest: Guest, iovs: int, count: int, nread: int) -> int:
+    bad = iovs_valid(guest, iovs, count)
+    if bad:
+        return bad
+    base = length = 0
+    for i in range(count):  # the first buffer that is not empty: a short read is allowed
+        base, length = get_u32(guest, iovs + 8 * i) or 0, get_u32(guest, iovs + 8 * i + 4) or 0
         if length:
-            stream = self.state.std_stream(0)
-            while (
-                True
-            ):  # a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end
-                try:
-                    data = stream.read(length)
-                except StreamClosed:
-                    data = b""
-                    break
-                except StreamFailed as failure:
-                    return self.state.stream_status(failure)
-                if len(data) > length:
-                    return E_IO
-                if data:
-                    break
-                self.wait()
-            self.put_bytes(base, data)
-        return E_SUCCESS if self.put_u32(nread, len(data)) else E_FAULT
-
-    # ---- clocks and random bytes --------------------------------------------------------------------------------------------
+            break
+    if not in_memory(guest, base, length):
+        return E_FAULT
+    data = b""
+    if length:
+        stream = std_stream(guest.state, 0)
+        while True:  # a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end
+            try:
+                data = stream.read(length)
+            except StreamClosed:
+                data = b""
+                break
+            except StreamFailed as failure:
+                return stream_status(failure)
+            if len(data) > length:
+                return E_IO
+            if data:
+                break
+            guest.wait()
+        put_bytes(guest, base, data)
+    return E_SUCCESS if put_u32(guest, nread, len(data)) else E_FAULT

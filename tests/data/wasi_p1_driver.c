@@ -67,15 +67,15 @@ static int hook_sleep(fusedwasi_p2_state *core, uint64_t ns) {
 
 /* a trap of the guest ends the call: the hook jumps back to `main`, which prints `trapped` */
 static jmp_buf call_jump;
-static void hook_trap(fusedwasi_p2_guest *core, const char *message) {
-    (void)core, (void)message;
+static void hook_trap(fusedwasi_p2_guest *g, const char *message) {
+    (void)g, (void)message;
     longjmp(call_jump, 1);
 }
 
 /* the hook `signal`: tells the number; 9 ends the program by a trap of the guest, 20 is accepted, any other is refused with PERM */
-static uint32_t hook_signal(fusedwasi_p1_guest *g, uint32_t number) {
+static uint32_t hook_signal(fusedwasi_p2_guest *g, uint32_t number) {
     printf("signal %u\n", (unsigned)number);
-    if (number == 9) g->core.trap(&g->core, "killed");
+    if (number == 9) g->trap(g, "killed");
     return number == 20 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_PERM;
 }
 
@@ -128,71 +128,71 @@ static int tokenize(char *line, char *tokens[], size_t lens[]) {
     return n;
 }
 
-typedef uint32_t (*call_fn)(fusedwasi_p1_guest *g, const uint64_t *a, int *trapped);
+typedef uint32_t (*call_fn)(fusedwasi_p2_guest *g, const uint64_t *a);
 #define A(i) a[i]
 #define CALL(name, n, ...) \
-    static uint32_t c_##name(fusedwasi_p1_guest *g, const uint64_t *a, int *t) { (void)a; return fusedwasi_p1_##name(g, __VA_ARGS__ t); }
-CALL(args_sizes_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(args_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(environ_sizes_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(environ_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(clock_res_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(clock_time_get, 3, (uint32_t)A(0), A(1), (uint32_t)A(2), )
-CALL(random_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(sched_yield, 0, )
-CALL(proc_raise, 1, (uint32_t)A(0), )
-CALL(fd_write, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), )
-CALL(fd_read, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), )
-static uint32_t c_fd_seek(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    return unstable ? fusedwasi_p1_unstable_fd_seek(g, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3), t) : fusedwasi_p1_fd_seek(g, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3), t);
+    static uint32_t c_##name(fusedwasi_p2_guest *g, const uint64_t *a) { (void)a; return fusedwasi_p1_##name(g, ##__VA_ARGS__); }
+CALL(args_sizes_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(args_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(environ_sizes_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(environ_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(clock_res_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(clock_time_get, 3, (uint32_t)A(0), A(1), (uint32_t)A(2))
+CALL(random_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(sched_yield, 0)
+CALL(proc_raise, 1, (uint32_t)A(0))
+CALL(fd_write, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3))
+CALL(fd_read, 4, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3))
+static uint32_t c_fd_seek(fusedwasi_p2_guest *g, const uint64_t *a) {
+    return unstable ? fusedwasi_p1_unstable_fd_seek(g, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3)) : fusedwasi_p1_fd_seek(g, (uint32_t)A(0), A(1), (uint32_t)A(2), (uint32_t)A(3));
 }
-CALL(fd_tell, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(fd_close, 1, (uint32_t)A(0), )
-CALL(fd_renumber, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(fd_advise, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3), )
-static uint32_t c_fd_fdstat_get(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    return unstable ? fusedwasi_p1_unstable_fd_fdstat_get(g, (uint32_t)A(0), (uint32_t)A(1), t) : fusedwasi_p1_fd_fdstat_get(g, (uint32_t)A(0), (uint32_t)A(1), t);
+CALL(fd_tell, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(fd_close, 1, (uint32_t)A(0))
+CALL(fd_renumber, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(fd_advise, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3))
+static uint32_t c_fd_fdstat_get(fusedwasi_p2_guest *g, const uint64_t *a) {
+    return unstable ? fusedwasi_p1_unstable_fd_fdstat_get(g, (uint32_t)A(0), (uint32_t)A(1)) : fusedwasi_p1_fd_fdstat_get(g, (uint32_t)A(0), (uint32_t)A(1));
 }
-CALL(fd_prestat_get, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(fd_prestat_dir_name, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
+CALL(fd_prestat_get, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(fd_prestat_dir_name, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2))
 
-static uint32_t c_fd_filestat_get(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    return unstable ? fusedwasi_p1_unstable_fd_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), t) : fusedwasi_p1_fd_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), t);
+static uint32_t c_fd_filestat_get(fusedwasi_p2_guest *g, const uint64_t *a) {
+    return unstable ? fusedwasi_p1_unstable_fd_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1)) : fusedwasi_p1_fd_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1));
 }
-static uint32_t c_path_filestat_get(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    return unstable ? fusedwasi_p1_unstable_path_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), t) : fusedwasi_p1_path_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), t);
+static uint32_t c_path_filestat_get(fusedwasi_p2_guest *g, const uint64_t *a) {
+    return unstable ? fusedwasi_p1_unstable_path_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4)) : fusedwasi_p1_path_filestat_get(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4));
 }
-CALL(fd_readdir, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
-CALL(path_open, 9, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), A(5), A(6), (uint32_t)A(7), (uint32_t)A(8), )
-CALL(fd_datasync, 1, (uint32_t)A(0), )
-CALL(fd_sync, 1, (uint32_t)A(0), )
-CALL(fd_filestat_set_size, 2, (uint32_t)A(0), A(1), )
-CALL(fd_allocate, 3, (uint32_t)A(0), A(1), A(2), )
-CALL(fd_filestat_set_times, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3), )
-CALL(path_filestat_set_times, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), A(4), A(5), (uint32_t)A(6), )
-CALL(fd_fdstat_set_flags, 2, (uint32_t)A(0), (uint32_t)A(1), )
-CALL(fd_fdstat_set_rights, 3, (uint32_t)A(0), A(1), A(2), )
-CALL(path_create_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
-CALL(path_remove_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
-CALL(path_unlink_file, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
-CALL(fd_pread, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
-CALL(fd_pwrite, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4), )
-CALL(path_rename, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
-CALL(path_link, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), (uint32_t)A(6), )
-CALL(path_symlink, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
-CALL(path_readlink, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
+CALL(fd_readdir, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4))
+CALL(path_open, 9, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), A(5), A(6), (uint32_t)A(7), (uint32_t)A(8))
+CALL(fd_datasync, 1, (uint32_t)A(0))
+CALL(fd_sync, 1, (uint32_t)A(0))
+CALL(fd_filestat_set_size, 2, (uint32_t)A(0), A(1))
+CALL(fd_allocate, 3, (uint32_t)A(0), A(1), A(2))
+CALL(fd_filestat_set_times, 4, (uint32_t)A(0), A(1), A(2), (uint32_t)A(3))
+CALL(path_filestat_set_times, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), A(4), A(5), (uint32_t)A(6))
+CALL(fd_fdstat_set_flags, 2, (uint32_t)A(0), (uint32_t)A(1))
+CALL(fd_fdstat_set_rights, 3, (uint32_t)A(0), A(1), A(2))
+CALL(path_create_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2))
+CALL(path_remove_directory, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2))
+CALL(path_unlink_file, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2))
+CALL(fd_pread, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4))
+CALL(fd_pwrite, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), A(3), (uint32_t)A(4))
+CALL(path_rename, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5))
+CALL(path_link, 7, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), (uint32_t)A(6))
+CALL(path_symlink, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4))
+CALL(path_readlink, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5))
 
-static uint32_t c_poll_oneoff(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    return unstable ? fusedwasi_p1_unstable_poll_oneoff(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), t)
-                    : fusedwasi_p1_poll_oneoff(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), t);
+static uint32_t c_poll_oneoff(fusedwasi_p2_guest *g, const uint64_t *a) {
+    return unstable ? fusedwasi_p1_unstable_poll_oneoff(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3))
+                    : fusedwasi_p1_poll_oneoff(g, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3));
 }
-CALL(sock_accept, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), )
-CALL(sock_recv, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5), )
-CALL(sock_send, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), )
-CALL(sock_shutdown, 2, (uint32_t)A(0), (uint32_t)A(1), )
+CALL(sock_accept, 3, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2))
+CALL(sock_recv, 6, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4), (uint32_t)A(5))
+CALL(sock_send, 5, (uint32_t)A(0), (uint32_t)A(1), (uint32_t)A(2), (uint32_t)A(3), (uint32_t)A(4))
+CALL(sock_shutdown, 2, (uint32_t)A(0), (uint32_t)A(1))
 
-static uint32_t c_proc_exit(fusedwasi_p1_guest *g, const uint64_t *a, int *t) {
-    fusedwasi_p1_proc_exit(g, (uint32_t)a[0], t);
+static uint32_t c_proc_exit(fusedwasi_p2_guest *g, const uint64_t *a) {
+    fusedwasi_p1_proc_exit(g, (uint32_t)a[0]);
     return 0;
 }
 
@@ -226,12 +226,11 @@ int main(int argc, char **argv) {
     fusedwasi_p2_stream streams[3];
     memset(streams, 0, sizeof streams);
     fusedwasi_p2_init(&core);
-    fusedwasi_p1_preopen preopens[4];
+    struct fusedwasi_p2_preopen preopens[4];
     char preopen_host[4][512], preopen_name[4][64];
     size_t npreopens = 0;
     int hooks_on = 0;
-    fusedwasi_p1_state *w = NULL;
-    fusedwasi_p1_guest guest;
+    fusedwasi_p2_guest guest;
     char line[2048];
     while (fgets(line, sizeof line, script)) {
         size_t len = strlen(line);
@@ -264,16 +263,14 @@ int main(int argc, char **argv) {
         } else if (!strcmp(t[0], "hooks")) {
             hooks_on = !strcmp(t[1], "on");
         } else if (!strcmp(t[0], "start")) {
-            fusedwasi_p1_config cfg;
-            memset(&cfg, 0, sizeof cfg);
             if (!argc_wasi) arg_items[argc_wasi++] = "program";
             core.args = arg_items;
             core.arg_count = argc_wasi;
             core.env_names = env_names;
             core.env_values = env_values;
             core.env_count = envc;
-            cfg.preopens = preopens;
-            cfg.npreopens = npreopens;
+            core.preopens = preopens;
+            core.preopen_count = (uint32_t)npreopens;
             if (hooks_on) {
                 streams[0].read = stream_stdin;
                 for (int k = 1; k < 3; k++) {
@@ -287,15 +284,14 @@ int main(int argc, char **argv) {
             }
             int err = 0;
             size_t bad = 0;
-            w = fusedwasi_p1_create(&cfg, &core, &err, &bad);
-            if (w == NULL) {
+            if (fusedwasi_p1_open_descriptors(&core, &err, &bad) != 0) {
                 printf("create failed %d %d\n", err, (int)bad);
                 return 1;
             }
             memory_size = (uint64_t)atoi(t[1]);
-            fusedwasi_p1_guest_init(&guest, w);
-            guest.core.trap = hook_trap;
-            fusedwasi_p1_bind(&guest, &memory_base, &memory_size);
+            fusedwasi_p2_guest_init(&guest, &core);
+            guest.trap = hook_trap;
+            fusedwasi_p2_bind_memory(&guest, 0, &memory_base, &memory_size);
         } else if (!strcmp(t[0], "signal")) {
             guest.signal = !strcmp(t[1], "on") ? hook_signal : NULL;
         } else if (!strcmp(t[0], "stdin")) {
@@ -351,12 +347,12 @@ int main(int argc, char **argv) {
             for (int k = 0; k < calls[i].nargs; k++) a[k] = strtoull(t[2 + k], NULL, 0);
             int trapped = 0;
             uint32_t rc = 0;
-            if (setjmp(call_jump) == 0) rc = calls[i].fn(&guest, a, &trapped);
+            if (setjmp(call_jump) == 0) rc = calls[i].fn(&guest, a);
             else trapped = 1;
-            if (trapped) printf("%s trapped\nexit %d %u\n", t[1], guest.core.exited, (unsigned)guest.core.exit_code);
+            if (trapped) printf("%s trapped\nexit %d %u\n", t[1], guest.exited, (unsigned)guest.exit_code);
             else printf("%s %u\n", t[1], (unsigned)rc);
         }
     }
-    fusedwasi_p1_destroy(w);
+    fusedwasi_p2_free(&core);
     return 0;
 }

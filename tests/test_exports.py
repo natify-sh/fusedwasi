@@ -33,12 +33,13 @@ def test_the_top_level_has_no_name_of_a_family() -> None:
     assert isinstance(fusedwasi.__version__, str)
 
 
-def test_a_name_in_both_families_is_two_classes() -> None:
+def test_a_name_in_both_families_is_one_class() -> None:
+    """One State, one Guest and one Exit for both families: what 0.1 shares with 0.2 is the same object, not a twin."""
     both = set(p1.__all__) & set(p2.__all__)
-    assert both == set(FAMILY_CLASSES)  # the only names the families share, and they are not one thing
+    assert both == set(FAMILY_CLASSES)  # the only names the families share
     for name in both:
-        assert getattr(p1, name) is not getattr(p2, name)
-    assert p1.State.__module__ == "fusedwasi.p1.wasi_p1_core" and p2.State.__module__ == "fusedwasi.p2.wasi_p2_core"
+        assert getattr(p1, name) is getattr(p2, name)
+    assert p1.State.__module__ == "fusedwasi.p2.wasi_p2_core" and p1.Guest.__module__ == "fusedwasi.p2.wasi_p2_core"
 
 
 def test_the_names_a_user_needs_are_there() -> None:
@@ -63,6 +64,7 @@ def test_the_names_a_user_needs_are_there() -> None:
         "WasiError",
         "PreopenError",
         "errno_of",
+        "open_descriptors",
         "E_SUCCESS",
         "E_NOTSUP",
         "FT_DIR",
@@ -76,7 +78,7 @@ def test_the_names_a_user_needs_are_there() -> None:
 
 def test_the_families_work_together() -> None:
     out = p2.BufferOutput()
-    state = p1.State(core=p2.State(args=["a"], stdout=out))
+    state = p2.State(args=["a"], stdout=out)  # one world for both
     guest = p1.Guest(state, bytearray(64))
     from fusedwasi.p1 import wasi_p1
 

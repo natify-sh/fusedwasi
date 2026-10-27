@@ -12,13 +12,12 @@ C:
 
 - State of 0.2 (the world): `fusedwasi_p2_state` (fields read or written from outside: `user`, `std[]`, `args`, `env_*`, `preopens`, `clock`, `random_bytes`, `sleep`, `socket_addr_check`, `http_check`), `fusedwasi_p2_init`, `fusedwasi_p2_free`, `fusedwasi_p2_stream` with `FUSEDWASI_P2_STREAM_OK / CLOSED / FAILED`, `fusedwasi_p2_preopen`.
 - Guest of 0.2 (the caller): `fusedwasi_p2_guest` (fields: `state`, `user`, `trap`, `realloc`, `wait`, `exit`, `exited`, `exit_code`), `fusedwasi_p2_guest_init`, `fusedwasi_p2_bind_memory` (primary), `fusedwasi_p2_set_memory` (convenience).
-- State of 0.1: `fusedwasi_p1_state` (fields: `core`, `user`), `fusedwasi_p1_config`, `fusedwasi_p1_preopen`, `fusedwasi_p1_create`, `fusedwasi_p1_destroy`, `fusedwasi_p1_errno`, `fusedwasi_p1_copy`, and the macros `FUSEDWASI_P1_MALLOC / CALLOC / FREE / WRITE`.
-- Guest of 0.1: `fusedwasi_p1_guest` (fields: `core` (a guest of 0.2: memory, `trap`, `wait`, `exited`, `exit_code`, `user`), `state`, `signal`), `fusedwasi_p1_guest_init`, `fusedwasi_p1_bind`.
+- WASI 0.1 has no state and no guest of its own (stage B of step 3, done): it uses the two above, with `fusedwasi_p2_guest.signal` (the hook of `proc_raise`), `fusedwasi_p1_open_descriptors(&state, &err, &bad)` and `fusedwasi_p1_errno`. Memory 0 of the guest is the memory of an instance of 0.1.
 - The function of each import (`fusedwasi_p1_<name>`, `fusedwasi_p2_<package>_<name>`) is bound by the generator by name, so these names are an interface too.
 
-Python: `fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`, `wasi_p1_core.State`, `Guest` and `Exit`, `fusedwasi.p2.wasi_p2_core.State` and `Guest`, `wasi_p2_io.InputStream / OutputStream / StreamClosed / StreamFailed`.
+Python: `fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`, `fusedwasi.p2.wasi_p2_core.State`, `Guest` and `Exit` (the same classes as `fusedwasi.p1.State`, `Guest`, `Exit`), `fusedwasi.p1.open_descriptors`, `fusedwasi.p2.wasi_p2_filesystem.Filesystem` and `SystemFilesystem` (`State(filesystem=...)`), `wasi_p2_io.InputStream / OutputStream / StreamClosed / StreamFailed`.
 
-To decide: which fields are public (and read-only for the host), which are private. The end of a call is read from the guest (`exited`, `exit_code`; for 0.1 `g->core.exited`); that is fine if it is written down as the contract.
+To decide: which fields are public (and read-only for the host), which are private. The end of a call is read from the guest (`exited`, `exit_code`; for 0.1 `g->core.exited`); that is fine if it is written down as the contract (for both families: `proc_exit` of 0.1 leaves its code there too).
 
 ## 2. Behaviour not yet checked against a real host
 
@@ -48,7 +47,7 @@ The name `fusedwasi` is already taken on PyPI by the owner (2026-10-26) and is r
 
 1. The state and the guest (done, `3c3924b`, `b4aa2db`): the model of `design_model.md`.
 2. The official wasi-testsuite (0.1) and the neutral user in Python (the twin over `wasmtime-py`) in the CI of fusedwasi. This is the net under step 3 and the first half of the proof of neutrality. **Written** (`tests/neutral/`, job `python-wasmtime` of `neutral.yml`; 72 tests of the wasi-testsuite pass locally; see `design_model.md`, section 11).
-3. 0.1 over 0.2 (`design_model.md`, section 4).
+3. 0.1 over 0.2 (`design_model.md`, section 4). **Done** (stage B: one state and one guest for both families, the descriptors of 0.1 are resources of the table of 0.2, the functions of 0.1 call the operations of 0.2; the 72 tests of the wasi-testsuite, the three neutral users and the C/Python parity tests pass; see `design_model.md`, section 4 and `host_scope.md`, "Changes of 0.1 that 0.2 forced").
 4. The C user over an engine that is not `wasm2c` (`wasm3` first; a hand-made guest memory as the fallback), the second half of the proof of neutrality (`design_model.md`, section 11). **Written** (`tests/neutral/c_wasm3/`, job `c-wasm3` of `neutral.yml`; passes locally on Linux). A third, small Python user over `pywasm3` is in `tests/neutral/` (job `python-wasm3`).
 5. Public/private marks, the dead names, the gaps of section 3 closed or deferred in writing; the public documents (`README.md`, the headers, the docstrings) say nothing about how a particular user works.
 6. The remaining checks: Windows and macOS runs, the package test (section 4).

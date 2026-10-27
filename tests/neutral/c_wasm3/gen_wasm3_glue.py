@@ -17,19 +17,13 @@ WIDTH = {"i32": ("uint32_t", "i"), "i64": ("uint64_t", "I")}
 P2_PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 
-def raw_function(
-    name: str, c_function: str, row: signatures.Function, guest: str, extra: str, returns: str, trapped: bool
-) -> str:
+def raw_function(name: str, c_function: str, row: signatures.Function, guest: str, extra: str, returns: str) -> str:
     """The text of one raw function of wasm3. The arguments are copied out of the stack of wasm3 first: a call back into the module (the `cabi_realloc` of a result) reuses it."""
     results = len(row.results)
     params = [WIDTH[p.type][0] for p in row.params]
     # the call into fusedwasi is in a function of its own that is not inlined, so that the setjmp of the raw function has nothing of the library in its frame (-Wclobbered)
-    inner_parameters = ", ".join(
-        ["neutral_inst *in", *[f"{t} a{i}" for i, t in enumerate(params)], *(["int *trapped"] if trapped else [])]
-    )
-    inner_arguments = ", ".join(
-        [guest, *([extra] if extra else []), *[f"a{i}" for i in range(len(params))], *(["trapped"] if trapped else [])]
-    )
+    inner_parameters = ", ".join(["neutral_inst *in", *[f"{t} a{i}" for i, t in enumerate(params)]])
+    inner_arguments = ", ".join([guest, *([extra] if extra else []), *[f"a{i}" for i in range(len(params))]])
     lines: list[str] = [
         f"static NEUTRAL_NOINLINE {returns} {name}_call({inner_parameters}) {{",
         f"    {'return ' if returns != 'void' else ''}{c_function}({inner_arguments});",
@@ -41,15 +35,11 @@ def raw_function(
     for i, ctype in enumerate(params):
         lines.append(f"    {ctype} a{i};")
         lines.append(f"    memcpy(&a{i}, &sp[{results + i}], sizeof a{i});")
-    call_arguments = ", ".join(["in", *[f"a{i}" for i in range(len(params))], *(["&trapped"] if trapped else [])])
-    if trapped:
-        lines.append("    int trapped = 0;")
+    call_arguments = ", ".join(["in", *[f"a{i}" for i in range(len(params))]])
     if returns != "void":
         lines.append(f"    {returns} r = 0;")
     assignment = "r = " if returns != "void" else ""
     lines.append(f"    NEUTRAL_RUN(in, rt, {assignment}{name}_call({call_arguments}));")
-    if trapped:
-        lines.append("    if (trapped) return neutral_trapped(in);")
     if returns != "void":
         lines.append("    memcpy(&sp[0], &r, sizeof r);")
     lines.append("    return m3Err_none;")
@@ -73,7 +63,7 @@ def main(output: str) -> None:
     for index, row in enumerate(signatures.load("p1").functions):
         returns = "uint32_t" if row.results else "void"
         assert row.c_name is not None
-        out.append(raw_function(f"neutral_p1_{index}", row.c_name, row, "&in->g1", "", returns, True))
+        out.append(raw_function(f"neutral_p1_{index}", row.c_name, row, "&in->g", "", returns))
         p1_entries.append(f'    {{"{row.module}", "{row.name}", "{signature_text(row)}", neutral_p1_{index}}},')
     p2_entries: list[str] = []
     skipped: list[str] = []
@@ -83,7 +73,7 @@ def main(output: str) -> None:
             continue
         returns = {"i32": "uint32_t", "i64": "uint64_t"}[row.results[0].type] if row.results else "void"
         extra = "0" if row.takes_comp else ""  # `comp`: the memory of the only component
-        out.append(raw_function(f"neutral_p2_{index}", row.c_name, row, "&in->g2", extra, returns, False))
+        out.append(raw_function(f"neutral_p2_{index}", row.c_name, row, "&in->g", extra, returns))
         module = row.module.split("@")[0]
         p2_entries.append(f'    {{"{module}", "{row.name}", "{signature_text(row)}", neutral_p2_{index}}},')
     out += [

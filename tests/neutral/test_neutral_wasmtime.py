@@ -25,9 +25,9 @@ HERE = Path(__file__).resolve().parent
 # ---- the same program under the functions of fusedwasi -----------------------------------------------------------------------
 
 
-def world_p1(root: Path) -> tuple[p1.State, p2.BufferOutput]:
+def world_p1(root: Path) -> tuple[p2.State, p2.BufferOutput]:
     out = p2.BufferOutput()
-    return p1.State(core=p2.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
+    return p2.State(args=ARGS, env=ENV, stdout=out, preopens=[(str(root), "/")]), out
 
 
 # ---- WASI 0.1 ----------------------------------------------------------------------------------------------------------------

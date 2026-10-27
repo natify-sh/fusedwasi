@@ -147,6 +147,7 @@ from .wasi_p1_core import (
     State,
     WasiError,
     errno_of,
+    open_descriptors,
 )
 
 __all__ = [
@@ -289,4 +290,5 @@ __all__ = [
     "State",
     "WasiError",
     "errno_of",
+    "open_descriptors",
 ]

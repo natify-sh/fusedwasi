@@ -140,7 +140,7 @@ from .wasi_p1 import (
 from .wasi_p1 import (
     sock_shutdown as sock_shutdown,
 )
-from .wasi_p1_core import E_INVAL, E_SUCCESS
+from .wasi_p1_core import E_INVAL, E_SUCCESS, load, put_bytes
 
 if TYPE_CHECKING:
     from .wasi_p1_core import Guest
@@ -159,8 +159,8 @@ def fd_fdstat_get(guest: Guest, fd: int, ptr: int) -> int:
     number = _fdstat_get(guest, fd, ptr)
     if number == E_SUCCESS:
         mask = (1 << 29) - 1
-        base, inheriting = struct.unpack("<QQ", guest.load(ptr + 8, 16))
-        guest.put_bytes(ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
+        base, inheriting = struct.unpack("<QQ", load(guest, ptr + 8, 16))
+        put_bytes(guest, ptr + 8, struct.pack("<QQ", base & mask, inheriting & mask))
     return number
 
 

@@ -173,7 +173,18 @@ def witx_render(node: Any) -> str:
     return "(" + " ".join(witx_render(x) for x in node) + ")"
 
 
-WITX_INT = {"u8": "i32", "u16": "i32", "u32": "i32", "s8": "i32", "s16": "i32", "s32": "i32", "u64": "i64", "s64": "i64", "f32": "f32", "f64": "f64"}
+WITX_INT = {
+    "u8": "i32",
+    "u16": "i32",
+    "u32": "i32",
+    "s8": "i32",
+    "s16": "i32",
+    "s32": "i32",
+    "u64": "i64",
+    "s64": "i64",
+    "f32": "f32",
+    "f64": "f64",
+}
 
 
 class Witx:
@@ -206,7 +217,9 @@ class Witx:
         if head == "@witx" and seen[1] == "usize":
             return [Param(name, "i32", "length", src)]
         if head in ("enum", "flags"):
-            rep = next((x for x in seen if isinstance(x, list) and x and x[0] == "@witx" and x[1] in ("tag", "repr")), None)
+            rep = next(
+                (x for x in seen if isinstance(x, list) and x and x[0] == "@witx" and x[1] in ("tag", "repr")), None
+            )
             if rep is None:
                 raise ValueError(f"{head} of {name} has no repr")
             return [Param(name, WITX_INT[rep[2]], "value", src)]
@@ -247,11 +260,11 @@ def build_p1(src: dict[str, Any]) -> tuple[list[Func], list[dict[str, str]]]:
                 for ok in oks:
                     values += list(ok[1:]) if isinstance(ok, list) and ok[0] == "tuple" else [ok]
                 for i, v in enumerate(values):
-                    params.append(Param("retptr" if len(values) == 1 else f"retptr{i}", "i32", "retptr", witx_render(v)))
+                    params.append(
+                        Param("retptr" if len(values) == 1 else f"retptr{i}", "i32", "retptr", witx_render(v))
+                    )
                 results.append(Param("errno", "i32", "errno", witx_render(exp[-1][1])))
-        funcs.append(
-            Func(module, name, name, first_sentence(node.doc), params, results, camel(name))
-        )
+        funcs.append(Func(module, name, name, first_sentence(node.doc), params, results, camel(name)))
     records = [{"path": f"{src['dir']}/{p.name}", "sha256": sha256_of(p)} for p in sorted(files)]
     return funcs, records
 
@@ -317,7 +330,9 @@ def wit_tokens(text: str) -> list[tuple[str, str]]:
     return out
 
 
-Type = tuple[Any, ...]  # ("prim", n) ("named", n) ("list", T) ("option", T) ("result", T|None, T|None) ("tuple", [T]) ("own", n) ("borrow", n) ("string",)
+Type = tuple[
+    Any, ...
+]  # ("prim", n) ("named", n) ("list", T) ("option", T) ("result", T|None, T|None) ("tuple", [T]) ("own", n) ("borrow", n) ("string",)
 
 
 @dataclass
@@ -344,7 +359,9 @@ class Iface:
     unstable: str | None = None
     uses: dict[str, tuple[tuple[str, str], str]] = field(default_factory=lambda: {})
     types: dict[str, TypeDef] = field(default_factory=lambda: {})
-    items: list[tuple[str, str | WFunc, str | None]] = field(default_factory=lambda: [])  # ("func", f, None) | ("resource", name, unstable)
+    items: list[tuple[str, str | WFunc, str | None]] = field(
+        default_factory=lambda: []
+    )  # ("func", f, None) | ("resource", name, unstable)
     resource_unstable: dict[str, str | None] = field(default_factory=lambda: {})
     resource_funcs: dict[str, list[WFunc]] = field(default_factory=lambda: {})
 
@@ -354,7 +371,9 @@ class Iface:
 
 
 class WitParser:
-    def __init__(self, tokens: list[tuple[str, str]], ifaces: dict[tuple[str, str], Iface], pkg: str, version: str) -> None:
+    def __init__(
+        self, tokens: list[tuple[str, str]], ifaces: dict[tuple[str, str], Iface], pkg: str, version: str
+    ) -> None:
         self.t = tokens
         self.i = 0
         self.ifaces = ifaces
@@ -566,7 +585,14 @@ class WitParser:
                     if mt == "}":
                         break
                     if mt == "constructor":
-                        f = WFunc("constructor", "constructor", self.params(), self.result() or ("own", ("named", n)), mdoc, munst)
+                        f = WFunc(
+                            "constructor",
+                            "constructor",
+                            self.params(),
+                            self.result() or ("own", ("named", n)),
+                            mdoc,
+                            munst,
+                        )
                     else:
                         mname = mt.lstrip("%")
                         self.expect(":")
@@ -613,7 +639,11 @@ def wit_render(ty: Type | None) -> str:
     if k == "string":
         return "string"
     if k in ("list", "option", "own", "borrow"):
-        return f"{k}<{wit_render(ty[1] if k not in ('own', 'borrow') else ty[1])}>" if k in ("list", "option") else f"{k}<{ty[1][1]}>"
+        return (
+            f"{k}<{wit_render(ty[1] if k not in ('own', 'borrow') else ty[1])}>"
+            if k in ("list", "option")
+            else f"{k}<{ty[1][1]}>"
+        )
     if k == "tuple":
         return "tuple<" + ", ".join(wit_render(x) for x in ty[1]) + ">"
     if k == "result":
@@ -794,12 +824,16 @@ P2_PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 
 def c_prototypes(key: str) -> dict[str, int]:
-    """The C functions of the headers by name, with the number of parameters after the guest (and, for 0.1, before `trapped`)."""
+    """The C functions of the headers by name, with the number of parameters after the guest."""
     found: dict[str, int] = {}
     if key == "p1":
         text = read_text(INCLUDE / "p1" / "wasi_p1_core.h")
-        for m in re.finditer(r"static\s+inline\s+(?:uint32_t|void)\s+(fusedwasi_p1_\w+)\(\s*void\s*\*vg\s*,([^)]*?)int\s*\*trapped\s*\)", text, re.DOTALL):
-            found[m.group(1)] = len([x for x in m.group(2).split(",") if x.strip()])
+        for m in re.finditer(
+            r"FUSEDWASI_P1_FN\s+(?:uint32_t|void)\s+(fusedwasi_p1_\w+)\(\s*fusedwasi_p2_guest\s*\*g\s*(?:,([^)]*?))?\)",
+            text,
+            re.DOTALL,
+        ):
+            found[m.group(1)] = len([x for x in (m.group(2) or "").split(",") if x.strip()])
     else:
         for pkg in P2_PACKAGES:
             text = read_text(INCLUDE / "p2" / f"wasi_p2_{pkg}.h")
@@ -839,14 +873,18 @@ def attach_implementations(funcs: list[Func], key: str) -> None:
         module, functions = py[module_key]
         in_c, in_py = c_name in c, name in functions
         if in_c != in_py:
-            raise ValueError(f"{f.module} {f.name}: {c_name} is {'in' if in_c else 'not in'} the headers and {name} is {'in' if in_py else 'not in'} {module}")
+            raise ValueError(
+                f"{f.module} {f.name}: {c_name} is {'in' if in_c else 'not in'} the headers and {name} is {'in' if in_py else 'not in'} {module}"
+            )
         if not in_c:  # left out on purpose by both twins (the unstable items)
             f.extra.update(c_name=None, python_module=None, python_name=None, takes_comp=None)
             continue
         wire = len(f.params)
         comp = c[c_name] == wire + 1 if key == "p2" else False
         if c[c_name] != wire + comp or functions[name] != wire + comp:
-            raise ValueError(f"{f.module} {f.name}: {wire} parameters in the table, {c[c_name]} in C, {functions[name]} in Python")
+            raise ValueError(
+                f"{f.module} {f.name}: {wire} parameters in the table, {c[c_name]} in C, {functions[name]} in Python"
+            )
         f.extra.update(c_name=c_name, python_module=module, python_name=name, takes_comp=comp)
 
 
@@ -899,7 +937,13 @@ def signature(f: Func) -> list[str]:
     one = "    def __call__(" + ", ".join(["self", *args] + (["/"] if args else [])) + f") -> {ret}: ..."
     if len(one) <= LINE:
         return [one]
-    return ["    def __call__(", "        self,", *[f"        {a}," for a in args], "        /,", f"    ) -> {ret}: ..."]
+    return [
+        "    def __call__(",
+        "        self,",
+        *[f"        {a}," for a in args],
+        "        /,",
+        f"    ) -> {ret}: ...",
+    ]
 
 
 def protocols(snapshot: str, title: str, funcs: list[Func], source_line: str) -> str:
@@ -924,7 +968,9 @@ def protocols(snapshot: str, title: str, funcs: list[Func], source_line: str) ->
             notes += ["Returns a WASI errno (0 is success)."]
         retptrs = [p for p in f.params if p.role == "retptr"]
         if snapshot == "p1" and retptrs:
-            notes += ["Results are written to memory at: " + ", ".join(f"`{p.name}` ({p.source_type})" for p in retptrs) + "."]
+            notes += [
+                "Results are written to memory at: " + ", ".join(f"`{p.name}` ({p.source_type})" for p in retptrs) + "."
+            ]
         if snapshot == "p2" and retptrs:
             notes += [f"The result `{retptrs[0].source_type}` is written to memory at `retptr`."]
         if f.extra.get("stability") == "unstable":
@@ -971,7 +1017,9 @@ def generate() -> dict[str, bytes]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0] if __doc__ else None)
-    ap.add_argument("--check", action="store_true", help="compare with the files on disk, write nothing, exit 1 on a difference")
+    ap.add_argument(
+        "--check", action="store_true", help="compare with the files on disk, write nothing, exit 1 on a difference"
+    )
     ap.add_argument("--out", type=Path, default=OUT, help="the directory to write (default: src/fusedwasi/signatures)")
     args = ap.parse_args(argv)
     files = generate()

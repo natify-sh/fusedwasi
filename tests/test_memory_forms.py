@@ -42,9 +42,9 @@ def test_p2_reads_and_writes_any_buffer(name: str, make: Callable[[], object]) -
 def test_p1_reads_and_writes_any_buffer(name: str, make: Callable[[], object]) -> None:
     memory = make()
     for guest_memory in (memory, lambda: memory):
-        state = wasi_p1_core.State(core=core.State(args=["ab", "c"]))
+        state = wasi_p1_core.State(args=["ab", "c"])
         guest = wasi_p1_core.Guest(state, guest_memory)
         assert wasi_p1.args_sizes_get(guest, 0, 4) == 0
-        assert guest.get_u32(0) == 2 and guest.get_u32(4) == 5
+        assert wasi_p1_core.get_u32(guest, 0) == 2 and wasi_p1_core.get_u32(guest, 4) == 5
         assert wasi_p1.args_get(guest, 16, 64) == 0
-        assert guest.read_bytes(64, 5) == b"ab\0c\0"
+        assert wasi_p1_core.read_bytes(guest, 64, 5) == b"ab\0c\0"

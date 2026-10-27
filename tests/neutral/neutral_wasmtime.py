@@ -22,7 +22,7 @@ from typing import Any
 import wasmtime as wt
 from neutral_binding import implementation, signed, unsigned
 
-from fusedwasi import p1, p2
+from fusedwasi import p2
 
 P1_MODULE = "wasi_snapshot_preview1"
 
@@ -49,7 +49,7 @@ class Instance:
         self,
         engine: wt.Engine,
         wasm: str | bytes,
-        state: p1.State | p2.State,
+        state: p2.State,
         *,
         p1_signal: Callable[[int], int] | None = None,
         traps: list[str] | None = None,
@@ -60,11 +60,8 @@ class Instance:
             None  # the call that is running: wasmtime-py wants it to call back into the instance
         )
         self.traps = traps if traps is not None else []
-        self.guest: p1.Guest | p2.Guest
-        if isinstance(state, p1.State):
-            self.guest = p1.Guest(state, self.memory, signal=p1_signal)
-        else:
-            self.guest = p2.Guest(state, [self.memory], realloc=self.realloc, trap=self.traps.append)
+        # one guest for both families: a module of 0.1 uses memory 0 and the hook `signal`, a module of 0.2 also `cabi_realloc`
+        self.guest = p2.Guest(state, [self.memory], realloc=self.realloc, trap=self.traps.append, signal=p1_signal)
         self.instance = wt.Instance(self.store, self.module, [self._import(i) for i in self.module.imports])
         exports = self.instance.exports(self.store)
         memory = exports["memory"]

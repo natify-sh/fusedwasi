@@ -14,8 +14,6 @@ import pytest
 from cbuild import build
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_core
-from fusedwasi.p1.wasi_p1_core import Guest as P1Guest
-from fusedwasi.p1.wasi_p1_core import State as P1State
 from fusedwasi.p2 import wasi_p2_cli as cli
 from fusedwasi.p2 import wasi_p2_core as core
 from fusedwasi.p2 import wasi_p2_io as io
@@ -64,10 +62,9 @@ def test_user_is_the_makers_and_untouched_in_python() -> None:
     guest = Guest(state, [bytearray(64)], user=guest_marker)
     assert state.user is world_marker and guest.user is guest_marker
     assert State().user is None and Guest(State()).user is None
-    p1_state = P1State(core=state, user=world_marker)
-    p1_guest = P1Guest(p1_state, bytearray(64), user=guest_marker)
+    p1_guest = Guest(state, bytearray(64), user=guest_marker)  # the same state and the same class for 0.1
     assert wasi_p1.args_sizes_get(p1_guest, 0, 4) == 0
-    assert p1_state.user is world_marker and p1_guest.user is guest_marker
+    assert state.user is world_marker and p1_guest.user is guest_marker
     assert state.user is world_marker and guest.user is guest_marker
 
 
@@ -80,25 +77,19 @@ int main(void) {
     static uint8_t memory[256];
     uint8_t *base = memory;
     uint64_t size = sizeof memory;
-    int marker_a = 1, marker_b = 2, marker_c = 3, err = 0;
-    size_t bad;
+    int marker_a = 1, marker_c = 3;
     fusedwasi_p2_state s;
     fusedwasi_p2_init(&s);
     printf("init %d\\n", s.user == NULL);
     s.user = &marker_a;
-    fusedwasi_p1_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    cfg.user = &marker_b;
-    fusedwasi_p1_state *w = fusedwasi_p1_create(&cfg, &s, &err, &bad);
-    fusedwasi_p1_guest g;
-    fusedwasi_p1_guest_init(&g, w);
-    printf("guest init %d\\n", g.core.user == NULL);
-    g.core.user = &marker_c;
-    fusedwasi_p1_bind(&g, &base, &size);
-    printf("create %d %d %d\\n", w->user == &marker_b, s.user == &marker_a, g.core.user == &marker_c);
-    fusedwasi_p1_args_sizes_get(&g, 0, 8, &err);
-    printf("call %d %d %d\\n", w->user == &marker_b, s.user == &marker_a, g.core.user == &marker_c);
-    fusedwasi_p1_destroy(w);
+    fusedwasi_p2_guest g;
+    fusedwasi_p2_guest_init(&g, &s);
+    printf("guest init %d\\n", g.user == NULL);
+    g.user = &marker_c;
+    fusedwasi_p2_bind_memory(&g, 0, &base, &size);
+    printf("create %d %d %d\\n", 1, s.user == &marker_a, g.user == &marker_c);
+    fusedwasi_p1_args_sizes_get(&g, 0, 8);
+    printf("call %d %d %d\\n", 1, s.user == &marker_a, g.user == &marker_c);
     fusedwasi_p2_free(&s);
     printf("free %d\\n", s.user == &marker_a);
     return 0;
@@ -189,29 +180,46 @@ int main(void) {
 
 
 def test_the_preopen_of_0_1_is_the_preopen_of_0_2(tmp_path: Path) -> None:
+    """There is one preopen, `{path, name, writable}`, for both families: the 0.1 descriptors 3 and up are the entries of `preopens` of the state, in order."""
     out = build_and_run(
         tmp_path,
         """#include <stdio.h>
 #include "wasi_p1_core.h"
 int main(void) {
-    fusedwasi_p1_preopen p = {"/real/path", "/seen", 0};              /* path, name, writable: the order of 0.2 */
-    struct fusedwasi_p2_preopen *same = &p;                           /* the same type */
-    printf("%s %s %d %d\\n", same->path, same->name, same->writable, (int)(sizeof(fusedwasi_p1_preopen) == sizeof(struct fusedwasi_p2_preopen)));
+    static uint8_t memory[64];
+    uint8_t *base = memory;
+    uint64_t size = sizeof memory;
+    struct fusedwasi_p2_preopen p = {"/", "/seen", 0};  /* path, name, writable: the order of 0.2 */
+    fusedwasi_p2_state s;
+    fusedwasi_p2_init(&s);
+    s.preopens = &p, s.preopen_count = 1;
+    int err = 0;
+    size_t bad;
+    printf("open %d\\n", fusedwasi_p1_open_descriptors(&s, &err, &bad));
+    fusedwasi_p2_guest g;
+    fusedwasi_p2_guest_init(&g, &s);
+    fusedwasi_p2_bind_memory(&g, 0, &base, &size);
+    printf("prestat %u %u\\n", (unsigned)fusedwasi_p1_fd_prestat_get(&g, 3, 0), (unsigned)fusedwasi_p1_fd_prestat_get(&g, 4, 0));
+    printf("name length %u\\n", (unsigned)memory[4]);
+    fusedwasi_p1_fd_fdstat_get(&g, 3, 8);
+    printf("can write %d\\n", (memory[16] >> 6) & 1);  /* the right fd_write is bit 6; a directory that is not writable has not got it */
+    fusedwasi_p2_free(&s);
     return 0;
 }
 """,
-    )
-    assert out == "/real/path /seen 0 1\n"
+    ).splitlines()
+    assert out == ["open 0", "prestat 0 8", "name length 5", "can write 0"]
 
 
-def test_the_preopens_of_python_are_path_name_writable_in_both_states(tmp_path: Path) -> None:
+def test_the_preopens_of_python_are_path_name_writable(tmp_path: Path) -> None:
     (tmp_path / "d").mkdir()
     items = [(str(tmp_path / "d"), "/seen", False)]
     world = State(preopens=items)
     assert world.preopens == items
-    state = P1State(core=world, preopens=items)
-    assert state.entries[3].preopen == b"/seen"
-    assert not state.entries[3].rights & wasi_p1_core.R_FD_WRITE  # writable False: the right to write is taken away
+    fds = wasi_p1_core.open_descriptors(world)
+    assert fds.entries[3].preopen == b"/seen"
+    assert not fds.entries[3].rights & wasi_p1_core.R_FD_WRITE  # writable False: the right to write is taken away
+    world.close_all()
 
 
 # ---- the constants of 0.1 ------------------------------------------------------------------------------------------------------
@@ -444,43 +452,43 @@ def test_two_guests_over_one_state_in_c_and_python(tmp_path: Path) -> None:
 
 
 TWO_GUESTS_P1_C = """#include <stdio.h>
+#include <setjmp.h>
 #include "wasi_p1.h"
-static uint32_t on_signal(fusedwasi_p1_guest *g, uint32_t number) { printf("signal %u of guest %d\\n", (unsigned)number, *(int *)g->core.user); return 0; }
+static jmp_buf jb;
+static void on_trap(fusedwasi_p2_guest *g, const char *m) { (void)g, (void)m; longjmp(jb, 1); }
+static uint32_t on_signal(fusedwasi_p2_guest *g, uint32_t number) { printf("signal %u of guest %d\\n", (unsigned)number, *(int *)g->user); return 0; }
 int main(void) {
     static uint8_t m1[64], m2[64];
     uint8_t *b1 = m1, *b2 = m2;
     uint64_t s1 = sizeof m1, s2 = sizeof m2;
-    int id1 = 1, id2 = 2, err = 0, trapped = 0;
-    size_t bad;
+    int id1 = 1, id2 = 2;
     static const char *const args[] = {"prog", "x"};
-    fusedwasi_p2_state world;
-    fusedwasi_p2_init(&world);
-    world.args = args, world.arg_count = 2;
-    fusedwasi_p1_config cfg;
-    memset(&cfg, 0, sizeof cfg);
-    fusedwasi_p1_state *state = fusedwasi_p1_create(&cfg, &world, &err, &bad);
-    fusedwasi_p1_guest g1, g2;
-    fusedwasi_p1_guest_init(&g1, state);
-    fusedwasi_p1_guest_init(&g2, state);
-    g1.core.user = &id1, g2.core.user = &id2;
-    fusedwasi_p1_bind(&g1, &b1, &s1);
-    fusedwasi_p1_bind(&g2, &b2, &s2);
+    fusedwasi_p2_state state;
+    fusedwasi_p2_init(&state);
+    state.args = args, state.arg_count = 2;
+    fusedwasi_p2_guest g1, g2;
+    fusedwasi_p2_guest_init(&g1, &state);
+    fusedwasi_p2_guest_init(&g2, &state);
+    g1.user = &id1, g2.user = &id2;
+    g1.trap = g2.trap = on_trap;
+    fusedwasi_p2_bind_memory(&g1, 0, &b1, &s1);
+    fusedwasi_p2_bind_memory(&g2, 0, &b2, &s2);
     g1.signal = on_signal;
-    printf("same state %d\\n", g1.state == g2.state && g1.state == state);
-    printf("args_sizes_get %u\\n", (unsigned)fusedwasi_p1_args_sizes_get(&g1, 0, 4, &trapped));
+    printf("same state %d\\n", g1.state == g2.state && g1.state == &state);
+    printf("args_sizes_get %u\\n", (unsigned)fusedwasi_p1_args_sizes_get(&g1, 0, 4));
     printf("memories %d %d\\n", m1[0], m2[0]);
-    printf("fd_close %u\\n", (unsigned)fusedwasi_p1_fd_close(&g1, 2, &trapped));
-    printf("other guest, closed fd %u\\n", (unsigned)fusedwasi_p1_fd_fdstat_get(&g2, 2, 16, &trapped));
-    printf("other guest, open fd %u\\n", (unsigned)fusedwasi_p1_fd_fdstat_get(&g2, 1, 16, &trapped));
-    printf("raise %u\\n", (unsigned)fusedwasi_p1_proc_raise(&g1, 15, &trapped));
-    printf("raise %u\\n", (unsigned)fusedwasi_p1_proc_raise(&g2, 15, &trapped));
-    fusedwasi_p1_proc_exit(&g1, 5, &trapped);
-    printf("g1 %d %u trapped %d g2 %d %u\\n", g1.core.exited, (unsigned)g1.core.exit_code, trapped, g2.core.exited, (unsigned)g2.core.exit_code);
-    trapped = 0;
-    fusedwasi_p1_proc_exit(&g2, 9, &trapped);
-    printf("g1 %d %u g2 %d %u\\n", g1.core.exited, (unsigned)g1.core.exit_code, g2.core.exited, (unsigned)g2.core.exit_code);
-    fusedwasi_p1_destroy(state);
-    fusedwasi_p2_free(&world);
+    printf("fd_close %u\\n", (unsigned)fusedwasi_p1_fd_close(&g1, 2));
+    printf("other guest, closed fd %u\\n", (unsigned)fusedwasi_p1_fd_fdstat_get(&g2, 2, 16));
+    printf("other guest, open fd %u\\n", (unsigned)fusedwasi_p1_fd_fdstat_get(&g2, 1, 16));
+    printf("raise %u\\n", (unsigned)fusedwasi_p1_proc_raise(&g1, 15));
+    printf("raise %u\\n", (unsigned)fusedwasi_p1_proc_raise(&g2, 15));
+    int trapped = 0;
+    if (setjmp(jb) == 0) fusedwasi_p1_proc_exit(&g1, 5);
+    else trapped = 1;
+    printf("g1 %d %u trapped %d g2 %d %u\\n", g1.exited, (unsigned)g1.exit_code, trapped, g2.exited, (unsigned)g2.exit_code);
+    if (setjmp(jb) == 0) fusedwasi_p1_proc_exit(&g2, 9);
+    printf("g1 %d %u g2 %d %u\\n", g1.exited, (unsigned)g1.exit_code, g2.exited, (unsigned)g2.exit_code);
+    fusedwasi_p2_free(&state);
     return 0;
 }
 """
@@ -489,9 +497,9 @@ int main(void) {
 def two_guests_p1_python() -> list[str]:
     lines: list[str] = []
     m1, m2 = bytearray(64), bytearray(64)
-    state = P1State(core=State(args=["prog", "x"]))
-    g1 = P1Guest(state, m1, user=1)
-    g2 = P1Guest(state, m2, user=2)
+    state = State(args=["prog", "x"])
+    g1 = Guest(state, m1, user=1)
+    g2 = Guest(state, m2, user=2)
 
     def on_signal(number: int) -> int:
         lines.append(f"signal {number} of guest {g1.user}")
@@ -556,10 +564,10 @@ def test_the_hooks_of_the_guest_in_python() -> None:
         cli.wasi_cli_exit_exit(plain, 1)
     assert caught.value.code == 1 and plain.exited and plain.exit_code == 1
     asked: list[int] = []
-    p1 = P1Guest(P1State(), bytearray(16), signal=lambda number: asked.append(number) or wasi_p1_core.E_PERM)
+    p1 = Guest(State(), bytearray(16), signal=lambda number: asked.append(number) or wasi_p1_core.E_PERM)
     assert [wasi_p1.proc_raise(p1, n) for n in (0, 9, 31)] == [0, wasi_p1_core.E_PERM, wasi_p1_core.E_INVAL]
     assert asked == [9]
-    assert wasi_p1.proc_raise(P1Guest(P1State(), bytearray(16)), 9) == wasi_p1_core.E_NOTSUP
+    assert wasi_p1.proc_raise(Guest(State(), bytearray(16)), 9) == wasi_p1_core.E_NOTSUP
 
 
 # ---- the objects of the world need no guest --------------------------------------------------------------------------------------

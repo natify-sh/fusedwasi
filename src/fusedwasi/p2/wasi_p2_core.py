@@ -182,6 +182,21 @@ class State:
         self.clock = clock
         self.resolution_ns = list(resolution_ns) if resolution_ns is not None else list(_RESOLUTIONS)
         self.sleep = sleep or self._sleep
+        self.p1: Any = None  # private: the descriptors of WASI 0.1 (`fusedwasi.p1`), made by the first function of 0.1 on the state
+
+    def close_all(self) -> None:
+        """Closes what the state holds open: the descriptors (files and directories, of 0.2 and of 0.1), the streams of files. The streams the caller gave are the caller's."""
+        for slot in self.slots:
+            if not slot.live:
+                continue
+            slot.live = False
+            if slot.kind == KIND_DESCRIPTOR:
+                self.filesystem.close(slot.obj)  # type: ignore[arg-type]
+            elif slot.kind in (KIND_INPUT_STREAM, KIND_OUTPUT_STREAM):
+                close = getattr(slot.obj, "close", None)
+                if close is not None and slot.obj not in self.std.values():
+                    close()
+        self.p1 = None
 
     def _sleep(self, ns: int) -> None:
         end = self.clock(1) + ns
@@ -190,31 +205,38 @@ class State:
 
 
 class Guest:
-    """The caller (the twin of `fusedwasi_p2_guest`): the memories, the trap and `cabi_realloc`, the end of its call, over a `State`.
+    """The caller (the twin of `fusedwasi_p2_guest`): the memories, the trap and `cabi_realloc`, the end of its call, over a `State`. The same for WASI 0.1 and 0.2.
 
-    One for each instance, made once; many guests may point to one state, and nothing is rebound per call. The hooks are callables of no `Guest` argument (a closure carries
-    its own data): `trap(message)` is called before the exception `Trap` is raised (it may raise another); `exit(code)` replaces the default, which records `exited` and `exit_code` and
-    raises `Exit`; `wait()` is what a blocking call does between two looks at a pollable.
+    One for each instance, made once; many guests may point to one state, and nothing is rebound per call. `memories` is a list of memories (a module fused from components has one for
+    each component), or one memory for an instance of 0.1 (which has memory 0 only): a writable buffer, a function of no arguments that gives it, or an object with `read(offset, length)`,
+    `write(offset, data)` and `len()` (an engine that keeps its memory out of this process; what a call then costs is a copy of what it touches). The hooks are callables of no `Guest`
+    argument (a closure carries its own data): `trap(message)` is called before the exception `Trap` is raised (it may raise another); `exit(code)` replaces the default, which records
+    `exited` and `exit_code` and raises `Exit` (`wasi:cli/exit` and `proc_exit` of 0.1 both come to it); `wait()` is what a blocking call does between two looks at a pollable;
+    `signal(number) -> errno` is asked by `proc_raise` of 0.1 (it returns the errno of WASI for the call, or ends the program by raising; without it the answer is NOTSUP and the program goes on).
     """
 
     def __init__(
         self,
         state: State,
-        memories: Sequence[object | Callable[[], object]] = (),
+        memories: Sequence[object | Callable[[], object]] | object | Callable[[], object] | None = (),
         *,
         realloc: Callable[[int, int, int, int, int], int] | None = None,
         wait: Callable[[], None] = lambda: time.sleep(0.001),
         trap: Callable[[str], None] | None = None,
         exit: Callable[[int], None] | None = None,
+        signal: Callable[[int], int] | None = None,
         user: object = None,
     ) -> None:
         self.state = state
-        self.memories: list[object | Callable[[], object]] = list(memories)
+        self.memories: list[object | Callable[[], object]] = (
+            list(memories) if isinstance(memories, (list, tuple)) else [] if memories is None else [memories]  # type: ignore[arg-type]
+        )
         self.realloc = realloc  # (comp, old_ptr, old_size, align, new_size) -> ptr: the `cabi_realloc` of the component
         self.wait = wait
         self.trap = trap
         self.exit = exit
-        self.exited = False  # the guest called wasi:cli/exit: ... with `exit_code`; `Exit` is raised as well. The host clears it before the next call
+        self.signal = signal
+        self.exited = False  # the guest called wasi:cli/exit or proc_exit: ... with `exit_code`; `Exit` is raised as well. The host clears it before the next call
         self.exit_code = 0
         self.user = user  # the pointer of whoever made the guest: the library never reads or writes it (the twin of `fusedwasi_p2_guest.user`)
 

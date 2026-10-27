@@ -11,16 +11,16 @@ pytest.importorskip("wasm3")
 import neutral_wasm3py as user
 from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
-from fusedwasi import p1, p2
+from fusedwasi import p2
 
 
 def module(text: str) -> bytes:
     return bytes(wt.wat2wasm(text))
 
 
-def world_p1(root: Path) -> tuple[p1.State, p2.BufferOutput]:
+def world_p1(root: Path) -> tuple[p2.State, p2.BufferOutput]:
     out = p2.BufferOutput()
-    return p1.State(core=p2.State(args=ARGS, env=ENV, stdout=out), preopens=[(str(root), "/")]), out
+    return p2.State(args=ARGS, env=ENV, stdout=out, preopens=[(str(root), "/")]), out
 
 
 def test_a_module_of_0_1_does_what_it_does_under_wasmtime(engine: wt.Engine, tmp_path: Path) -> None:

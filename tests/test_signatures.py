@@ -37,7 +37,6 @@ P2_PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 # Functions of the P1 Python module that are not imports of WASI.
 P1_PYTHON_HELPERS = {
-    "errno_of": "re-exported helper (OSError to errno), not an import of WASI",
     "filestat_of_fd": "helper shared with wasi_p1_unstable, which writes the older layout of filestat",
     "filestat_of_path": "helper shared with wasi_p1_unstable, which writes the older layout of filestat",
 }
@@ -76,16 +75,16 @@ def c_params(text: str) -> list[str]:
 
 
 def p1_c_functions() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """(wasi_snapshot_preview1 entry points, wasi_unstable entry points) of the C headers: name to the parameters between `void *vg` and `int *trapped`."""
+    """(wasi_snapshot_preview1 entry points, wasi_unstable entry points) of the C headers: name to the parameters after the guest `fusedwasi_p2_guest *g`."""
     found: dict[str, list[str]] = {}
     for header in sorted((C_INCLUDE / "p1").glob("*.h")):
         text = header.read_text(encoding="utf-8")
         for m in re.finditer(
-            r"static\s+inline\s+(?:uint32_t|void)\s+fusedwasi_p1_(\w+)\(\s*void\s*\*vg\s*,([^)]*?)int\s*\*trapped\s*\)",
+            r"FUSEDWASI_P1_FN\s+(?:uint32_t|void)\s+fusedwasi_p1_(\w+)\(\s*fusedwasi_p2_guest\s*\*g\s*(?:,([^)]*?))?\)",
             text,
             re.DOTALL,
         ):
-            found[m.group(1)] = c_params(m.group(2))
+            found[m.group(1)] = c_params(m.group(2) or "")
     unstable = {k.removeprefix("unstable_"): v for k, v in found.items() if k.startswith("unstable_")}
     return {k: v for k, v in found.items() if not k.startswith("unstable_")}, unstable
 
@@ -222,7 +221,11 @@ def test_the_api() -> None:
 
 def test_p1_python_has_the_functions_of_the_table() -> None:
     table = {f.name: f for f in signatures.load("p1").functions}
-    public = {n for n, f in vars(wasi_p1).items() if inspect.isfunction(f) and not n.startswith("_")}
+    public = {
+        n
+        for n, f in vars(wasi_p1).items()
+        if inspect.isfunction(f) and not n.startswith("_") and f.__module__ == wasi_p1.__name__
+    }
     assert public - set(table) == set(P1_PYTHON_HELPERS)
     assert set(table) - public == set()
     for name, f in table.items():
@@ -236,7 +239,10 @@ def test_p1_unstable_python_functions_are_in_the_table() -> None:
     public = {
         n
         for n, f in vars(wasi_p1_unstable).items()
-        if inspect.isfunction(f) and not n.startswith("_") and n not in P1_PYTHON_HELPERS
+        if inspect.isfunction(f)
+        and not n.startswith("_")
+        and f.__module__ in (wasi_p1.__name__, wasi_p1_unstable.__name__)
+        and n not in P1_PYTHON_HELPERS
     }
     assert public - set(table) == set()
     assert set(table) - public == {"sock_accept"}  # not a call of the first snapshot (the module says so)

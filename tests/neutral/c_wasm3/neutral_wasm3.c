@@ -9,13 +9,13 @@
        result INDEX exited=0|1 code=N trap=TEXT|-
 
    How wasm3 fits the model:
-   * the memory of the guest is a base and a size that this file keeps in the instance (`neutral_sync`: m3_GetMemory) and binds by pointer (`fusedwasi_p2_bind_memory`,
-     `fusedwasi_p1_bind`). wasm3 gives no place where its base is kept, so the cell is written at each entry of an import and after each call back into the module;
+   * the memory of the guest is a base and a size that this file keeps in the instance (`neutral_sync`: m3_GetMemory) and binds by pointer (`fusedwasi_p2_bind_memory`, memory 0
+     for both families). wasm3 gives no place where its base is kept, so the cell is written at each entry of an import and after each call back into the module;
    * a trap does not return: wasm3 traps by returning a text from the raw function, so the hook `trap` of the guest is a longjmp to the setjmp that every raw function makes
      (NEUTRAL_RUN), and the raw function returns the text;
    * `cabi_realloc` is m3_Call on the export of the instance, from inside the import that needed it (wasm3 lets an import call back into the module; the arguments of the import are
      copied out of its stack first, because the call reuses it);
-   * the end of a program is read from the guest after the call: `g->core.exited` and `g->core.exit_code` (0.1), `g->exited` and `g->exit_code` (0.2). */
+   * the end of a program is read from the guest after the call: `g->exited` and `g->exit_code`, for 0.1 (`proc_exit`) and for 0.2 (`wasi:cli/exit`) alike. */
 
 #include <setjmp.h>
 #include <stdint.h>
@@ -49,8 +49,7 @@ typedef struct neutral_inst {
     uint64_t size;
     jmp_buf *jmp; /* the setjmp of the import in progress */
     char trap_text[256];
-    fusedwasi_p1_guest g1; /* one of the two is used, by --world */
-    fusedwasi_p2_guest g2;
+    fusedwasi_p2_guest g; /* one guest, for a module of 0.1 and for one of 0.2 */
     uint8_t *wasm; /* the bytes of the module: wasm3 keeps pointers into them */
     size_t wasm_size;
 } neutral_inst;
@@ -73,11 +72,6 @@ static void neutral_sync(neutral_inst *in, IM3Runtime rt) {
     neutral_sync((in), (rt)); \
     __VA_ARGS__; \
     (in)->jmp = neutral_outer
-
-static const char *neutral_trapped(neutral_inst *in) {
-    if (!in->trap_text[0]) snprintf(in->trap_text, sizeof in->trap_text, "trap reported by fusedwasi");
-    return in->trap_text;
-}
 
 /* the hook `trap` of the guests: it must not return */
 static void neutral_trap(fusedwasi_p2_guest *g, const char *message) {
@@ -226,15 +220,10 @@ int main(int argc, char **argv) {
     state.args = args, state.arg_count = arg_count;
     state.env_names = env_names, state.env_values = env_values, state.env_count = env_count;
     state.preopens = preopens, state.preopen_count = preopen_count;
-    fusedwasi_p1_state *world1 = NULL;
-    if (p1) {
-        fusedwasi_p1_config config;
-        memset(&config, 0, sizeof config);
-        config.preopens = preopens, config.npreopens = preopen_count;
+    if (p1) {  /* the descriptors of 0.1 are made at the first call; this tells a directory that cannot be opened now */
         int err = 0;
         size_t bad = 0;
-        world1 = fusedwasi_p1_create(&config, &state, &err, &bad);
-        if (!world1) {
+        if (fusedwasi_p1_open_descriptors(&state, &err, &bad)) {
             fprintf(stderr, "cannot open the directory %zu: errno %d\n", bad, err);
             return 2;
         }
@@ -260,18 +249,11 @@ int main(int argc, char **argv) {
             return 2;
         }
         if (neutral_link(module, in->wasm, in->wasm_size, in)) return 2;
-        if (p1) {
-            fusedwasi_p1_guest_init(&in->g1, world1);
-            in->g1.core.user = in;
-            in->g1.core.trap = neutral_trap;
-            fusedwasi_p1_bind(&in->g1, &in->base, &in->size);
-        } else {
-            fusedwasi_p2_guest_init(&in->g2, &state);
-            in->g2.user = in;
-            in->g2.trap = neutral_trap;
-            in->g2.realloc = neutral_realloc;
-            fusedwasi_p2_bind_memory(&in->g2, 0, &in->base, &in->size);
-        }
+        fusedwasi_p2_guest_init(&in->g, &state);
+        in->g.user = in;
+        in->g.trap = neutral_trap;
+        in->g.realloc = neutral_realloc;
+        fusedwasi_p2_bind_memory(&in->g, 0, &in->base, &in->size);
         if (m3_FindFunction(&in->realloc_function, in->rt, "cabi_realloc")) in->realloc_function = NULL;
     }
 
@@ -279,7 +261,7 @@ int main(int argc, char **argv) {
     int status = 0;
     for (int i = 0; i < module_count; i++) {
         neutral_inst *in = instances[i];
-        fusedwasi_p2_guest *core = p1 ? &in->g1.core : &in->g2;
+        fusedwasi_p2_guest *core = &in->g;
         IM3Function function;
         M3Result e = m3_FindFunction(&function, in->rt, entry);
         if (e) {
@@ -296,7 +278,6 @@ int main(int argc, char **argv) {
         if (trap) status = 1;
     }
 
-    if (p1) fusedwasi_p1_destroy(world1);
     fusedwasi_p2_free(&state);
     return status;
 }

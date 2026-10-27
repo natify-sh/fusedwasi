@@ -1,18 +1,16 @@
-/* The core of WASI 0.1 that `wasi_snapshot_preview1` and `wasi_unstable` (the first snapshot) share: the state of the world of 0.1, the guest that calls into
-   it, and a function `fusedwasi_p1_<name>` for each call of the specification. Header only, included by wasi_p1.h and wasi_p1_unstable.h; the
-   functions are `static inline`, so those the module does not import are not in the object.
+/* The calls of WASI 0.1 that `wasi_snapshot_preview1` and `wasi_unstable` (the first snapshot) share: a function `fusedwasi_p1_<name>` for each call of the specification, over the state and the
+   guest of WASI 0.2 (`fusedwasi_p2_state`, `fusedwasi_p2_guest`; p2/wasi_p2_core.h). Header only, included by wasi_p1.h and wasi_p1_unstable.h; the functions are `static inline`, so those the
+   module does not import are not in the object.
 
-   There is no Python in this file. The STATE (`fusedwasi_p1_state`) is the world of 0.1, over the state of WASI 0.2 (`fusedwasi_p2_state`, which the host fills: the arguments, the
-   environment, the clocks, the random bytes, the sleep, the standard streams): it holds the descriptors with their rights and positions. The GUEST (`fusedwasi_p1_guest`) is the
-   caller: it holds a guest of 0.2 (`g->core`: the memory, `trap`, `wait`, `exit`, `exited`, `exit_code`, `user`) and the hook `signal`. Many guests may point to one state; nothing is
-   rebound per call. The end of the program is not a hook and not a state of the world: it is what the call that ended it leaves, as the error `I32Exit` of Wasmtime is the
-   result of that call, so it is on the guest. `proc_exit` records the code in the guest (`g->core.exited`, `g->core.exit_code`) and reports a trap; the host reads them after the
-   call and clears them before the next one. `proc_raise` asks the hook `signal` of the guest (without one it answers NOTSUP and the program goes on). Nothing is closed and no later
-   call is refused. The files are those of the system layer of 0.2 (wasi_p2_filesystem.h: the walk of a path confined below a directory and the calls on a name below it, for POSIX
-   and for Windows); this file keeps the descriptors with their rights, the positions and the calls of 0.1.
+   There is one state and one guest for both families. The configuration of 0.1 is the fields of the state (the arguments, the environment, the standard streams, the preopens, the clocks, the random
+   bytes, the sleep); the memory of an instance of 0.1 is memory 0 of its guest. A descriptor of 0.1 is a map to a resource of 0.2 plus what 0.1 keeps for each descriptor (its rights, its position,
+   the name of a preopen): a file or a directory is a `descriptor` in the table of the state, the same resource that a module of 0.2 sees in that state, and the functions of 0.1 do their work through
+   the operations of 0.2 (p2/wasi_p2_filesystem.h: `fusedwasi_p2_fs_*`, the standard streams, the clocks of the state). The map is private; it is made by the first function of 0.1 that needs it, or by
+   `fusedwasi_p1_open_descriptors`, and `fusedwasi_p2_free` frees it with the rest. Many guests of 0.1 may point to one state; they share its descriptors.
 
-   A WASI call is `uint32_t fusedwasi_p1_<name>(void *g, parameters..., int *trapped)` (proc_exit returns nothing; `g` is a `fusedwasi_p1_guest *`): a trap is reported
-   through `trapped`, and the host knows what it was (Python: the exception it set). `fusedwasi_p1_create` makes the state, `fusedwasi_p1_guest_init` a guest.
+   A WASI call is `uint32_t fusedwasi_p1_<name>(fusedwasi_p2_guest *g, parameters...)` (proc_exit returns nothing): it answers the errno of WASI, and a trap is `g->trap` (it does not return). The end of
+   the program is the guest's, as in 0.2: `proc_exit` is wasi:cli/exit (the hook `exit` of the guest, which by default records `exited` and `exit_code` and traps); the host reads them after the call and
+   clears them before the next one. `proc_raise` asks the hook `signal` of the guest (without one it answers NOTSUP and the program goes on).
 
    The two snapshots differ in four things (the order of `whence`, one right less, a 32-bit link count in `filestat`, an extra
    `identifier` in a clock subscription) and in `sock_accept`, which the first one has not. None of the calls built so far reads or
@@ -57,13 +55,13 @@
 #include <stdlib.h>
 #include <time.h>
 #include "../p2/wasi_p2_cli.h"
-#include "../p2/wasi_p2_filesystem.h"  /* the state of WASI 0.2 that this one is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
+#include "../p2/wasi_p2_filesystem.h"  /* the state of WASI 0.2 that this is over; it includes windows.h and bcrypt.h (-lbcrypt where there is no pragma) */
 #if !FUSEDWASI_P1_DIRS_ARE_PATHS
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
 
-/* the descriptors are the system's own (also where the files are those of Python: os.open gives them) and can be asked about with poll and fstat: not on Windows */
+/* the descriptors are the system's own and can be asked about with poll and fstat: not on Windows */
 #ifndef _WIN32
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -73,17 +71,10 @@
 #define FUSEDWASI_P1_NATIVE_POLL 0
 #endif
 
-/* the memory of the state: the C library's, so that a host without Python has nothing else to link */
-#define FUSEDWASI_P1_MALLOC malloc
-#define FUSEDWASI_P1_CALLOC calloc
-#define FUSEDWASI_P1_REALLOC realloc
-#define FUSEDWASI_P1_FREE free
+/* a call of the specification (the others are helpers of this file); the table of signatures finds them by this word */
+#define FUSEDWASI_P1_FN static inline
 
 #define FUSEDWASI_P1_LINK_MAX 4096  /* the most that path_readlink reads of a link */
-
-typedef struct fusedwasi_p1_state fusedwasi_p1_state;
-typedef struct fusedwasi_p1_guest fusedwasi_p1_guest;
-
 
 /* errno of WASI (not the C library's): the whole list of the specification */
 enum {
@@ -165,55 +156,6 @@ typedef struct {
     fusedwasi_p1_dirent *items;
     size_t count, capacity;
 } fusedwasi_p1_dirlist;
-
-/* an open descriptor: a standard stream, a file (an operating system descriptor) or a directory (a path: Windows cannot open one) */
-enum { FUSEDWASI_P1_K_NONE = 0, FUSEDWASI_P1_K_STD, FUSEDWASI_P1_K_FILE, FUSEDWASI_P1_K_DIR };
-typedef struct {
-    uint8_t kind;
-    uint8_t filetype;
-    uint16_t flags;      /* fdflags */
-    fusedwasi_p2_descriptor d;  /* a file or a directory of the system layer of 0.2 (d.fd is the descriptor of the system; for a standard stream, which one it is) */
-    uint64_t rights, inheriting;
-    char *preopen;       /* the name the program sees, for a preopen */
-    size_t preopen_len;
-    fusedwasi_p1_dirlist *list;  /* fd_readdir: the names of the directory, made at cookie 0 */
-} fusedwasi_p1_entry;
-
-
-/* ---- what the host gives: the configuration ------------------------------------------------------------------------------ */
-
-/* A preopened directory is the same thing in 0.1 and in 0.2: `{path, name, writable}` (the real path of the directory, what the program sees, 0 for read-only). There is no
-   name length: the name is a C string (a path has no NUL), as in 0.2. The pointers are the caller's and are copied by `fusedwasi_p1_create`. */
-typedef struct fusedwasi_p2_preopen fusedwasi_p1_preopen;
-
-typedef struct {
-    const fusedwasi_p1_preopen *preopens;
-    size_t npreopens;
-    void *user;  /* the host's own: copied to `fusedwasi_p1_state.user`; the library never reads, writes or frees what it points to */
-} fusedwasi_p1_config;
-
-/* The world of 0.1: the descriptors (private) over the state of 0.2. Made by `fusedwasi_p1_create`, freed by `fusedwasi_p1_destroy`. */
-struct fusedwasi_p1_state {
-    fusedwasi_p2_state *core;  /* the state of WASI 0.2 that this one is over: the arguments, the environment, the clocks, the random bytes; owned by the host */
-    void *user;           /* the pointer of whoever made the state: the library never reads, writes or frees it (`fusedwasi_p1_config.user` is copied here) */
-    fusedwasi_p1_entry *entries;  /* the descriptors, by number */
-    uint32_t nentries;
-};
-
-/* The caller of 0.1: one for each instance, made once by `fusedwasi_p1_guest_init`, never rewritten per call. It is a guest of 0.2 (`core`: its memory 0 is the memory of the
-   instance, bound with `fusedwasi_p1_bind`; `core.trap` is used by what 0.1 does through 0.2, `core.wait` by a blocking read; `core.exited` and `core.exit_code` are where
-   `proc_exit` leaves its code; `core.user` is the pointer of whoever made the guest) and the hook `signal`. `core` is the first member, so a hook of the guest of 0.2 can get
-   the guest of 0.1 back by a cast. */
-struct fusedwasi_p1_guest {
-    fusedwasi_p2_guest core;
-    fusedwasi_p1_state *state;
-    /* `proc_raise` asks it, with the signal number (1 to 30, not one of those that nothing ends: see proc_raise). It returns the errno of WASI for the call, or ends the program by
-       its own means (a trap, a longjmp). NULL (the default): NOTSUP, the program goes on. */
-    uint32_t (*signal)(fusedwasi_p1_guest *g, uint32_t number);
-};
-
-/* the memory of the instance as the calls read it: the engine keeps the base and the size, and may move the first when the memory grows */
-#define FUSEDWASI_P1_MEM(g) (*(g)->core.memory[0].data)
 
 /* the errno of the C library (or of an OSError) as an errno of WASI */
 static inline uint32_t fusedwasi_p1_errno(int e) {
@@ -373,10 +315,52 @@ static inline uint32_t fusedwasi_p1_errno(int e) {
     }
 }
 
-/* ---- the state ---------------------------------------------------------------------------------------------------- */
+/* ---- the descriptor map ------------------------------------------------------------------------------------------------------ */
+
+/* An entry of the map: a standard stream (`handle` is 0, 1 or 2: the place in `std[]` of the state), a file or a directory (`handle` is the handle of a `descriptor` in the table of
+   the state: the resource of 0.2). What 0.1 keeps for the descriptor is the rest. */
+enum { FUSEDWASI_P1_K_NONE = 0, FUSEDWASI_P1_K_STD, FUSEDWASI_P1_K_FILE, FUSEDWASI_P1_K_DIR };
+typedef struct {
+    uint8_t kind;
+    uint8_t filetype;
+    uint16_t flags;      /* fdflags */
+    uint32_t handle;
+    uint64_t rights, inheriting;
+    uint64_t position;   /* the offset of the next fd_read and fd_write of a file (0.2 has none in a descriptor) */
+    char *preopen;       /* the name the program sees, for a preopen */
+    size_t preopen_len;
+    fusedwasi_p1_dirlist *list;  /* fd_readdir: the names of the directory, made at cookie 0 */
+} fusedwasi_p1_entry;
+
+typedef struct {
+    fusedwasi_p1_entry *entries;
+    uint32_t count;
+} fusedwasi_p1_fds;
+
+#define FUSEDWASI_P1_OPTS FUSEDWASI_P2_FS_P1
+
+/* the memory of the instance: memory 0 of the guest (little-endian, as WebAssembly says) */
+static inline uint8_t *fusedwasi_p1_mem(const fusedwasi_p2_guest *g) { return *g->memory[0].data; }
+
+static inline int fusedwasi_p1_in_memory(const fusedwasi_p2_guest *g, uint32_t ptr, uint64_t len) {
+    return g->memories > 0 && g->memory[0].data != NULL && g->memory[0].size != NULL && (uint64_t)ptr + len <= *g->memory[0].size;
+}
+
+/* errno of the C library for a code of 0.2 (what `fusedwasi_p1_open_descriptors` tells when a directory of a preopen cannot be opened) */
+static inline int fusedwasi_p1_errno_of_code(int code) {
+    switch (code) {
+    case FUSEDWASI_P2_E_ACCESS: return EACCES;
+    case FUSEDWASI_P2_E_NO_ENTRY: return ENOENT;
+    case FUSEDWASI_P2_E_NOT_DIRECTORY: return ENOTDIR;
+    case FUSEDWASI_P2_E_NAME_TOO_LONG: return ENAMETOOLONG;
+    case FUSEDWASI_P2_E_INSUFFICIENT_MEMORY: return ENOMEM;
+    case FUSEDWASI_P2_E_UNSUPPORTED: return ENOSYS;
+    default: return EIO;
+    }
+}
 
 static inline char *fusedwasi_p1_copy(const char *text, size_t len) {
-    char *out = (char *)FUSEDWASI_P1_MALLOC(len + 1);
+    char *out = (char *)malloc(len + 1);
     if (out != NULL) {
         memcpy(out, text, len);
         out[len] = '\0';
@@ -386,155 +370,189 @@ static inline char *fusedwasi_p1_copy(const char *text, size_t len) {
 
 static inline void fusedwasi_p1_dirlist_free(fusedwasi_p1_dirlist *list) {
     if (list == NULL) return;
-    for (size_t i = 0; i < list->count; i++) FUSEDWASI_P1_FREE(list->items[i].name);
-    FUSEDWASI_P1_FREE(list->items);
-    FUSEDWASI_P1_FREE(list);
+    for (size_t i = 0; i < list->count; i++) free(list->items[i].name);
+    free(list->items);
+    free(list);
 }
 
-/* closes what the descriptor holds; 0, or -1 with errno from the close of a file */
-static inline int fusedwasi_p1_release(fusedwasi_p1_entry *e) {
-    int rc = 0;
+/* lets go of what the entry holds: a file or a directory is dropped from the table of the state (and closed with it), a standard stream stays the state's */
+static inline void fusedwasi_p1_release(fusedwasi_p2_state *state, fusedwasi_p1_entry *e) {
     if (e->kind == FUSEDWASI_P1_K_FILE || e->kind == FUSEDWASI_P1_K_DIR) {
-        if (e->d.fd >= 0) rc = FUSEDWASI_P1_CLOSE(e->d.fd);
-        e->d.fd = -1;
-        FUSEDWASI_P1_FREE(e->d.path);
-        e->d.path = NULL;
+        fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(state, e->handle, FUSEDWASI_P2_KIND_DESCRIPTOR);
+        if (slot) {
+            slot->live = 0;
+            if (slot->destroy) slot->destroy(state, slot->obj);
+            slot->obj = NULL;
+        }
     }
-    FUSEDWASI_P1_FREE(e->preopen);
+    free(e->preopen);
     fusedwasi_p1_dirlist_free(e->list);
     memset(e, 0, sizeof *e);
-    return rc;
 }
 
-/* the lowest free number from 3 on; -1 when there is no memory */
-static inline int64_t fusedwasi_p1_new_fd(fusedwasi_p1_state *w) {
-    for (uint32_t i = 3; i < w->nentries; i++)
-        if (w->entries[i].kind == FUSEDWASI_P1_K_NONE) return i;
-    uint32_t n = w->nentries * 2;
-    fusedwasi_p1_entry *bigger = (fusedwasi_p1_entry *)FUSEDWASI_P1_REALLOC(w->entries, (size_t)n * sizeof(fusedwasi_p1_entry));
-    if (bigger == NULL) return -1;
-    memset(bigger + w->nentries, 0, (size_t)(n - w->nentries) * sizeof(fusedwasi_p1_entry));
-    uint32_t first = w->nentries;
-    w->entries = bigger;
-    w->nentries = n;
-    return first;
+static inline void fusedwasi_p1_fds_destroy(fusedwasi_p2_state *state, void *obj) {
+    fusedwasi_p1_fds *fds = (fusedwasi_p1_fds *)obj;
+    for (uint32_t i = 0; i < fds->count; i++) fusedwasi_p1_release(state, &fds->entries[i]);
+    free(fds->entries);
+    free(fds);
 }
 
-static inline void fusedwasi_p1_destroy(fusedwasi_p1_state *w);
-
-static inline int fusedwasi_p1_errno_of_code(int code);
-
-/* The state over `core` from a configuration (which it copies: the host may free it at once; `core` must outlive the state). NULL on failure with *err an errno; when it is
-   the directory of a preopen that could not be opened, *bad is its number in the configuration, otherwise (size_t)-1. */
-static inline fusedwasi_p1_state *fusedwasi_p1_create(const fusedwasi_p1_config *cfg, fusedwasi_p2_state *core, int *err, size_t *bad) {
+/* The descriptors of 0.1, made once for the state: 0, 1 and 2 are the standard streams, 3 and up the preopens in order. NULL on failure with *err an errno of the C library; when it
+   is the directory of a preopen that could not be opened, *bad is its place in `preopens`, otherwise (size_t)-1. */
+static inline fusedwasi_p1_fds *fusedwasi_p1_make_fds(fusedwasi_p2_state *state, int *err, size_t *bad) {
     *bad = (size_t)-1;
-    fusedwasi_p1_state *w = (fusedwasi_p1_state *)FUSEDWASI_P1_CALLOC(1, sizeof(fusedwasi_p1_state));
-    if (w == NULL) {
+    fusedwasi_p1_fds *fds = (fusedwasi_p1_fds *)calloc(1, sizeof *fds);
+    uint32_t handle = 0;
+    if (fds) {
+        fds->count = 8;
+        fds->entries = (fusedwasi_p1_entry *)calloc(fds->count, sizeof(fusedwasi_p1_entry));
+        if (fds->entries) handle = fusedwasi_p2_table_add(state, FUSEDWASI_P2_KIND_P1_FDS, fds, fusedwasi_p1_fds_destroy);
+    }
+    if (!handle) {
+        if (fds) free(fds->entries);
+        free(fds);
         *err = ENOMEM;
         return NULL;
     }
-    w->core = core;
-    w->user = cfg->user;
-    w->nentries = 8;
-    w->entries = (fusedwasi_p1_entry *)FUSEDWASI_P1_CALLOC(w->nentries, sizeof(fusedwasi_p1_entry));
-    if (w->entries == NULL) goto nomem;
     for (int i = 0; i < 3; i++) {
-        w->entries[i].kind = FUSEDWASI_P1_K_STD;
-        w->entries[i].d.fd = i;  /* which stream it is, wherever it is renumbered to */
+        fds->entries[i].kind = FUSEDWASI_P1_K_STD;
+        fds->entries[i].handle = (uint32_t)i;  /* which stream it is, wherever it is renumbered to */
     }
-    for (size_t i = 0; i < cfg->npreopens; i++) {
-        const fusedwasi_p1_preopen *p = &cfg->preopens[i];
-        int64_t number = fusedwasi_p1_new_fd(w);
-        if (number < 0) goto nomem;
-        fusedwasi_p1_entry *e = &w->entries[number];
-        memset(e, 0, sizeof *e);
-        e->kind = FUSEDWASI_P1_K_DIR;
-        e->filetype = FUSEDWASI_P1_FT_DIR;
-        e->rights = e->inheriting = p->writable ? FUSEDWASI_P1_R_ALL : (FUSEDWASI_P1_R_ALL & ~FUSEDWASI_P1_R_MUTATING);
-        e->preopen_len = strlen(p->name);
-        e->preopen = fusedwasi_p1_copy(p->name, e->preopen_len);
-        if (e->preopen == NULL) {
-            fusedwasi_p1_release(e);
-            goto nomem;
+    for (uint32_t i = 0; i < state->preopen_count; i++) {
+        const struct fusedwasi_p2_preopen *p = &state->preopens[i];
+        fusedwasi_p1_entry *e;
+        if (3 + i >= fds->count) {
+            uint32_t n = fds->count * 2;
+            fusedwasi_p1_entry *bigger = (fusedwasi_p1_entry *)realloc(fds->entries, (size_t)n * sizeof *bigger);
+            if (!bigger) {
+                *err = ENOMEM;
+                goto fail;
+            }
+            memset(bigger + fds->count, 0, (size_t)(n - fds->count) * sizeof *bigger);
+            fds->entries = bigger;
+            fds->count = n;
         }
-        int code = fusedwasi_p2_sys_open_directory(p->path, &e->d);
+        e = &fds->entries[3 + i];
+        fusedwasi_p2_descriptor made;
+        int code = fusedwasi_p2_sys_open_directory(p->path, &made);
         if (code != FUSEDWASI_P2_OK) {
             *err = fusedwasi_p1_errno_of_code(code);
             *bad = i;
-            fusedwasi_p1_release(e);
-            fusedwasi_p1_destroy(w);
-            return NULL;
+            goto fail;
         }
+        e->handle = fusedwasi_p2_descriptor_new(state, &made, FUSEDWASI_P2_READ | (p->writable ? FUSEDWASI_P2_MUTATE : 0));
+        e->preopen_len = strlen(p->name);
+        e->preopen = fusedwasi_p1_copy(p->name, e->preopen_len);
+        if (!e->handle || !e->preopen) {
+            if (!e->handle) fusedwasi_p2_sys_close(&made);
+            *err = ENOMEM;
+            *bad = (size_t)-1;
+            e->kind = FUSEDWASI_P1_K_DIR;  /* so that the release drops what was made */
+            goto fail;
+        }
+        e->kind = FUSEDWASI_P1_K_DIR;
+        e->filetype = FUSEDWASI_P1_FT_DIR;
+        e->rights = e->inheriting = p->writable ? FUSEDWASI_P1_R_ALL : (FUSEDWASI_P1_R_ALL & ~FUSEDWASI_P1_R_MUTATING);
     }
-    return w;
-nomem:
-    *err = ENOMEM;
-    fusedwasi_p1_destroy(w);
+    state->p1_table = handle;
+    return fds;
+fail:
+    {
+        fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(state, handle, FUSEDWASI_P2_KIND_P1_FDS);
+        if (slot) {
+            slot->live = 0;
+            slot->obj = NULL;
+        }
+        fusedwasi_p1_fds_destroy(state, fds);
+    }
     return NULL;
 }
 
-static inline void fusedwasi_p1_destroy(fusedwasi_p1_state *w) {
-    if (w == NULL) return;
-    for (uint32_t i = 0; i < w->nentries; i++) fusedwasi_p1_release(&w->entries[i]);
-    FUSEDWASI_P1_FREE(w->entries);
-    FUSEDWASI_P1_FREE(w);
+/* Makes the descriptors of 0.1 now, so that a directory of `preopens` that cannot be opened is told here (0, or -1 with *err an errno of the C library and *bad its place in the list,
+   (size_t)-1 when it was not a directory). The functions of 0.1 do it at their first call when this was not called; nothing is made twice. */
+static inline int fusedwasi_p1_open_descriptors(fusedwasi_p2_state *state, int *err, size_t *bad) {
+    *bad = (size_t)-1;
+    if (state->p1_table) return 0;
+    return fusedwasi_p1_make_fds(state, err, bad) ? 0 : -1;
 }
 
-/* a guest over `state`: its guest of 0.2 is made over `state->core` (default trap, wait and exit; see `fusedwasi_p2_guest_init`), `signal` is NULL. It owns nothing, so it needs no free. */
-static inline void fusedwasi_p1_guest_init(fusedwasi_p1_guest *g, fusedwasi_p1_state *state) {
-    memset(g, 0, sizeof *g);
-    fusedwasi_p2_guest_init(&g->core, state->core);
-    g->state = state;
+/* the descriptors of the state of the guest, made if they were not; NULL with *rc the errno of WASI of the failure */
+static inline fusedwasi_p1_fds *fusedwasi_p1_fds_get(fusedwasi_p2_guest *g, uint32_t *rc) {
+    fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(g->state, g->state->p1_table, FUSEDWASI_P2_KIND_P1_FDS);
+    if (slot) return (fusedwasi_p1_fds *)slot->obj;
+    int err = 0;
+    size_t bad;
+    fusedwasi_p1_fds *fds = fusedwasi_p1_make_fds(g->state, &err, &bad);
+    if (!fds) *rc = err == ENOMEM ? FUSEDWASI_P1_E_NOMEM : err == EACCES ? FUSEDWASI_P1_E_ACCES : err == ENOENT ? FUSEDWASI_P1_E_NOENT : err == ENOTDIR ? FUSEDWASI_P1_E_NOTDIR : FUSEDWASI_P1_E_IO;
+    return fds;
 }
 
-/* binds the memory of the instance by pointer (it moves when the memory grows: the pointers are read at each access; they are the engine's and must outlive the guest) */
-static inline void fusedwasi_p1_bind(fusedwasi_p1_guest *g, uint8_t **data, uint64_t *size) {
-    fusedwasi_p2_bind_memory(&g->core, 0, data, size);
+/* at the top of a function that looks at descriptors */
+#define FUSEDWASI_P1_FDS(g) \
+    uint32_t fds_rc = FUSEDWASI_P1_E_SUCCESS; \
+    fusedwasi_p1_fds *fds = fusedwasi_p1_fds_get((g), &fds_rc); \
+    if (fds == NULL) return fds_rc
+
+static inline fusedwasi_p1_entry *fusedwasi_p1_entry_of(fusedwasi_p1_fds *fds, uint32_t fd) {
+    return fd < fds->count && fds->entries[fd].kind != FUSEDWASI_P1_K_NONE ? &fds->entries[fd] : NULL;
 }
 
-/* ---- the memory of the instance (little-endian, as WebAssembly says) -------------------------------------------------- */
-
-static inline int fusedwasi_p1_in_memory(const fusedwasi_p1_guest *g, uint32_t ptr, uint64_t len) {
-    return g->core.memory[0].data != NULL && (uint64_t)ptr + len <= *g->core.memory[0].size;
+/* the lowest free number from 3 on; -1 when there is no memory (the table may have moved) */
+static inline int64_t fusedwasi_p1_new_fd(fusedwasi_p1_fds *fds) {
+    for (uint32_t i = 3; i < fds->count; i++)
+        if (fds->entries[i].kind == FUSEDWASI_P1_K_NONE) return i;
+    uint32_t n = fds->count * 2;
+    fusedwasi_p1_entry *bigger = (fusedwasi_p1_entry *)realloc(fds->entries, (size_t)n * sizeof(fusedwasi_p1_entry));
+    if (bigger == NULL) return -1;
+    memset(bigger + fds->count, 0, (size_t)(n - fds->count) * sizeof(fusedwasi_p1_entry));
+    uint32_t first = fds->count;
+    fds->entries = bigger;
+    fds->count = n;
+    return first;
 }
 
-static inline int fusedwasi_p1_put_u8(fusedwasi_p1_guest *g, uint32_t ptr, uint8_t v) {
+/* the resource of 0.2 behind a file or a directory */
+static inline fusedwasi_p2_descriptor *fusedwasi_p1_desc(fusedwasi_p2_guest *g, const fusedwasi_p1_entry *e) {
+    return fusedwasi_p2_descriptor_find(g->state, e->handle);
+}
+
+/* ---- the memory of the instance ---------------------------------------------------------------------------------------------- */
+
+static inline int fusedwasi_p1_put_u8(fusedwasi_p2_guest *g, uint32_t ptr, uint8_t v) {
     if (!fusedwasi_p1_in_memory(g, ptr, 1)) return 0;
-    FUSEDWASI_P1_MEM(g)[ptr] = v;
+    fusedwasi_p1_mem(g)[ptr] = v;
     return 1;
 }
 
-static inline int fusedwasi_p1_put_u16(fusedwasi_p1_guest *g, uint32_t ptr, uint16_t v) {
+static inline int fusedwasi_p1_put_u16(fusedwasi_p2_guest *g, uint32_t ptr, uint16_t v) {
     if (!fusedwasi_p1_in_memory(g, ptr, 2)) return 0;
-    FUSEDWASI_P1_MEM(g)[ptr] = (uint8_t)v;
-    FUSEDWASI_P1_MEM(g)[ptr + 1] = (uint8_t)(v >> 8);
+    fusedwasi_p1_mem(g)[ptr] = (uint8_t)v;
+    fusedwasi_p1_mem(g)[ptr + 1] = (uint8_t)(v >> 8);
     return 1;
 }
 
-static inline int fusedwasi_p1_put_u32(fusedwasi_p1_guest *g, uint32_t ptr, uint32_t v) {
+static inline int fusedwasi_p1_put_u32(fusedwasi_p2_guest *g, uint32_t ptr, uint32_t v) {
     if (!fusedwasi_p1_in_memory(g, ptr, 4)) return 0;
-    for (int i = 0; i < 4; i++) FUSEDWASI_P1_MEM(g)[ptr + i] = (uint8_t)(v >> (8 * i));
+    for (int i = 0; i < 4; i++) fusedwasi_p1_mem(g)[ptr + i] = (uint8_t)(v >> (8 * i));
     return 1;
 }
 
-static inline int fusedwasi_p1_put_u64(fusedwasi_p1_guest *g, uint32_t ptr, uint64_t v) {
+static inline int fusedwasi_p1_put_u64(fusedwasi_p2_guest *g, uint32_t ptr, uint64_t v) {
     if (!fusedwasi_p1_in_memory(g, ptr, 8)) return 0;
-    for (int i = 0; i < 8; i++) FUSEDWASI_P1_MEM(g)[ptr + i] = (uint8_t)(v >> (8 * i));
+    for (int i = 0; i < 8; i++) fusedwasi_p1_mem(g)[ptr + i] = (uint8_t)(v >> (8 * i));
     return 1;
 }
 
-static inline int fusedwasi_p1_get_u32(const fusedwasi_p1_guest *g, uint32_t ptr, uint32_t *v) {
+static inline int fusedwasi_p1_get_u32(const fusedwasi_p2_guest *g, uint32_t ptr, uint32_t *v) {
     if (!fusedwasi_p1_in_memory(g, ptr, 4)) return 0;
     *v = 0;
-    for (int i = 0; i < 4; i++) *v |= (uint32_t)FUSEDWASI_P1_MEM(g)[ptr + i] << (8 * i);
+    for (int i = 0; i < 4; i++) *v |= (uint32_t)fusedwasi_p1_mem(g)[ptr + i] << (8 * i);
     return 1;
 }
 
-#define FUSEDWASI_P1_GUEST(vg) fusedwasi_p1_guest *g = (fusedwasi_p1_guest *)(vg)
+/* ---- arguments and environment (wasi:cli/environment: the fields of the state) ------------------------------------------------ */
 
-/* ---- arguments and environment --------------------------------------------------------------------------------------- */
-
-static inline uint32_t fusedwasi_p1_strings_sizes(fusedwasi_p1_guest *g, const char *const *items, uint32_t count, uint32_t count_ptr, uint32_t size_ptr) {
+static inline uint32_t fusedwasi_p1_strings_sizes(fusedwasi_p2_guest *g, const char *const *items, uint32_t count, uint32_t count_ptr, uint32_t size_ptr) {
     size_t size = 0;
     for (uint32_t i = 0; i < count; i++) size += strlen(items[i]) + 1;
     if (!fusedwasi_p1_put_u32(g, count_ptr, count) || !fusedwasi_p1_put_u32(g, size_ptr, (uint32_t)size)) return FUSEDWASI_P1_E_FAULT;
@@ -542,7 +560,7 @@ static inline uint32_t fusedwasi_p1_strings_sizes(fusedwasi_p1_guest *g, const c
 }
 
 /* the strings are in memory of the instance as the specification says; the environment is "NAME=value" (`values` is NULL for the arguments) */
-static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p1_guest *g, const char *const *items, const char *const *values, uint32_t count, uint32_t table, uint32_t out) {
+static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p2_guest *g, const char *const *items, const char *const *values, uint32_t count, uint32_t table, uint32_t out) {
     size_t size = 0;
     for (uint32_t i = 0; i < count; i++) size += strlen(items[i]) + (values != NULL ? 1 + strlen(values[i]) : 0) + 1;
     if (!fusedwasi_p1_in_memory(g, out, size) || !fusedwasi_p1_in_memory(g, table, (uint64_t)count * 4)) return FUSEDWASI_P1_E_FAULT;
@@ -550,131 +568,88 @@ static inline uint32_t fusedwasi_p1_strings_get(fusedwasi_p1_guest *g, const cha
     for (uint32_t i = 0; i < count; i++) {
         fusedwasi_p1_put_u32(g, table + 4 * i, out + (uint32_t)offset);
         size_t n = strlen(items[i]);
-        memcpy(FUSEDWASI_P1_MEM(g) + out + offset, items[i], n);
+        memcpy(fusedwasi_p1_mem(g) + out + offset, items[i], n);
         offset += n;
         if (values != NULL) {
-            FUSEDWASI_P1_MEM(g)[out + offset++] = '=';
+            fusedwasi_p1_mem(g)[out + offset++] = '=';
             n = strlen(values[i]);
-            memcpy(FUSEDWASI_P1_MEM(g) + out + offset, values[i], n);
+            memcpy(fusedwasi_p1_mem(g) + out + offset, values[i], n);
             offset += n;
         }
-        FUSEDWASI_P1_MEM(g)[out + offset++] = 0;
+        fusedwasi_p1_mem(g)[out + offset++] = 0;
     }
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t fusedwasi_p1_args_sizes_get(void *vg, uint32_t argc, uint32_t size, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_strings_sizes(g, g->state->core->args, g->state->core->arg_count, argc, size);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_args_sizes_get(fusedwasi_p2_guest *g, uint32_t argc, uint32_t size) {
+    return fusedwasi_p1_strings_sizes(g, g->state->args, g->state->arg_count, argc, size);
 }
 
-static inline uint32_t fusedwasi_p1_args_get(void *vg, uint32_t argv, uint32_t buf, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_strings_get(g, g->state->core->args, NULL, g->state->core->arg_count, argv, buf);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_args_get(fusedwasi_p2_guest *g, uint32_t argv, uint32_t buf) {
+    return fusedwasi_p1_strings_get(g, g->state->args, NULL, g->state->arg_count, argv, buf);
 }
 
 /* the sizes of the environment count the "=" */
-static inline uint32_t fusedwasi_p1_environ_sizes_get(void *vg, uint32_t count, uint32_t size, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_environ_sizes_get(fusedwasi_p2_guest *g, uint32_t count, uint32_t size) {
     size_t total = 0;
-    for (uint32_t i = 0; i < g->state->core->env_count; i++) total += strlen(g->state->core->env_names[i]) + 1 + strlen(g->state->core->env_values[i]) + 1;
-    if (!fusedwasi_p1_put_u32(g, count, g->state->core->env_count) || !fusedwasi_p1_put_u32(g, size, (uint32_t)total)) return FUSEDWASI_P1_E_FAULT;
+    for (uint32_t i = 0; i < g->state->env_count; i++) total += strlen(g->state->env_names[i]) + 1 + strlen(g->state->env_values[i]) + 1;
+    if (!fusedwasi_p1_put_u32(g, count, g->state->env_count) || !fusedwasi_p1_put_u32(g, size, (uint32_t)total)) return FUSEDWASI_P1_E_FAULT;
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t fusedwasi_p1_environ_get(void *vg, uint32_t environ_, uint32_t buf, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_strings_get(g, g->state->core->env_names, g->state->core->env_values, g->state->core->env_count, environ_, buf);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_environ_get(fusedwasi_p2_guest *g, uint32_t environ_, uint32_t buf) {
+    return fusedwasi_p1_strings_get(g, g->state->env_names, g->state->env_values, g->state->env_count, environ_, buf);
 }
 
-/* ---- clocks and random bytes (the clocks, the random source and the sleep are those of the state of WASI 0.2: fusedwasi_p2_state) ---------- */
+/* ---- clocks and random bytes (the clocks, the random source and the sleep of the state) ------------------------------------------------ */
 
-static inline uint32_t fusedwasi_p1_clock_res_get(void *vg, uint32_t id, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_clock_res_get(fusedwasi_p2_guest *g, uint32_t id, uint32_t ptr) {
     if (id > 3) return FUSEDWASI_P1_E_INVAL;
-    return fusedwasi_p1_put_u64(g, ptr, g->state->core->resolution_ns[id]) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_put_u64(g, ptr, g->state->resolution_ns[id]) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-/* the time of a clock; a clock that cannot be read is NOTSUP (a host that traps does it in its function) */
-static inline uint32_t fusedwasi_p1_clock_ns(fusedwasi_p1_guest *g, uint32_t id, uint64_t *ns) {
+/* the time of a clock; a clock that cannot be read is NOTSUP (0.2 traps) */
+static inline uint32_t fusedwasi_p1_clock_ns(fusedwasi_p2_guest *g, uint32_t id, uint64_t *ns) {
     if (id > 3) return FUSEDWASI_P1_E_INVAL;
-    return g->state->core->clock(g->state->core, id, ns) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_NOTSUP;
+    return g->state->clock(g->state, id, ns) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_NOTSUP;
 }
 
-static inline uint32_t fusedwasi_p1_clock_time_get(void *vg, uint32_t id, uint64_t precision, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_clock_time_get(fusedwasi_p2_guest *g, uint32_t id, uint64_t precision, uint32_t ptr) {
     (void)precision;
-    (void)trapped;
     uint64_t ns = 0;
     uint32_t rc = fusedwasi_p1_clock_ns(g, id, &ns);
     if (rc != FUSEDWASI_P1_E_SUCCESS) return rc;
     return fusedwasi_p1_put_u64(g, ptr, ns) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-static inline uint32_t fusedwasi_p1_random_get(void *vg, uint32_t buf, uint32_t size, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_random_get(fusedwasi_p2_guest *g, uint32_t buf, uint32_t size) {
     if (!fusedwasi_p1_in_memory(g, buf, size)) return FUSEDWASI_P1_E_FAULT;
     if (size == 0) return FUSEDWASI_P1_E_SUCCESS;
-    return g->state->core->random_bytes(g->state->core, FUSEDWASI_P1_MEM(g) + buf, size) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_IO;
+    return g->state->random_bytes(g->state, fusedwasi_p1_mem(g) + buf, size) == 0 ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_IO;
 }
 
-static inline uint32_t fusedwasi_p1_sched_yield(void *vg, int *trapped) {
-    (void)vg;
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_sched_yield(fusedwasi_p2_guest *g) {
+    (void)g;
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline void fusedwasi_p1_proc_exit(void *vg, uint32_t code, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    g->core.exited = 1;  /* the end of a call is the guest's: the host reads `exited` and `exit_code` after the call and clears `exited` before the next */
-    g->core.exit_code = code;
-    *trapped = 1;
-}
+/* proc_exit is wasi:cli/exit: the hook `exit` of the guest is told (the default records `exited` and `exit_code` and traps) */
+FUSEDWASI_P1_FN void fusedwasi_p1_proc_exit(fusedwasi_p2_guest *g, uint32_t code) { g->exit(g, code); }
 
 /* proc_raise: the signals of WASI 0.1 by number. What a signal does to a program is the host's decision, not WASI's, so the library does not end the program: it asks the hook
-   `signal` of the guest, which returns the errno of the call or ends the program by its own means. Without the hook the answer is NOTSUP and the program goes on (as in
-   Wasmtime). A number above 30 is INVAL, and 0 (no signal) is success. */
-static inline uint32_t fusedwasi_p1_proc_raise(void *vg, uint32_t sig, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+   `signal` of the guest, which returns the errno of the call or ends the program by its own means. Without the hook the answer is NOTSUP and the program goes on (as in Wasmtime).
+   A number above 30 is INVAL, and 0 (no signal) is success. */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_proc_raise(fusedwasi_p2_guest *g, uint32_t sig) {
     if (sig > 30) return FUSEDWASI_P1_E_INVAL;
     if (sig == 0) return FUSEDWASI_P1_E_SUCCESS;
     return g->signal ? g->signal(g, sig) : FUSEDWASI_P1_E_NOTSUP;
 }
 
-/* ---- descriptors ----------------------------------------------------------------------------------------------------- */
-
-static inline fusedwasi_p1_entry *fusedwasi_p1_entry_of(fusedwasi_p1_guest *g, uint32_t fd) {
-    return fd < g->state->nentries && g->state->entries[fd].kind != FUSEDWASI_P1_K_NONE ? &g->state->entries[fd] : NULL;
-}
-
-/* the real path of a directory descriptor: root, or root/rel; new memory */
-static inline char *fusedwasi_p1_join(const char *root, const char *rel) {
-    size_t a = strlen(root), b = strlen(rel);
-    char *out = (char *)FUSEDWASI_P1_MALLOC(a + b + 2);
-    if (out == NULL) return NULL;
-    memcpy(out, root, a);
-    if (b) {
-        out[a] = '/';
-        memcpy(out + a + 1, rel, b);
-        out[a + 1 + b] = '\0';
-    } else {
-        out[a] = '\0';
-    }
-    return out;
-}
-
-/* ---- the standard streams (the hooks of the host; without them descriptors 0, 1 and 2) --------------------------------- */
+/* ---- the standard streams (wasi:cli/stdin, stdout, stderr: `std[]` of the state, else the descriptors of the process) --------------------------------- */
 
 /* All the buffers of a call are looked at before any of them is used: a bad one in the middle must not leave the data before it already written (or read)
    with an error and no count (found by comparing with uvwasi). */
-static inline uint32_t fusedwasi_p1_iovs_valid(fusedwasi_p1_guest *g, uint32_t iovs, uint32_t count) {
+static inline uint32_t fusedwasi_p1_iovs_valid(fusedwasi_p2_guest *g, uint32_t iovs, uint32_t count) {
     if (!fusedwasi_p1_in_memory(g, iovs, (uint64_t)count * 8)) return FUSEDWASI_P1_E_FAULT;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -691,15 +666,13 @@ static inline uint32_t fusedwasi_p1_stream_status(int result, const fusedwasi_p2
     return st->failure_errno ? fusedwasi_p1_errno(st->failure_errno) : FUSEDWASI_P1_E_IO;
 }
 
-/* The standard streams are those of the state of 0.2 (`s->std[i]`, else the descriptors of the process): what was written is reported (a short write); the error comes
-   with the next call. A trap of the host is a trap, through `s->trap`. */
-static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten, int *trapped) {
-    (void)trapped;
+/* what was written is reported (a short write); the error comes with the next call */
+static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p2_guest *g, uint32_t which, uint32_t iovs, uint32_t count, uint32_t nwritten) {
     {
         uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
         if (bad) return bad;
     }
-    fusedwasi_p2_stream *st = fusedwasi_p2_std(&g->core, (int)fd);
+    fusedwasi_p2_stream *st = fusedwasi_p2_std(g, (int)which);
     uint64_t total = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
@@ -707,7 +680,7 @@ static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_guest *g, uint32_t fd
         fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
         if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
         if (len == 0) continue;
-        int result = st->write(g->state->core, st, FUSEDWASI_P1_MEM(g) + base, len);
+        int result = st->write(g->state, st, fusedwasi_p1_mem(g) + base, len);
         if (result != FUSEDWASI_P2_STREAM_OK) {
             if (total == 0) return fusedwasi_p1_stream_status(result, st);
             break;
@@ -717,8 +690,7 @@ static inline uint32_t fusedwasi_p1_write_std(fusedwasi_p1_guest *g, uint32_t fd
     return fusedwasi_p1_put_u32(g, nwritten, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_guest *g, uint32_t iovs, uint32_t count, uint32_t nread, int *trapped) {
-    (void)trapped;
+static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p2_guest *g, uint32_t iovs, uint32_t count, uint32_t nread) {
     {
         uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
         if (bad) return bad;
@@ -732,9 +704,9 @@ static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_guest *g, uint32_t iov
     if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
     uint64_t got = 0;
     if (len) {
-        fusedwasi_p2_stream *st = fusedwasi_p2_std(&g->core, 0);
+        fusedwasi_p2_stream *st = fusedwasi_p2_std(g, 0);
         for (;;) {  /* a stream of 0.2 gives nothing when nothing is ready; a read of 0.1 waits for a byte or the end */
-            int result = st->read(g->state->core, st, FUSEDWASI_P1_MEM(g) + base, len, &got);
+            int result = st->read(g->state, st, fusedwasi_p1_mem(g) + base, len, &got);
             if (result == FUSEDWASI_P2_STREAM_FAILED) return fusedwasi_p1_stream_status(result, st);
             if (result == FUSEDWASI_P2_STREAM_CLOSED) {
                 got = 0;
@@ -742,311 +714,19 @@ static inline uint32_t fusedwasi_p1_read_std(fusedwasi_p1_guest *g, uint32_t iov
             }
             if (got > len) return FUSEDWASI_P1_E_IO;
             if (got > 0) break;
-            g->core.wait(&g->core);
+            g->wait(g);
         }
     }
     return fusedwasi_p1_put_u32(g, nread, (uint32_t)got) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-/* ---- reading, seeking, closing ---------------------------------------------------------------------------------------- */
+/* ---- from a code of 0.2 to an errno of WASI -------------------------------------------------------------------------------------- */
 
-static inline uint32_t fusedwasi_p1_fd_write(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL || e->kind == FUSEDWASI_P1_K_DIR) return e == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_ISDIR;
-    if (e->kind == FUSEDWASI_P1_K_STD) return e->d.fd == 0 ? FUSEDWASI_P1_E_BADF : fusedwasi_p1_write_std(g, (uint32_t)e->d.fd, iovs, count, nwritten, trapped);
-    if (!(e->rights & FUSEDWASI_P1_R_FD_WRITE)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    {
-        uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
-        if (bad) return bad;
-    }
-    uint64_t total = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t base = 0, len = 0;
-        fusedwasi_p1_get_u32(g, iovs + 8 * i, &base);
-        fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
-        if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
-        if (len == 0) continue;
-#ifdef _WIN32
-        if (e->flags & FUSEDWASI_P1_FD_APPEND) FUSEDWASI_P1_LSEEK(e->d.fd, 0, SEEK_END);
-#endif
-        long long n = FUSEDWASI_P1_WRITE(e->d.fd, FUSEDWASI_P1_MEM(g) + base, len);  /* straight from the memory of the module */
-        if (n < 0) {
-            if (total) break;
-            return fusedwasi_p1_errno(errno);
-        }
-        total += (uint64_t)n;
-        if ((uint32_t)n < len) break;
-    }
-    return fusedwasi_p1_put_u32(g, nwritten, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
-}
-
-static inline uint32_t fusedwasi_p1_fd_read(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nread, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL) return FUSEDWASI_P1_E_BADF;
-    if (e->kind == FUSEDWASI_P1_K_STD) return e->d.fd == 0 ? fusedwasi_p1_read_std(g, iovs, count, nread, trapped) : FUSEDWASI_P1_E_BADF;
-    if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_ISDIR;
-    if (!(e->rights & FUSEDWASI_P1_R_FD_READ)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    {
-        uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
-        if (bad) return bad;
-    }
-    uint64_t total = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        uint32_t base = 0, len = 0;
-        fusedwasi_p1_get_u32(g, iovs + 8 * i, &base);
-        fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
-        if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
-        if (len == 0) continue;
-        long long n = FUSEDWASI_P1_READ(e->d.fd, FUSEDWASI_P1_MEM(g) + base, len);  /* no interpreter: this is the part that moves the data */
-        if (n < 0) {
-            if (total) break;  /* what was read is reported; the error comes with the next call */
-            return fusedwasi_p1_errno(errno);
-        }
-        total += (uint64_t)n;
-        if ((uint32_t)n < len) break;
-#if FUSEDWASI_P1_NATIVE_POLL
-        /* A pipe, a FIFO, a terminal: when the first buffer is full, a read into the next one may wait for more although something has been read, and a
-           short read is allowed (found by comparing with uvwasi, which reads all the buffers with one readv). Only a regular file goes on. */
-        if (n > 0 && i + 1 < count) {
-            struct stat st;
-            if (fstat(e->d.fd, &st) == 0 && !S_ISREG(st.st_mode)) break;
-        }
-#endif
-    }
-    return fusedwasi_p1_put_u32(g, nread, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
-}
-
-/* what fd_seek asks of the descriptor: its right, or (a seek by 0 bytes from the current position is a tell) the right to tell */
-#define FUSEDWASI_P1_SEEK_RIGHT(offset, native) \
-    (FUSEDWASI_P1_R_FD_SEEK | ((offset) == 0 && (native) == SEEK_CUR ? FUSEDWASI_P1_R_FD_TELL : 0))
-
-static inline uint32_t fusedwasi_p1_seek_native(fusedwasi_p1_guest *g, uint32_t fd, int64_t offset, int native, uint32_t ptr, uint64_t right) {
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL) return FUSEDWASI_P1_E_BADF;
-    if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_SPIPE;
-    if (e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
-    if (!(e->rights & right)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    long long pos = FUSEDWASI_P1_LSEEK(e->d.fd, offset, native);
-    if (pos < 0) return fusedwasi_p1_errno(errno);
-    return fusedwasi_p1_put_u64(g, ptr, (uint64_t)pos) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
-}
-
-/* the order of whence in this snapshot: set, cur, end */
-static inline uint32_t fusedwasi_p1_fd_seek(void *vg, uint32_t fd, uint64_t offset, uint32_t whence, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    static const int native[3] = {SEEK_SET, SEEK_CUR, SEEK_END};
-    if (whence > 2) return FUSEDWASI_P1_E_INVAL;
-    return fusedwasi_p1_seek_native(g, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_SEEK_RIGHT((int64_t)offset, native[whence]));
-}
-
-static inline uint32_t fusedwasi_p1_fd_tell(void *vg, uint32_t fd, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_seek_native(g, fd, 0, SEEK_CUR, ptr, FUSEDWASI_P1_R_FD_TELL);
-}
-
-static inline uint32_t fusedwasi_p1_fd_close(void *vg, uint32_t fd, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL) return FUSEDWASI_P1_E_BADF;
-    if (e->kind == FUSEDWASI_P1_K_STD) {  /* the stream of the host stays open, but the program has let go of it: the number is free and a write to it is BADF */
-        memset(e, 0, sizeof *e);
-        return FUSEDWASI_P1_E_SUCCESS;
-    }
-    return fusedwasi_p1_release(e) == 0 ? FUSEDWASI_P1_E_SUCCESS : fusedwasi_p1_errno(errno);
-}
-
-static inline uint32_t fusedwasi_p1_fd_renumber(void *vg, uint32_t from, uint32_t to, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *a = fusedwasi_p1_entry_of(g, from), *b = fusedwasi_p1_entry_of(g, to);
-    if (a == NULL || b == NULL) return FUSEDWASI_P1_E_BADF;
-    if (from == to) return FUSEDWASI_P1_E_SUCCESS;
-    fusedwasi_p1_release(b);
-    *b = *a;
-    memset(a, 0, sizeof *a);
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_fd_advise(void *vg, uint32_t fd, uint64_t offset, uint64_t length, uint32_t advice, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)offset;
-    (void)length;
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL || e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
-    if (!(e->rights & FUSEDWASI_P1_R_FD_ADVISE)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    if (advice > 5) return FUSEDWASI_P1_E_INVAL;  /* the advice is one of six */
-    return FUSEDWASI_P1_E_SUCCESS;  /* a hint: nothing is done with it */
-}
-
-static inline int fusedwasi_p1_std_is_real(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e);
-static inline uint8_t fusedwasi_p1_std_filetype(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e);
-
-static inline uint32_t fusedwasi_p1_fd_fdstat_get(void *vg, uint32_t fd, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL) return FUSEDWASI_P1_E_BADF;
-    uint8_t filetype = e->kind == FUSEDWASI_P1_K_STD ? fusedwasi_p1_std_filetype(g, e) : e->filetype;
-    uint64_t base = e->kind == FUSEDWASI_P1_K_STD ? (e->d.fd == 0 ? FUSEDWASI_P1_RIGHTS_STDIN : FUSEDWASI_P1_RIGHTS_STDOUT) : e->rights;
-    if (!fusedwasi_p1_in_memory(g, ptr, 24)) return FUSEDWASI_P1_E_FAULT;
-    memset(FUSEDWASI_P1_MEM(g) + ptr, 0, 24);
-    fusedwasi_p1_put_u8(g, ptr, filetype);
-    fusedwasi_p1_put_u16(g, ptr + 2, e->flags);
-    fusedwasi_p1_put_u64(g, ptr + 8, base);
-    fusedwasi_p1_put_u64(g, ptr + 16, e->inheriting);
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_fd_prestat_get(void *vg, uint32_t fd, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL || e->preopen == NULL) return FUSEDWASI_P1_E_BADF;  /* the end of the list the program walks */
-    if (!fusedwasi_p1_in_memory(g, ptr, 8)) return FUSEDWASI_P1_E_FAULT;
-    memset(FUSEDWASI_P1_MEM(g) + ptr, 0, 8);  /* the type of a preopen: a directory, 0 */
-    fusedwasi_p1_put_u32(g, ptr + 4, (uint32_t)e->preopen_len);
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_fd_prestat_dir_name(void *vg, uint32_t fd, uint32_t path, uint32_t size, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL || e->preopen == NULL) return FUSEDWASI_P1_E_BADF;
-    if (size < e->preopen_len) return FUSEDWASI_P1_E_NAMETOOLONG;
-    if (!fusedwasi_p1_in_memory(g, path, e->preopen_len)) return FUSEDWASI_P1_E_FAULT;
-    memcpy(FUSEDWASI_P1_MEM(g) + path, e->preopen, e->preopen_len);
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-/* ---- what a file or a directory is ----------------------------------------------------------------------------------- */
-
-static inline uint8_t fusedwasi_p1_filetype_of(unsigned long mode) {
-    switch (mode & 0170000UL) {  /* the bits of st_mode, the same on every system Python runs on */
-    case 0040000UL: return FUSEDWASI_P1_FT_DIR;
-    case 0100000UL: return FUSEDWASI_P1_FT_REGULAR;
-    case 0120000UL: return FUSEDWASI_P1_FT_SYMLINK;
-    case 0020000UL: return FUSEDWASI_P1_FT_CHAR;
-    case 0060000UL: return FUSEDWASI_P1_FT_BLOCK;
-    case 0140000UL: return FUSEDWASI_P1_FT_SOCKET_STREAM;
-    default: return FUSEDWASI_P1_FT_UNKNOWN;
-    }
-}
-
-/* A standard stream that is the descriptor of the process (no hook stands in for it): it is what the system says it is. wasi-libc takes a character
-   device without the right to seek for a terminal, so a stream that was redirected to a file or a pipe must not say it is one (found by comparing with
-   uvwasi, which asks the descriptor). A stream that goes through a hook (Python's `sys.stdout`) has no descriptor to ask and stays a character device. */
-static inline int fusedwasi_p1_std_is_real(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e) {
-#if FUSEDWASI_P1_NATIVE_POLL
-    return e->kind == FUSEDWASI_P1_K_STD && g->state->core->std[e->d.fd] == NULL;
-#else
-    (void)g, (void)e;
-    return 0;
-#endif
-}
-
-static inline uint8_t fusedwasi_p1_std_filetype(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e) {
-#if FUSEDWASI_P1_NATIVE_POLL
-    struct stat st;
-    if (fusedwasi_p1_std_is_real(g, e) && fstat(e->d.fd, &st) == 0) return fusedwasi_p1_filetype_of((unsigned long)st.st_mode);  /* a pipe is unknown: not a terminal */
-#endif
-    (void)g, (void)e;
-    return FUSEDWASI_P1_FT_CHAR;
-}
-
-/* what the specification calls filestat, the same for both ways of getting it */
-typedef struct {
-    uint64_t dev, ino, nlink, size, atim, mtim, ctim;
-    uint8_t filetype;
-} fusedwasi_p1_stat;
-
-/* the filestat of the first snapshot has a 32-bit link count and 56 bytes */
-static inline uint32_t fusedwasi_p1_put_filestat(fusedwasi_p1_guest *g, uint32_t ptr, const fusedwasi_p1_stat *st, int legacy) {
-    size_t total = legacy ? 56 : 64;
-    if (!fusedwasi_p1_in_memory(g, ptr, total)) return FUSEDWASI_P1_E_FAULT;
-    memset(FUSEDWASI_P1_MEM(g) + ptr, 0, total);
-    fusedwasi_p1_put_u64(g, ptr, st->dev);
-    fusedwasi_p1_put_u64(g, ptr + 8, st->ino);
-    fusedwasi_p1_put_u8(g, ptr + 16, st->filetype);
-    if (legacy) {
-        fusedwasi_p1_put_u32(g, ptr + 20, (uint32_t)st->nlink);
-        fusedwasi_p1_put_u64(g, ptr + 24, st->size);
-        fusedwasi_p1_put_u64(g, ptr + 32, st->atim);
-        fusedwasi_p1_put_u64(g, ptr + 40, st->mtim);
-        fusedwasi_p1_put_u64(g, ptr + 48, st->ctim);
-    } else {
-        fusedwasi_p1_put_u64(g, ptr + 24, st->nlink);
-        fusedwasi_p1_put_u64(g, ptr + 32, st->size);
-        fusedwasi_p1_put_u64(g, ptr + 40, st->atim);
-        fusedwasi_p1_put_u64(g, ptr + 48, st->mtim);
-        fusedwasi_p1_put_u64(g, ptr + 56, st->ctim);
-    }
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-/* ---- the directory listing, as the specification wants it: "." and "..", then the names in order ------------------------ */
-
-static inline int fusedwasi_p1_dirent_order(const void *a, const void *b) {
-    const fusedwasi_p1_dirent *x = (const fusedwasi_p1_dirent *)a, *y = (const fusedwasi_p1_dirent *)b;
-    int rx = strcmp(x->name, ".") == 0 ? 0 : strcmp(x->name, "..") == 0 ? 1 : 2;
-    int ry = strcmp(y->name, ".") == 0 ? 0 : strcmp(y->name, "..") == 0 ? 1 : 2;
-    return rx != ry ? rx - ry : strcmp(x->name, y->name);
-}
-
-static inline int fusedwasi_p1_dirlist_add(fusedwasi_p1_dirlist *list, const char *name, uint64_t ino, uint8_t type) {
-    if (list->count == list->capacity) {  /* the room doubles: a directory of many names is not copied again and again */
-        size_t room = list->capacity ? list->capacity * 2 : 128;
-        fusedwasi_p1_dirent *bigger = (fusedwasi_p1_dirent *)FUSEDWASI_P1_REALLOC(list->items, room * sizeof(fusedwasi_p1_dirent));
-        if (bigger == NULL) return -1;
-        list->items = bigger;
-        list->capacity = room;
-    }
-    char *copy = fusedwasi_p1_copy(name, strlen(name));
-    if (copy == NULL) return -1;
-    fusedwasi_p1_dirent *item = &list->items[list->count++];
-    item->name = copy;
-    item->namelen = (uint32_t)strlen(name);
-    item->ino = ino;
-    item->type = type;
-    return 0;
-}
-
-/* the fdflags as flags of the system (the ones it has) */
-static inline int fusedwasi_p1_native_fdflags(uint32_t fdflags) {
-    (void)fdflags; /* unused where no flag is taken over (Windows without O_DSYNC and O_RSYNC) */
-    int flags = 0;
-#ifndef _WIN32  /* the C library of Windows cannot take it off again: fd_write does it by seeking to the end */
-    if (fdflags & FUSEDWASI_P1_FD_APPEND) flags |= O_APPEND;
-#endif
-#ifdef O_DSYNC
-    if (fdflags & FUSEDWASI_P1_FD_DSYNC) flags |= O_DSYNC;
-#endif
-#ifdef O_RSYNC
-    if (fdflags & FUSEDWASI_P1_FD_RSYNC) flags |= O_RSYNC;
-#endif
-#ifdef O_SYNC
-    if (fdflags & FUSEDWASI_P1_FD_SYNC) flags |= O_SYNC;
-#endif
-#ifdef O_NONBLOCK
-    if (fdflags & FUSEDWASI_P1_FD_NONBLOCK) flags |= O_NONBLOCK;
-#endif
-    return flags;
-}
-
-/* ---- the file system: the system layer of WASI 0.2 (wasi_p2_filesystem.h, POSIX and Windows) -----------------------------
-   A directory is an open descriptor of the system layer (a path on Windows), a path is walked from it one name at a time with the links read on the way, and nothing
-   can lead out of the preopen (`fusedwasi_p2_walk_path`). What the layer answers is a code of 0.2; the calls of 0.1 give the errno it stands for. */
-
-/* the errno of WASI for a code of 0.2 (the host of Wasmtime does the same for 0.1 over 0.2) */
+/* the errno of WASI for a code of 0.2 (the host of Wasmtime does the same for 0.1 over 0.2); a way out of the directory (FS_P1) is not a capability the program has */
 static inline uint32_t fusedwasi_p1_of_code(int code) {
     switch (code) {
     case FUSEDWASI_P2_OK: return FUSEDWASI_P1_E_SUCCESS;
+    case FUSEDWASI_P2_E_ESCAPE: return FUSEDWASI_P1_E_NOTCAPABLE;
     case FUSEDWASI_P2_E_ACCESS: return FUSEDWASI_P1_E_ACCES;
     case FUSEDWASI_P2_E_WOULD_BLOCK: return FUSEDWASI_P1_E_AGAIN;
     case FUSEDWASI_P2_E_ALREADY: return FUSEDWASI_P1_E_ALREADY;
@@ -1088,20 +768,11 @@ static inline uint32_t fusedwasi_p1_of_code(int code) {
     }
 }
 
-/* the errno of the C library for a code of 0.2 (what `fusedwasi_p1_create` tells when a directory of a preopen cannot be opened) */
-static inline int fusedwasi_p1_errno_of_code(int code) {
-    switch (code) {
-    case FUSEDWASI_P2_E_ACCESS: return EACCES;
-    case FUSEDWASI_P2_E_NO_ENTRY: return ENOENT;
-    case FUSEDWASI_P2_E_NOT_DIRECTORY: return ENOTDIR;
-    case FUSEDWASI_P2_E_NAME_TOO_LONG: return ENAMETOOLONG;
-    case FUSEDWASI_P2_E_INSUFFICIENT_MEMORY: return ENOMEM;
-    default: return EIO;
-    }
+/* the answer of a function that called an operation of 0.2: the clock that cannot be read is what 0.2 traps for */
+static inline uint32_t fusedwasi_p1_rc(fusedwasi_p2_guest *g, int code) {
+    if (code == FUSEDWASI_P2_E_NO_CLOCK) g->trap(g, "the clock cannot be read");
+    return fusedwasi_p1_of_code(code);
 }
-
-/* the errno of WASI for the failure of a walk: a path that leads out of the directory it is given from is not a capability the program has */
-static inline uint32_t fusedwasi_p1_of_walk(int code) { return code == FUSEDWASI_P2_E_NOT_PERMITTED ? FUSEDWASI_P1_E_NOTCAPABLE : fusedwasi_p1_of_code(code); }
 
 /* the type of a file of 0.2 as the filetype of WASI */
 static inline uint8_t fusedwasi_p1_filetype_of_type(uint8_t type) {
@@ -1119,6 +790,12 @@ static inline uint8_t fusedwasi_p1_filetype_of_type(uint8_t type) {
 /* a time of a file in nanoseconds since 1970 as WASI has it (unsigned): before 1970 is 0 */
 static inline uint64_t fusedwasi_p1_time_of(int64_t ns) { return ns < 0 ? 0 : (uint64_t)ns; }
 
+/* what the specification calls filestat, the same for both ways of getting it */
+typedef struct {
+    uint64_t dev, ino, nlink, size, atim, mtim, ctim;
+    uint8_t filetype;
+} fusedwasi_p1_stat;
+
 static inline void fusedwasi_p1_stat_of_p2(const fusedwasi_p2_stat *st, fusedwasi_p1_stat *out) {
     out->dev = st->dev;
     out->ino = st->ino;
@@ -1130,251 +807,376 @@ static inline void fusedwasi_p1_stat_of_p2(const fusedwasi_p2_stat *st, fusedwas
     out->filetype = fusedwasi_p1_filetype_of_type(st->type);
 }
 
-static inline uint32_t fusedwasi_p1_be_stat_fd(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e, fusedwasi_p1_stat *out, int *trapped) {
-    (void)g;
-    (void)trapped;
-    fusedwasi_p2_stat st;
-    int rc = fusedwasi_p2_sys_fstat(&e->d, &st);
-    if (rc != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(rc);
-    fusedwasi_p1_stat_of_p2(&st, out);
+/* the filestat of the first snapshot has a 32-bit link count and 56 bytes */
+static inline uint32_t fusedwasi_p1_put_filestat(fusedwasi_p2_guest *g, uint32_t ptr, const fusedwasi_p1_stat *st, int legacy) {
+    size_t total = legacy ? 56 : 64;
+    if (!fusedwasi_p1_in_memory(g, ptr, total)) return FUSEDWASI_P1_E_FAULT;
+    memset(fusedwasi_p1_mem(g) + ptr, 0, total);
+    fusedwasi_p1_put_u64(g, ptr, st->dev);
+    fusedwasi_p1_put_u64(g, ptr + 8, st->ino);
+    fusedwasi_p1_put_u8(g, ptr + 16, st->filetype);
+    if (legacy) {
+        fusedwasi_p1_put_u32(g, ptr + 20, (uint32_t)st->nlink);
+        fusedwasi_p1_put_u64(g, ptr + 24, st->size);
+        fusedwasi_p1_put_u64(g, ptr + 32, st->atim);
+        fusedwasi_p1_put_u64(g, ptr + 40, st->mtim);
+        fusedwasi_p1_put_u64(g, ptr + 48, st->ctim);
+    } else {
+        fusedwasi_p1_put_u64(g, ptr + 24, st->nlink);
+        fusedwasi_p1_put_u64(g, ptr + 32, st->size);
+        fusedwasi_p1_put_u64(g, ptr + 40, st->atim);
+        fusedwasi_p1_put_u64(g, ptr + 48, st->mtim);
+        fusedwasi_p1_put_u64(g, ptr + 56, st->ctim);
+    }
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-/* the directory that holds the last name of a path, walked from `dir` (a link at the end is read when `follow`); "." (the directory itself) is `itself` */
-static inline uint32_t fusedwasi_p1_be_walk(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, fusedwasi_p2_walk *walk,
-                                    int *itself) {
-    if (dir->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
+/* the fdflags as flags of the system (the ones it has); append is the adapter's own */
+static inline int fusedwasi_p1_native_fdflags(uint32_t fdflags) {
+    (void)fdflags; /* unused where no flag is taken over (Windows without O_DSYNC and O_RSYNC) */
+    int flags = 0;
+#ifdef O_DSYNC
+    if (fdflags & FUSEDWASI_P1_FD_DSYNC) flags |= O_DSYNC;
+#endif
+#ifdef O_RSYNC
+    if (fdflags & FUSEDWASI_P1_FD_RSYNC) flags |= O_RSYNC;
+#endif
+#ifdef O_SYNC
+    if (fdflags & FUSEDWASI_P1_FD_SYNC) flags |= O_SYNC;
+#endif
+#ifdef O_NONBLOCK
+    if (fdflags & FUSEDWASI_P1_FD_NONBLOCK) flags |= O_NONBLOCK;
+#endif
+    return flags;
+}
+
+/* A standard stream that is the descriptor of the process (the state gave no stream for it): it is what the system says it is. wasi-libc takes a character
+   device without the right to seek for a terminal, so a stream that was redirected to a file or a pipe must not say it is one (found by comparing with
+   uvwasi, which asks the descriptor). A stream that goes through a hook (Python's `sys.stdout`) has no descriptor to ask and stays a character device. */
+static inline int fusedwasi_p1_std_is_real(fusedwasi_p2_guest *g, const fusedwasi_p1_entry *e) {
+#if FUSEDWASI_P1_NATIVE_POLL
+    return e->kind == FUSEDWASI_P1_K_STD && g->state->std[e->handle] == NULL;
+#else
+    (void)g, (void)e;
+    return 0;
+#endif
+}
+
+static inline uint8_t fusedwasi_p1_std_filetype(fusedwasi_p2_guest *g, const fusedwasi_p1_entry *e) {
+#if FUSEDWASI_P1_NATIVE_POLL
+    struct stat st;
+    if (fusedwasi_p1_std_is_real(g, e) && fstat((int)e->handle, &st) == 0) return fusedwasi_p1_filetype_of_type(fusedwasi_p2_type_of(st.st_mode)); /* a pipe is unknown: not a terminal */
+#endif
+    (void)g, (void)e;
+    return FUSEDWASI_P1_FT_CHAR;
+}
+
+/* ---- reading, writing, seeking, closing ------------------------------------------------------------------------------------- */
+
+/* A file that cannot be read or written at an offset (a pipe, a FIFO, a terminal opened by a path) is read and written at the position of the system, as before. */
+static inline int fusedwasi_p1_unseekable(int code) { return code == FUSEDWASI_P2_E_INVALID_SEEK; }
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_write(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nwritten) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL || e->kind == FUSEDWASI_P1_K_DIR) return e == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_ISDIR;
+    if (e->kind == FUSEDWASI_P1_K_STD) return e->handle == 0 ? FUSEDWASI_P1_E_BADF : fusedwasi_p1_write_std(g, e->handle, iovs, count, nwritten);
+    if (!(e->rights & FUSEDWASI_P1_R_FD_WRITE)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    {
+        uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
+        if (bad) return bad;
+    }
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t base = 0, len = 0;
+        fusedwasi_p1_get_u32(g, iovs + 8 * i, &base);
+        fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
+        if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
+        if (len == 0) continue;
+        uint64_t at = e->position, done = 0;
+        int code = FUSEDWASI_P2_OK;
+        fusedwasi_p2_stat st;
+        if ((e->flags & FUSEDWASI_P1_FD_APPEND) && fusedwasi_p2_fs_stat(d, &st) == FUSEDWASI_P2_OK) at = st.size;  /* the write goes to the end of the file */
+        code = fusedwasi_p2_fs_write(d, fusedwasi_p1_mem(g) + base, len, at, &done, FUSEDWASI_P1_OPTS);
+        if (fusedwasi_p1_unseekable(code)) {
+            long long n = FUSEDWASI_P1_WRITE(d->fd, fusedwasi_p1_mem(g) + base, len);
+            if (n < 0) {
+                if (total) break;
+                return fusedwasi_p1_errno(errno);
+            }
+            total += (uint64_t)n;
+            if ((uint32_t)n < len) break;
+            continue;
+        }
+        e->position = at + done;
+        total += done;
+        if (code != FUSEDWASI_P2_OK) {
+            if (total) break;
+            return fusedwasi_p1_of_code(code);
+        }
+    }
+    return fusedwasi_p1_put_u32(g, nwritten, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_read(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t nread) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    if (e->kind == FUSEDWASI_P1_K_STD) return e->handle == 0 ? fusedwasi_p1_read_std(g, iovs, count, nread) : FUSEDWASI_P1_E_BADF;
+    if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_ISDIR;
+    if (!(e->rights & FUSEDWASI_P1_R_FD_READ)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    {
+        uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
+        if (bad) return bad;
+    }
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t base = 0, len = 0;
+        fusedwasi_p1_get_u32(g, iovs + 8 * i, &base);
+        fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
+        if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
+        if (len == 0) continue;
+        uint64_t got = 0;
+        int code = fusedwasi_p2_fs_read(d, fusedwasi_p1_mem(g) + base, len, e->position, &got, FUSEDWASI_P1_OPTS);  /* straight into the memory of the module */
+        if (fusedwasi_p1_unseekable(code)) {
+            long long n = FUSEDWASI_P1_READ(d->fd, fusedwasi_p1_mem(g) + base, len);
+            if (n < 0) {
+                if (total) break;  /* what was read is reported; the error comes with the next call */
+                return fusedwasi_p1_errno(errno);
+            }
+            got = (uint64_t)n;
+        } else if (code != FUSEDWASI_P2_OK) {
+            if (total) break;
+            return fusedwasi_p1_of_code(code);
+        } else {
+            e->position += got;
+        }
+        total += got;
+        if (got < len) break;
+        /* A pipe, a FIFO, a terminal: when the first buffer is full, a read into the next one may wait for more although something has been read, and a
+           short read is allowed (found by comparing with uvwasi, which reads all the buffers with one readv). Only a regular file goes on. */
+        if (got > 0 && i + 1 < count && e->filetype != FUSEDWASI_P1_FT_REGULAR) break;
+    }
+    return fusedwasi_p1_put_u32(g, nread, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+}
+
+/* what fd_seek asks of the descriptor: its right, or (a seek by 0 bytes from the current position is a tell) the right to tell */
+#define FUSEDWASI_P1_SEEK_RIGHT(offset, native) \
+    (FUSEDWASI_P1_R_FD_SEEK | ((offset) == 0 && (native) == SEEK_CUR ? FUSEDWASI_P1_R_FD_TELL : 0))
+
+/* The position is the adapter's. A file that is not a regular one (a pipe, a device) is asked of the system, which says what it says. */
+static inline uint32_t fusedwasi_p1_seek_native(fusedwasi_p2_guest *g, uint32_t fd, int64_t offset, int native, uint32_t ptr, uint64_t right) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_SPIPE;
+    if (e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
+    if (!(e->rights & right)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    uint64_t result;
+    if (e->filetype != FUSEDWASI_P1_FT_REGULAR) {
+        long long pos = FUSEDWASI_P1_LSEEK(d->fd, offset, native);
+        if (pos < 0) return fusedwasi_p1_errno(errno);
+        result = (uint64_t)pos;
+    } else {
+        int64_t from = 0;
+        if (native == SEEK_CUR) {
+            from = (int64_t)e->position;
+        } else if (native == SEEK_END) {
+            fusedwasi_p2_stat st;
+            int code = fusedwasi_p2_fs_stat(d, &st);
+            if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
+            from = (int64_t)st.size;
+        }
+        if ((offset > 0 && from > INT64_MAX - offset) || (offset < 0 && from + offset < 0)) return FUSEDWASI_P1_E_INVAL;
+        result = (uint64_t)(from + offset);
+        e->position = result;
+    }
+    return fusedwasi_p1_put_u64(g, ptr, result) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+}
+
+/* the order of whence in this snapshot: set, cur, end */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_seek(fusedwasi_p2_guest *g, uint32_t fd, uint64_t offset, uint32_t whence, uint32_t ptr) {
+    static const int native[3] = {SEEK_SET, SEEK_CUR, SEEK_END};
+    if (whence > 2) return FUSEDWASI_P1_E_INVAL;
+    return fusedwasi_p1_seek_native(g, fd, (int64_t)offset, native[whence], ptr, FUSEDWASI_P1_SEEK_RIGHT((int64_t)offset, native[whence]));
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_tell(fusedwasi_p2_guest *g, uint32_t fd, uint32_t ptr) {
+    return fusedwasi_p1_seek_native(g, fd, 0, SEEK_CUR, ptr, FUSEDWASI_P1_R_FD_TELL);
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_close(fusedwasi_p2_guest *g, uint32_t fd) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    if (e->kind == FUSEDWASI_P1_K_STD) {  /* the stream of the host stays open, but the program has let go of it: the number is free and a write to it is BADF */
+        memset(e, 0, sizeof *e);
+        return FUSEDWASI_P1_E_SUCCESS;
+    }
+    fusedwasi_p1_release(g->state, e);  /* the resource is dropped from the table of the state, and closed */
+    return FUSEDWASI_P1_E_SUCCESS;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_renumber(fusedwasi_p2_guest *g, uint32_t from, uint32_t to) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *a = fusedwasi_p1_entry_of(fds, from), *b = fusedwasi_p1_entry_of(fds, to);
+    if (a == NULL || b == NULL) return FUSEDWASI_P1_E_BADF;
+    if (from == to) return FUSEDWASI_P1_E_SUCCESS;
+    fusedwasi_p1_release(g->state, b);
+    *b = *a;
+    memset(a, 0, sizeof *a);
+    return FUSEDWASI_P1_E_SUCCESS;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_advise(fusedwasi_p2_guest *g, uint32_t fd, uint64_t offset, uint64_t length, uint32_t advice) {
+    (void)offset;
+    (void)length;
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL || e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
+    if (!(e->rights & FUSEDWASI_P1_R_FD_ADVISE)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    if (advice > 5) return FUSEDWASI_P1_E_INVAL;  /* the advice is one of six */
+    return FUSEDWASI_P1_E_SUCCESS;  /* a hint (descriptor.advise of 0.2 does nothing either) */
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_fdstat_get(fusedwasi_p2_guest *g, uint32_t fd, uint32_t ptr) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    uint8_t filetype = e->kind == FUSEDWASI_P1_K_STD ? fusedwasi_p1_std_filetype(g, e) : e->filetype;
+    uint64_t base = e->kind == FUSEDWASI_P1_K_STD ? (e->handle == 0 ? FUSEDWASI_P1_RIGHTS_STDIN : FUSEDWASI_P1_RIGHTS_STDOUT) : e->rights;
+    if (!fusedwasi_p1_in_memory(g, ptr, 24)) return FUSEDWASI_P1_E_FAULT;
+    memset(fusedwasi_p1_mem(g) + ptr, 0, 24);
+    fusedwasi_p1_put_u8(g, ptr, filetype);
+    fusedwasi_p1_put_u16(g, ptr + 2, e->flags);
+    fusedwasi_p1_put_u64(g, ptr + 8, base);
+    fusedwasi_p1_put_u64(g, ptr + 16, e->inheriting);
+    return FUSEDWASI_P1_E_SUCCESS;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_prestat_get(fusedwasi_p2_guest *g, uint32_t fd, uint32_t ptr) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL || e->preopen == NULL) return FUSEDWASI_P1_E_BADF;  /* the end of the list the program walks */
+    if (!fusedwasi_p1_in_memory(g, ptr, 8)) return FUSEDWASI_P1_E_FAULT;
+    memset(fusedwasi_p1_mem(g) + ptr, 0, 8);  /* the type of a preopen: a directory, 0 */
+    fusedwasi_p1_put_u32(g, ptr + 4, (uint32_t)e->preopen_len);
+    return FUSEDWASI_P1_E_SUCCESS;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_prestat_dir_name(fusedwasi_p2_guest *g, uint32_t fd, uint32_t path, uint32_t size) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL || e->preopen == NULL) return FUSEDWASI_P1_E_BADF;
+    if (size < e->preopen_len) return FUSEDWASI_P1_E_NAMETOOLONG;
+    if (!fusedwasi_p1_in_memory(g, path, e->preopen_len)) return FUSEDWASI_P1_E_FAULT;
+    memcpy(fusedwasi_p1_mem(g) + path, e->preopen, e->preopen_len);
+    return FUSEDWASI_P1_E_SUCCESS;
+}
+
+/* ---- what a file or a directory is ---------------------------------------------------------------------------------------- */
+
+static inline uint32_t fusedwasi_p1_filestat_of_fd(fusedwasi_p2_guest *g, uint32_t fd, uint32_t ptr, int legacy) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    fusedwasi_p1_stat st;
+    fusedwasi_p2_stat raw;
+    if (e->kind == FUSEDWASI_P1_K_STD) {
+#if FUSEDWASI_P1_NATIVE_POLL
+        struct stat sys;
+        if (fusedwasi_p1_std_is_real(g, e) && fstat((int)e->handle, &sys) == 0) {  /* what it is */
+            fusedwasi_p2_stat_from(&sys, &raw);
+            fusedwasi_p1_stat_of_p2(&raw, &st);
+            return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
+        }
+#endif
+        memset(&st, 0, sizeof st);  /* a stream of the host: nothing to say but that it is a character device (with one name) */
+        st.filetype = FUSEDWASI_P1_FT_CHAR;
+        st.nlink = 1;
+        return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
+    }
+    if (!(e->rights & FUSEDWASI_P1_R_FD_FILESTAT_GET)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    int code = fusedwasi_p2_fs_stat(d, &raw);
+    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
+    fusedwasi_p1_stat_of_p2(&raw, &st);
+    return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
+}
+
+/* the directory of a call on a path: it has to be one, to have the right and to be there; its resource of 0.2 comes with it */
+static inline uint32_t fusedwasi_p1_dir_with(fusedwasi_p2_guest *g, fusedwasi_p1_fds *fds, uint32_t fd, uint64_t right, fusedwasi_p2_descriptor **out) {
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    if (e->kind != FUSEDWASI_P1_K_STD && !(e->rights & right)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    if (e->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
+    *out = fusedwasi_p1_desc(g, e);
+    return *out ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_BADF;
+}
+
+static inline uint32_t fusedwasi_p1_filestat_of_path(fusedwasi_p2_guest *g, uint32_t fd, uint32_t flags, uint32_t path, uint32_t len, uint32_t ptr, int legacy) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
+    if (e == NULL) return FUSEDWASI_P1_E_BADF;
+    if (!(e->rights & FUSEDWASI_P1_R_PATH_FILESTAT_GET)) return FUSEDWASI_P1_E_NOTCAPABLE;
+    if (e->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
     if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
-    int rc = fusedwasi_p2_walk_path_with(walk, &dir->d, FUSEDWASI_P1_MEM(g) + path, len, follow, 1);
-    if (rc != FUSEDWASI_P2_OK) return fusedwasi_p1_of_walk(rc);
-    *itself = strcmp(walk->leaf, ".") == 0;
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_be_stat_path(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow,
-                                         fusedwasi_p1_stat *out, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, follow, &walk, &itself);
-    if (rc) return rc;
-    fusedwasi_p2_stat st;
-    int code = fusedwasi_p2_sys_lstat(walk.dir, walk.leaf, &st);  /* a link at the end was read by the walk if it was to be */
-    fusedwasi_p2_walk_close(&walk);
+    fusedwasi_p2_stat raw;
+    fusedwasi_p1_stat st;
+    int code = fusedwasi_p2_fs_stat_at(d, fusedwasi_p1_mem(g) + path, len, flags & FUSEDWASI_P1_LOOKUP_FOLLOW ? FUSEDWASI_P2_SYMLINK_FOLLOW : 0, &raw, FUSEDWASI_P1_OPTS);
     if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
-    fusedwasi_p1_stat_of_p2(&st, out);
-    return FUSEDWASI_P1_E_SUCCESS;
+    fusedwasi_p1_stat_of_p2(&raw, &st);
+    return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
 }
 
-static inline uint32_t fusedwasi_p1_be_open(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint32_t oflags,
-                                    uint64_t base, uint32_t fdflags, fusedwasi_p1_entry *e, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, follow, &walk, &itself);
-    if (rc) return rc;
-    /* writing is what the rights say: to write, to sync the data, to allocate, to set the size (uvwasi; wasi-libc leaves these out of a read-only open) */
-    int writable = (base & (FUSEDWASI_P1_R_FD_WRITE | FUSEDWASI_P1_R_FD_DATASYNC | FUSEDWASI_P1_R_FD_ALLOCATE | FUSEDWASI_P1_R_FD_FILESTAT_SET_SIZE)) != 0 ||
-                   (oflags & FUSEDWASI_P1_O_TRUNC) != 0,
-        readable = (base & FUSEDWASI_P1_R_FD_READ) != 0;
-    uint32_t flags = (writable ? FUSEDWASI_P2_WRITE : 0) | (readable || !writable ? FUSEDWASI_P2_READ : 0);
-    if (fdflags & (FUSEDWASI_P1_FD_SYNC | FUSEDWASI_P1_FD_RSYNC)) flags |= FUSEDWASI_P2_FILE_SYNC;
-    if (fdflags & FUSEDWASI_P1_FD_DSYNC) flags |= FUSEDWASI_P2_DATA_SYNC;
-    uint32_t open_flags = ((oflags & FUSEDWASI_P1_O_CREAT) ? FUSEDWASI_P2_CREATE : 0) | ((oflags & FUSEDWASI_P1_O_DIRECTORY) ? FUSEDWASI_P2_DIRECTORY : 0) |
-                          ((oflags & FUSEDWASI_P1_O_EXCL) ? FUSEDWASI_P2_EXCLUSIVE : 0) | ((oflags & FUSEDWASI_P1_O_TRUNC) ? FUSEDWASI_P2_TRUNCATE : 0);
-    fusedwasi_p2_descriptor made;
-    memset(&made, 0, sizeof made);
-    made.fd = -1;
-    int code = fusedwasi_p2_sys_open_at(walk.dir, walk.leaf, open_flags, flags, &made);
-    if (code == FUSEDWASI_P2_E_IS_DIRECTORY && (base & FUSEDWASI_P1_R_OF_DIRECTORY) && !(oflags & (FUSEDWASI_P1_O_CREAT | FUSEDWASI_P1_O_TRUNC)))
-        code = fusedwasi_p2_sys_open_at(walk.dir, walk.leaf, FUSEDWASI_P2_DIRECTORY, FUSEDWASI_P2_READ, &made);  /* it was a directory, and asked for as one */
-    fusedwasi_p2_walk_close(&walk);
-    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
-    fusedwasi_p2_stat st;
-    code = fusedwasi_p2_sys_fstat(&made, &st);
-    if (code != FUSEDWASI_P2_OK) {
-        fusedwasi_p2_sys_close(&made);
-        return fusedwasi_p1_of_code(code);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_filestat_get(fusedwasi_p2_guest *g, uint32_t fd, uint32_t ptr) { return fusedwasi_p1_filestat_of_fd(g, fd, ptr, 0); }
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_filestat_get(fusedwasi_p2_guest *g, uint32_t fd, uint32_t flags, uint32_t path, uint32_t len, uint32_t ptr) {
+    return fusedwasi_p1_filestat_of_path(g, fd, flags, path, len, ptr, 0);
+}
+
+/* ---- the directory listing, as the specification wants it: "." and "..", then the names in order ------------------------ */
+
+static inline int fusedwasi_p1_dirent_order(const void *a, const void *b) {
+    const fusedwasi_p1_dirent *x = (const fusedwasi_p1_dirent *)a, *y = (const fusedwasi_p1_dirent *)b;
+    int rx = strcmp(x->name, ".") == 0 ? 0 : strcmp(x->name, "..") == 0 ? 1 : 2;
+    int ry = strcmp(y->name, ".") == 0 ? 0 : strcmp(y->name, "..") == 0 ? 1 : 2;
+    return rx != ry ? rx - ry : strcmp(x->name, y->name);
+}
+
+static inline int fusedwasi_p1_dirlist_add(fusedwasi_p1_dirlist *list, const char *name, uint64_t ino, uint8_t type) {
+    if (list->count == list->capacity) {  /* the room doubles: a directory of many names is not copied again and again */
+        size_t room = list->capacity ? list->capacity * 2 : 128;
+        fusedwasi_p1_dirent *bigger = (fusedwasi_p1_dirent *)realloc(list->items, room * sizeof(fusedwasi_p1_dirent));
+        if (bigger == NULL) return -1;
+        list->items = bigger;
+        list->capacity = room;
     }
-#ifndef _WIN32  /* what the open of 0.2 does not take: appending, not blocking (on Windows fd_write seeks to the end itself) */
-    if (made.fd >= 0 && (fdflags & (FUSEDWASI_P1_FD_APPEND | FUSEDWASI_P1_FD_NONBLOCK)) &&
-        fcntl(made.fd, F_SETFL, fcntl(made.fd, F_GETFL) | fusedwasi_p1_native_fdflags(fdflags & (FUSEDWASI_P1_FD_APPEND | FUSEDWASI_P1_FD_NONBLOCK))) < 0) {
-        int saved = errno;
-        fusedwasi_p2_sys_close(&made);
-        return fusedwasi_p1_errno(saved);
-    }
-#endif
-    e->kind = made.is_dir ? FUSEDWASI_P1_K_DIR : FUSEDWASI_P1_K_FILE;
-    e->filetype = fusedwasi_p1_filetype_of_type(st.type);
-    e->d = made;
-    return FUSEDWASI_P1_E_SUCCESS;
+    char *copy = fusedwasi_p1_copy(name, strlen(name));
+    if (copy == NULL) return -1;
+    fusedwasi_p1_dirent *item = &list->items[list->count++];
+    item->name = copy;
+    item->namelen = (uint32_t)strlen(name);
+    item->ino = ino;
+    item->type = type;
+    return 0;
 }
 
-/* A name to be made that has a slash after it (a link): the code when it can only be an error; FUSEDWASI_P2_OK when it has none */
-static inline int fusedwasi_p1_leaf_slash(fusedwasi_p2_dirref parent, const char *leaf) {
-    size_t n = strlen(leaf);
-    if (n == 0 || leaf[n - 1] != '/') return FUSEDWASI_P2_OK;
-    char bare[FUSEDWASI_P2_NAME_MAX + 2];
-    memcpy(bare, leaf, n - 1);
-    bare[n - 1] = '\0';
-    fusedwasi_p2_stat st;
-    int code = fusedwasi_p2_sys_lstat(parent, bare, &st);
-    if (code != FUSEDWASI_P2_OK) return code;
-    return st.type == FUSEDWASI_P2_T_DIRECTORY ? FUSEDWASI_P2_E_EXIST : FUSEDWASI_P2_E_NOT_DIRECTORY;
-}
-
-static inline uint32_t fusedwasi_p1_be_mkdir(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself = 0;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
-    if (rc) return rc;
-    int code = itself ? FUSEDWASI_P2_E_EXIST : fusedwasi_p2_sys_mkdir(walk.dir, walk.leaf);
-    fusedwasi_p2_walk_close(&walk);
-    return fusedwasi_p1_of_code(code);
-}
-
-static inline uint32_t fusedwasi_p1_be_remove(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int isdir, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself = 0;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
-    if (rc) return rc;
-    int code = itself ? FUSEDWASI_P2_E_INVALID : isdir ? fusedwasi_p2_sys_rmdir(walk.dir, walk.leaf) : fusedwasi_p2_sys_unlink(walk.dir, walk.leaf);
-    fusedwasi_p2_walk_close(&walk);
-    if (!isdir && code == FUSEDWASI_P2_E_IS_DIRECTORY) { /* unlink of a directory: the answer of the system (the layer of 0.2 says is-directory for all) */
-#if defined(__APPLE__)
-        return FUSEDWASI_P1_E_PERM;
-#elif defined(_WIN32)
-        return FUSEDWASI_P1_E_ACCES;
-#endif
-    }
-    return fusedwasi_p1_of_code(code);
-}
-
-/* a time to set as the layer takes it: a value, the time of the file as it is, or now (-1: now; -2: as it is) */
-static inline int64_t fusedwasi_p1_new_time(uint64_t value, uint32_t flags, uint32_t set, uint32_t now, int64_t current, int64_t at) {
-    if (flags & set) return (int64_t)value;
-    if (flags & now) return at;
-    return current;
-}
-
-static inline uint32_t fusedwasi_p1_be_times_fd(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_stat st;
-    int code = fusedwasi_p2_sys_fstat(&e->d, &st);
-    if (code == FUSEDWASI_P2_OK) {
-        int64_t now = (int64_t)fusedwasi_p2_clock_ns(&g->core, 0);
-        code = fusedwasi_p2_sys_set_times_fd(&e->d, fusedwasi_p1_new_time(atim, flags, FUSEDWASI_P1_T_ATIM, FUSEDWASI_P1_T_ATIM_NOW, st.atime_ns, now),
-                                             fusedwasi_p1_new_time(mtim, flags, FUSEDWASI_P1_T_MTIM, FUSEDWASI_P1_T_MTIM_NOW, st.mtime_ns, now));
-    }
-    return fusedwasi_p1_of_code(code);
-}
-
-static inline uint32_t fusedwasi_p1_be_times_path(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, int follow, uint64_t atim,
-                                          uint64_t mtim, uint32_t flags, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, follow, &walk, &itself);
-    if (rc) return rc;
-    fusedwasi_p2_stat st;
-    int code = fusedwasi_p2_sys_lstat(walk.dir, walk.leaf, &st);  /* a link at the end was read by the walk if it was to be */
-    if (code == FUSEDWASI_P2_OK) {
-        int64_t now = (int64_t)fusedwasi_p2_clock_ns(&g->core, 0);
-        code = fusedwasi_p2_sys_set_times(walk.dir, walk.leaf, fusedwasi_p1_new_time(atim, flags, FUSEDWASI_P1_T_ATIM, FUSEDWASI_P1_T_ATIM_NOW, st.atime_ns, now),
-                                          fusedwasi_p1_new_time(mtim, flags, FUSEDWASI_P1_T_MTIM, FUSEDWASI_P1_T_MTIM_NOW, st.mtime_ns, now));
-    }
-    fusedwasi_p2_walk_close(&walk);
-    return fusedwasi_p1_of_code(code);
-}
-
-/* the two directories and names of rename and link; both walks have to be closed by the caller */
-static inline uint32_t fusedwasi_p1_be_pair(fusedwasi_p1_guest *g, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow, fusedwasi_p1_entry *d2,
-                                    uint32_t p2, uint32_t l2, fusedwasi_p2_walk *walk1, fusedwasi_p2_walk *walk2) {
-    int itself1 = 0, itself2 = 0;
-    uint32_t rc = fusedwasi_p1_be_walk(g, d1, p1, l1, follow, walk1, &itself1);
-    if (rc) return rc;
-    rc = fusedwasi_p1_be_walk(g, d2, p2, l2, 0, walk2, &itself2);
-    if (rc) {
-        fusedwasi_p2_walk_close(walk1);
-        return rc;
-    }
-    if (itself1 || itself2) {  /* a directory itself is neither moved nor made a link */
-        fusedwasi_p2_walk_close(walk1);
-        fusedwasi_p2_walk_close(walk2);
-        return itself2 ? FUSEDWASI_P1_E_EXIST : FUSEDWASI_P1_E_INVAL;
-    }
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_be_rename(fusedwasi_p1_guest *g, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, fusedwasi_p1_entry *d2, uint32_t p2,
-                                      uint32_t l2, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk1, walk2;
-    uint32_t rc = fusedwasi_p1_be_pair(g, d1, p1, l1, 0, d2, p2, l2, &walk1, &walk2);
-    if (rc) return rc;
-    int code = fusedwasi_p2_sys_rename(walk1.dir, walk1.leaf, walk2.dir, walk2.leaf);
-    fusedwasi_p2_walk_close(&walk1);
-    fusedwasi_p2_walk_close(&walk2);
-    return fusedwasi_p1_of_code(code);
-}
-
-static inline uint32_t fusedwasi_p1_be_link(fusedwasi_p1_guest *g, fusedwasi_p1_entry *d1, uint32_t p1, uint32_t l1, int follow, fusedwasi_p1_entry *d2,
-                                    uint32_t p2, uint32_t l2, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk1, walk2;
-    uint32_t rc = fusedwasi_p1_be_pair(g, d1, p1, l1, follow, d2, p2, l2, &walk1, &walk2);
-    if (rc) return rc;
-    int code = fusedwasi_p1_leaf_slash(walk2.dir, walk2.leaf);
-    if (code == FUSEDWASI_P2_OK) code = fusedwasi_p2_sys_link(walk1.dir, walk1.leaf, walk2.dir, walk2.leaf);  /* (the walk read a link at the end if it was to be followed) */
-    fusedwasi_p2_walk_close(&walk1);
-    fusedwasi_p2_walk_close(&walk2);
-    return fusedwasi_p1_of_code(code);
-}
-
-static inline uint32_t fusedwasi_p1_be_symlink(fusedwasi_p1_guest *g, const unsigned char *target, uint32_t tlen, fusedwasi_p1_entry *dir, uint32_t path,
-                                       uint32_t len, int *trapped) {
-    (void)trapped;
-    char text[FUSEDWASI_P2_PATH_MAX];
-    if (tlen >= sizeof text) return FUSEDWASI_P1_E_NAMETOOLONG;
-    memcpy(text, target, tlen);
-    text[tlen] = '\0';
-    fusedwasi_p2_walk walk;
-    int itself = 0;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
-    if (rc) return rc;
-    int code = itself ? FUSEDWASI_P2_E_EXIST : fusedwasi_p1_leaf_slash(walk.dir, walk.leaf);
-    if (code == FUSEDWASI_P2_OK) code = fusedwasi_p2_sys_symlink(text, walk.dir, walk.leaf);
-    fusedwasi_p2_walk_close(&walk);
-    return fusedwasi_p1_of_code(code);
-}
-
-static inline uint32_t fusedwasi_p1_be_readlink(fusedwasi_p1_guest *g, fusedwasi_p1_entry *dir, uint32_t path, uint32_t len, char *out, size_t cap,
-                                        size_t *used, int *trapped) {
-    (void)trapped;
-    fusedwasi_p2_walk walk;
-    int itself = 0;
-    uint32_t rc = fusedwasi_p1_be_walk(g, dir, path, len, 0, &walk, &itself);
-    if (rc) return rc;
-    char text[FUSEDWASI_P1_LINK_MAX + 2];  /* the whole target: the layer says "too long" for a buffer that is too small (Windows), and 0.1 cuts it to the room it has */
-    int code = itself ? FUSEDWASI_P2_E_INVALID : fusedwasi_p2_sys_readlink(walk.dir, walk.leaf, text, sizeof text);
-    fusedwasi_p2_walk_close(&walk);
-    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
-    if (text[0] == '/') return FUSEDWASI_P1_E_PERM;  /* an absolute or rooted target is not shown, as readlink-at of 0.2 does (and path_symlink refuses to make one) */
-    size_t n = strlen(text), room = cap < FUSEDWASI_P1_LINK_MAX ? cap : FUSEDWASI_P1_LINK_MAX;
-    *used = cap ? (n < room ? n : room) : 0;  /* a buffer of 0 bytes still says whether this is a link */
-    memcpy(out, text, *used);
-    return FUSEDWASI_P1_E_SUCCESS;
-}
-
-static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_entry *e, fusedwasi_p1_dirlist *list, int *trapped) {
-    (void)g;
-    (void)trapped;
+/* the names of the directory (descriptor.read-directory), with "." and ".." first, the inode of each from a stat of the name */
+static inline uint32_t fusedwasi_p1_list(const fusedwasi_p2_descriptor *d, fusedwasi_p1_dirlist *list) {
     char **names;
     uint8_t *types;
     uint32_t count;
-    int code = fusedwasi_p2_sys_list(&e->d, &names, &types, &count);
+    int code = fusedwasi_p2_fs_read_directory(d, &names, &types, &count);
     if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
     uint32_t rc = FUSEDWASI_P1_E_SUCCESS;
     for (uint32_t i = 0; i < count + 2 && rc == FUSEDWASI_P1_E_SUCCESS; i++) {  /* "." and "..", then the names */
@@ -1382,7 +1184,7 @@ static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_
         uint8_t type = i < 2 ? FUSEDWASI_P1_FT_DIR : fusedwasi_p1_filetype_of_type(types[i - 2]);
         fusedwasi_p2_stat st;
         uint64_t ino = 0;
-        if (fusedwasi_p2_sys_lstat(FUSEDWASI_P2_DIRREF_OF(&e->d), name, &st) == FUSEDWASI_P2_OK) ino = st.ino;
+        if (fusedwasi_p2_fs_stat_entry(d, name, &st) == FUSEDWASI_P2_OK) ino = st.ino;
         if (fusedwasi_p1_dirlist_add(list, name, ino, type) < 0) rc = FUSEDWASI_P1_E_NOMEM;
     }
     for (uint32_t i = 0; i < count; i++) free(names[i]);
@@ -1391,58 +1193,19 @@ static inline uint32_t fusedwasi_p1_be_list(fusedwasi_p1_guest *g, fusedwasi_p1_
     return rc;
 }
 
-/* ---- the calls that use them ------------------------------------------------------------------------------------------- */
-
-static inline uint32_t fusedwasi_p1_filestat_of_fd(fusedwasi_p1_guest *g, uint32_t fd, uint32_t ptr, int legacy, int *trapped) {
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
-    if (e == NULL) return FUSEDWASI_P1_E_BADF;
-    fusedwasi_p1_stat st;
-    if (e->kind == FUSEDWASI_P1_K_STD) {
-        if (fusedwasi_p1_std_is_real(g, e) && fusedwasi_p1_be_stat_fd(g, e, &st, trapped) == FUSEDWASI_P1_E_SUCCESS) return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);  /* what it is */
-        *trapped = 0;
-        memset(&st, 0, sizeof st);  /* a stream of the host: nothing to say but that it is a character device (with one name) */
-        st.filetype = FUSEDWASI_P1_FT_CHAR;
-        st.nlink = 1;
-        return fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
-    }
-    if (!(e->rights & FUSEDWASI_P1_R_FD_FILESTAT_GET)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    uint32_t rc = fusedwasi_p1_be_stat_fd(g, e, &st, trapped);
-    return rc ? rc : fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
-}
-
-static inline uint32_t fusedwasi_p1_filestat_of_path(fusedwasi_p1_guest *g, uint32_t fd, uint32_t flags, uint32_t path, uint32_t len,
-                                             uint32_t ptr, int legacy, int *trapped) {
-    fusedwasi_p1_entry *dir = fusedwasi_p1_entry_of(g, fd);
-    if (dir == NULL) return FUSEDWASI_P1_E_BADF;
-    if (!(dir->rights & FUSEDWASI_P1_R_PATH_FILESTAT_GET)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    fusedwasi_p1_stat st;
-    uint32_t rc = fusedwasi_p1_be_stat_path(g, dir, path, len, (flags & FUSEDWASI_P1_LOOKUP_FOLLOW) != 0, &st, trapped);
-    return rc ? rc : fusedwasi_p1_put_filestat(g, ptr, &st, legacy);
-}
-
-static inline uint32_t fusedwasi_p1_fd_filestat_get(void *vg, uint32_t fd, uint32_t ptr, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    return fusedwasi_p1_filestat_of_fd(g, fd, ptr, 0, trapped);
-}
-
-static inline uint32_t fusedwasi_p1_path_filestat_get(void *vg, uint32_t fd, uint32_t flags, uint32_t path, uint32_t len, uint32_t ptr,
-                                              int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    return fusedwasi_p1_filestat_of_path(g, fd, flags, path, len, ptr, 0, trapped);
-}
-
-static inline uint32_t fusedwasi_p1_fd_readdir(void *vg, uint32_t fd, uint32_t buf, uint32_t size, uint64_t cookie, uint32_t used,
-                                       int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_readdir(fusedwasi_p2_guest *g, uint32_t fd, uint32_t buf, uint32_t size, uint64_t cookie, uint32_t used) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
     if (e == NULL) return FUSEDWASI_P1_E_BADF;
     if (e->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
     if (!(e->rights & FUSEDWASI_P1_R_FD_READDIR)) return FUSEDWASI_P1_E_NOTCAPABLE;
     if (!fusedwasi_p1_in_memory(g, buf, size)) return FUSEDWASI_P1_E_FAULT;
     if (cookie == 0 || e->list == NULL) {  /* the listing is made again when the program starts from the beginning */
-        fusedwasi_p1_dirlist *list = (fusedwasi_p1_dirlist *)FUSEDWASI_P1_CALLOC(1, sizeof(fusedwasi_p1_dirlist));
+        fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+        if (d == NULL) return FUSEDWASI_P1_E_BADF;
+        fusedwasi_p1_dirlist *list = (fusedwasi_p1_dirlist *)calloc(1, sizeof(fusedwasi_p1_dirlist));
         if (list == NULL) return FUSEDWASI_P1_E_NOMEM;
-        uint32_t rc = fusedwasi_p1_be_list(g, e, list, trapped);
+        uint32_t rc = fusedwasi_p1_list(d, list);
         if (rc) {
             fusedwasi_p1_dirlist_free(list);
             return rc;
@@ -1462,21 +1225,23 @@ static inline uint32_t fusedwasi_p1_fd_readdir(void *vg, uint32_t fd, uint32_t b
         for (int k = 0; k < 4; k++) head[16 + k] = (unsigned char)(item->namelen >> (8 * k));
         head[20] = item->type;
         size_t room = size - at, part = room < sizeof head ? room : sizeof head;  /* the last entry may be cut short */
-        memcpy(FUSEDWASI_P1_MEM(g) + buf + at, head, part);
+        memcpy(fusedwasi_p1_mem(g) + buf + at, head, part);
         at += (uint32_t)part;
         if (part < sizeof head) break;
         room = size - at;
         part = room < item->namelen ? room : item->namelen;
-        memcpy(FUSEDWASI_P1_MEM(g) + buf + at, item->name, part);
+        memcpy(fusedwasi_p1_mem(g) + buf + at, item->name, part);
         at += (uint32_t)part;
     }
     return fusedwasi_p1_put_u32(g, used, at) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-static inline uint32_t fusedwasi_p1_path_open(void *vg, uint32_t fd, uint32_t dirflags, uint32_t path, uint32_t len, uint32_t oflags,
-                                      uint64_t base, uint64_t inheriting, uint32_t fdflags, uint32_t out, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir = fusedwasi_p1_entry_of(g, fd);
+/* ---- opening, creating, removing ------------------------------------------------------------------------------------------ */
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_open(fusedwasi_p2_guest *g, uint32_t fd, uint32_t dirflags, uint32_t path, uint32_t len, uint32_t oflags, uint64_t base, uint64_t inheriting,
+                                              uint32_t fdflags, uint32_t out) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *dir = fusedwasi_p1_entry_of(fds, fd);
     if (dir == NULL) return FUSEDWASI_P1_E_BADF;
     if (dir->kind != FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_NOTDIR;
     if ((oflags >> 4) != 0 || (fdflags >> 5) != 0) return FUSEDWASI_P1_E_INVAL;
@@ -1488,122 +1253,132 @@ static inline uint32_t fusedwasi_p1_path_open(void *vg, uint32_t fd, uint32_t di
         if (!(dir->rights & FUSEDWASI_P1_R_PATH_CREATE_FILE)) return FUSEDWASI_P1_E_NOTCAPABLE;
     }
     if ((oflags & FUSEDWASI_P1_O_TRUNC) && !(dir->rights & FUSEDWASI_P1_R_PATH_FILESTAT_SET_SIZE)) return FUSEDWASI_P1_E_NOTCAPABLE;
-    int64_t number = fusedwasi_p1_new_fd(g->state);
-    if (number < 0) return FUSEDWASI_P1_E_NOMEM;
-    dir = &g->state->entries[fd];  /* the table may have moved when it grew */
-    fusedwasi_p1_entry *e = &g->state->entries[number];
-    memset(e, 0, sizeof *e);
-    uint32_t rc = fusedwasi_p1_be_open(g, dir, path, len, (dirflags & FUSEDWASI_P1_LOOKUP_FOLLOW) != 0, oflags, base, fdflags, e, trapped);
-    if (rc) {
-        fusedwasi_p1_release(e);
-        return rc;
+    fusedwasi_p2_descriptor *parent = fusedwasi_p1_desc(g, dir);
+    if (parent == NULL) return FUSEDWASI_P1_E_BADF;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    /* writing is what the rights say: to write, to sync the data, to allocate, to set the size (uvwasi; wasi-libc leaves these out of a read-only open) */
+    int writable = (base & (FUSEDWASI_P1_R_FD_WRITE | FUSEDWASI_P1_R_FD_DATASYNC | FUSEDWASI_P1_R_FD_ALLOCATE | FUSEDWASI_P1_R_FD_FILESTAT_SET_SIZE)) != 0 || (oflags & FUSEDWASI_P1_O_TRUNC) != 0,
+        readable = (base & FUSEDWASI_P1_R_FD_READ) != 0;
+    uint32_t flags = (writable ? FUSEDWASI_P2_WRITE : 0) | (readable || !writable ? FUSEDWASI_P2_READ : 0);
+    if (fdflags & (FUSEDWASI_P1_FD_SYNC | FUSEDWASI_P1_FD_RSYNC)) flags |= FUSEDWASI_P2_FILE_SYNC;
+    if (fdflags & FUSEDWASI_P1_FD_DSYNC) flags |= FUSEDWASI_P2_DATA_SYNC;
+    uint32_t open_flags = ((oflags & FUSEDWASI_P1_O_CREAT) ? FUSEDWASI_P2_CREATE : 0) | ((oflags & FUSEDWASI_P1_O_DIRECTORY) ? FUSEDWASI_P2_DIRECTORY : 0) |
+                          ((oflags & FUSEDWASI_P1_O_EXCL) ? FUSEDWASI_P2_EXCLUSIVE : 0) | ((oflags & FUSEDWASI_P1_O_TRUNC) ? FUSEDWASI_P2_TRUNCATE : 0);
+    uint32_t follow = (dirflags & FUSEDWASI_P1_LOOKUP_FOLLOW) ? FUSEDWASI_P2_SYMLINK_FOLLOW : 0;
+    fusedwasi_p2_descriptor made;
+    memset(&made, 0, sizeof made);
+    made.fd = -1;
+    int code = fusedwasi_p2_fs_open_at(parent, fusedwasi_p1_mem(g) + path, len, follow, open_flags, flags, &made, FUSEDWASI_P1_OPTS);
+    if (code == FUSEDWASI_P2_E_IS_DIRECTORY && (base & FUSEDWASI_P1_R_OF_DIRECTORY) && !(oflags & (FUSEDWASI_P1_O_CREAT | FUSEDWASI_P1_O_TRUNC)))
+        code = fusedwasi_p2_fs_open_at(parent, fusedwasi_p1_mem(g) + path, len, follow, FUSEDWASI_P2_DIRECTORY, FUSEDWASI_P2_READ, &made, FUSEDWASI_P1_OPTS);  /* it was a directory, and asked for as one */
+    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
+    fusedwasi_p2_stat st;
+    code = fusedwasi_p2_fs_stat(&made, &st);
+    if (code != FUSEDWASI_P2_OK) {
+        fusedwasi_p2_sys_close(&made);
+        return fusedwasi_p1_of_code(code);
     }
+#ifndef _WIN32  /* what the open of 0.2 does not take: not blocking (append is the adapter's own: fd_write goes to the end) */
+    if (made.fd >= 0 && (fdflags & FUSEDWASI_P1_FD_NONBLOCK) && fcntl(made.fd, F_SETFL, fcntl(made.fd, F_GETFL) | fusedwasi_p1_native_fdflags(FUSEDWASI_P1_FD_NONBLOCK)) < 0) {
+        int saved = errno;
+        fusedwasi_p2_sys_close(&made);
+        return fusedwasi_p1_errno(saved);
+    }
+#endif
+    uint32_t handle = fusedwasi_p2_descriptor_new(g->state, &made, made.flags);
+    if (!handle) {
+        fusedwasi_p2_sys_close(&made);
+        return FUSEDWASI_P1_E_NOMEM;
+    }
+    int64_t number = fusedwasi_p1_new_fd(fds);
+    if (number < 0) {
+        fusedwasi_p2_slot *slot = fusedwasi_p2_table_find(g->state, handle, FUSEDWASI_P2_KIND_DESCRIPTOR);
+        slot->live = 0;
+        slot->destroy(g->state, slot->obj);
+        return FUSEDWASI_P1_E_NOMEM;
+    }
+    fusedwasi_p1_entry *e = &fds->entries[number];
+    memset(e, 0, sizeof *e);
+    e->kind = made.is_dir ? FUSEDWASI_P1_K_DIR : FUSEDWASI_P1_K_FILE;
+    e->filetype = fusedwasi_p1_filetype_of_type(st.type);
+    e->handle = handle;
     e->rights = base;
     if (e->kind == FUSEDWASI_P1_K_DIR) e->rights &= ~(FUSEDWASI_P1_R_FD_SEEK | FUSEDWASI_P1_R_FD_TELL);  /* a directory is not seeked */
     e->inheriting = inheriting;
     e->flags = (uint16_t)fdflags;
     if (!fusedwasi_p1_put_u32(g, out, (uint32_t)number)) {
-        fusedwasi_p1_release(e);
+        fusedwasi_p1_release(g->state, e);
         return FUSEDWASI_P1_E_FAULT;
     }
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-/* ---- writing, creating, removing ---------------------------------------------------------------------------------------- */
-
 /* the entry of a file descriptor that has the right, or an errno of WASI */
-static inline uint32_t fusedwasi_p1_entry_with(fusedwasi_p1_guest *g, uint32_t fd, uint64_t right, fusedwasi_p1_entry **out) {
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
+static inline uint32_t fusedwasi_p1_entry_with(fusedwasi_p1_fds *fds, uint32_t fd, uint64_t right, fusedwasi_p1_entry **out) {
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
     if (e == NULL) return FUSEDWASI_P1_E_BADF;
     *out = e;
     if (e->kind != FUSEDWASI_P1_K_STD && !(e->rights & right)) return FUSEDWASI_P1_E_NOTCAPABLE;
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-/* the directory of a call on a path: it has to be one and to have the right */
-static inline uint32_t fusedwasi_p1_dir_with(fusedwasi_p1_guest *g, uint32_t fd, uint64_t right, fusedwasi_p1_entry **out) {
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, right, out);
-    if (rc) return rc;
-    return (*out)->kind == FUSEDWASI_P1_K_DIR ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_NOTDIR;
-}
-
-static inline uint32_t fusedwasi_p1_sync_entry(fusedwasi_p1_guest *g, uint32_t fd, uint64_t right, int data_only) {
+static inline uint32_t fusedwasi_p1_sync_entry(fusedwasi_p2_guest *g, uint32_t fd, uint64_t right, int data_only) {
+    FUSEDWASI_P1_FDS(g);
     fusedwasi_p1_entry *e;
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, right, &e);
+    uint32_t rc = fusedwasi_p1_entry_with(fds, fd, right, &e);
     if (rc) return rc;
-    if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_SUCCESS;  /* the stream is Python's: it flushes when it wants */
+    if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_SUCCESS;  /* the stream is the host's: it flushes when it wants */
 #if FUSEDWASI_P1_DIRS_ARE_PATHS
-    (void)data_only;
     if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_SUCCESS;  /* not an open descriptor: nothing to flush */
-    return FUSEDWASI_P1_SYNC(e->d.fd) < 0 ? fusedwasi_p1_errno(errno) : FUSEDWASI_P1_E_SUCCESS;
-#else
-#ifdef __linux__
-    int failed = data_only ? fdatasync(e->d.fd) : FUSEDWASI_P1_SYNC(e->d.fd);
-#else
-    (void)data_only;
-    int failed = FUSEDWASI_P1_SYNC(e->d.fd);
 #endif
-    return failed < 0 ? fusedwasi_p1_errno(errno) : FUSEDWASI_P1_E_SUCCESS;
-#endif
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_sync(d, data_only));
 }
 
-static inline uint32_t fusedwasi_p1_fd_datasync(void *vg, uint32_t fd, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_sync_entry(g, fd, FUSEDWASI_P1_R_FD_DATASYNC, 1);
-}
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_datasync(fusedwasi_p2_guest *g, uint32_t fd) { return fusedwasi_p1_sync_entry(g, fd, FUSEDWASI_P1_R_FD_DATASYNC, 1); }
 
-static inline uint32_t fusedwasi_p1_fd_sync(void *vg, uint32_t fd, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    return fusedwasi_p1_sync_entry(g, fd, FUSEDWASI_P1_R_FD_SYNC, 0);
-}
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_sync(fusedwasi_p2_guest *g, uint32_t fd) { return fusedwasi_p1_sync_entry(g, fd, FUSEDWASI_P1_R_FD_SYNC, 0); }
 
-static inline int fusedwasi_p1_truncate_native(int osfd, uint64_t size) {
-#ifdef _WIN32
-    return _chsize_s(osfd, (__int64)size);  /* the error itself, not -1 */
-#else
-    return ftruncate(osfd, (off_t)size) < 0 ? errno : 0;
-#endif
-}
-
-static inline uint32_t fusedwasi_p1_set_size(fusedwasi_p1_entry *e, uint64_t size) {
+static inline uint32_t fusedwasi_p1_set_size(fusedwasi_p2_guest *g, fusedwasi_p1_entry *e, uint64_t size) {
     if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_ISDIR;
     if (e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
     if (size > (uint64_t)INT64_MAX) return FUSEDWASI_P1_E_FBIG;
-    return fusedwasi_p1_errno(fusedwasi_p1_truncate_native(e->d.fd, size));
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_set_size(d, size, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_fd_filestat_set_size(void *vg, uint32_t fd, uint64_t size, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_filestat_set_size(fusedwasi_p2_guest *g, uint32_t fd, uint64_t size) {
+    FUSEDWASI_P1_FDS(g);
     fusedwasi_p1_entry *e;
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, FUSEDWASI_P1_R_FD_FILESTAT_SET_SIZE, &e);
-    return rc ? rc : fusedwasi_p1_set_size(e, size);
+    uint32_t rc = fusedwasi_p1_entry_with(fds, fd, FUSEDWASI_P1_R_FD_FILESTAT_SET_SIZE, &e);
+    return rc ? rc : fusedwasi_p1_set_size(g, e, size);
 }
 
 /* makes the file at least offset + length long (the file system may not reserve the room, but it is as long) */
-static inline uint32_t fusedwasi_p1_fd_allocate(void *vg, uint32_t fd, uint64_t offset, uint64_t length, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_allocate(fusedwasi_p2_guest *g, uint32_t fd, uint64_t offset, uint64_t length) {
+    FUSEDWASI_P1_FDS(g);
     fusedwasi_p1_entry *e;
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, FUSEDWASI_P1_R_FD_ALLOCATE, &e);
+    uint32_t rc = fusedwasi_p1_entry_with(fds, fd, FUSEDWASI_P1_R_FD_ALLOCATE, &e);
     if (rc) return rc;
     if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_ISDIR;
     if (e->kind != FUSEDWASI_P1_K_FILE) return FUSEDWASI_P1_E_BADF;
     if (offset > (uint64_t)INT64_MAX || length > (uint64_t)INT64_MAX - offset) return FUSEDWASI_P1_E_FBIG;
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
 #if FUSEDWASI_P1_NATIVE_POLL && (defined(__linux__) || defined(__FreeBSD__))
-    {  /* space is really reserved (and can run out: NOSPC), and a descriptor that is not a file says so (SPIPE) */
-        int err = posix_fallocate(e->d.fd, (off_t)offset, (off_t)length);
+    {  /* no operation of 0.2 reserves room: it is reserved here (and can run out: NOSPC), and a descriptor that is not a file says so (SPIPE) */
+        int err = posix_fallocate(d->fd, (off_t)offset, (off_t)length);
         if (err == 0) return FUSEDWASI_P1_E_SUCCESS;
         if (err != EINVAL && err != EOPNOTSUPP && err != ENODEV) return fusedwasi_p1_errno(err);  /* a file system that cannot do it gets the old way */
     }
 #endif
-    fusedwasi_p1_stat st;
-    memset(&st, 0, sizeof st);
-    rc = fusedwasi_p1_be_stat_fd(g, e, &st, trapped);
-    if (rc || *trapped) return rc;
-    if (st.filetype != FUSEDWASI_P1_FT_REGULAR) return FUSEDWASI_P1_E_SPIPE; /* a pipe: macOS would truncate it without a word */
-    return st.size >= offset + length ? FUSEDWASI_P1_E_SUCCESS : fusedwasi_p1_set_size(e, offset + length);
+    fusedwasi_p2_stat st;
+    int code = fusedwasi_p2_fs_stat(d, &st);
+    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);
+    if (fusedwasi_p1_filetype_of_type(st.type) != FUSEDWASI_P1_FT_REGULAR) return FUSEDWASI_P1_E_SPIPE; /* a pipe: macOS would truncate it without a word */
+    return st.size >= offset + length ? FUSEDWASI_P1_E_SUCCESS : fusedwasi_p1_set_size(g, e, offset + length);
 }
 
 static inline uint32_t fusedwasi_p1_times_flags_ok(uint32_t flags) {
@@ -1612,52 +1387,68 @@ static inline uint32_t fusedwasi_p1_times_flags_ok(uint32_t flags) {
                : FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t fusedwasi_p1_fd_filestat_set_times(void *vg, uint32_t fd, uint64_t atim, uint64_t mtim, uint32_t flags, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
+/* the flags of 0.1 (a value, now, none) as the new-timestamps of 0.2 */
+static inline void fusedwasi_p1_times(fusedwasi_p2_times *t, uint64_t atim, uint64_t mtim, uint32_t flags) {
+    t->a_tag = (flags & FUSEDWASI_P1_T_ATIM) ? 2 : (flags & FUSEDWASI_P1_T_ATIM_NOW) ? 1 : 0;
+    t->m_tag = (flags & FUSEDWASI_P1_T_MTIM) ? 2 : (flags & FUSEDWASI_P1_T_MTIM_NOW) ? 1 : 0;
+    t->a_ns = (int64_t)atim;
+    t->m_ns = (int64_t)mtim;
+}
+
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_filestat_set_times(fusedwasi_p2_guest *g, uint32_t fd, uint64_t atim, uint64_t mtim, uint32_t flags) {
+    FUSEDWASI_P1_FDS(g);
     fusedwasi_p1_entry *e;
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, FUSEDWASI_P1_R_FD_FILESTAT_SET_TIMES, &e);
+    uint32_t rc = fusedwasi_p1_entry_with(fds, fd, FUSEDWASI_P1_R_FD_FILESTAT_SET_TIMES, &e);
     if (rc) return rc;
     if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_BADF;
     rc = fusedwasi_p1_times_flags_ok(flags);
-    return rc ? rc : fusedwasi_p1_be_times_fd(g, e, atim, mtim, flags, trapped);
+    if (rc) return rc;
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    fusedwasi_p2_times t;
+    fusedwasi_p1_times(&t, atim, mtim, flags);
+    return fusedwasi_p1_rc(g, fusedwasi_p2_fs_set_times(g->state, d, &t, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_path_filestat_set_times(void *vg, uint32_t fd, uint32_t lookup, uint32_t path, uint32_t len, uint64_t atim,
-                                                    uint64_t mtim, uint32_t flags, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R_PATH_FILESTAT_SET_TIMES, &dir);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_filestat_set_times(fusedwasi_p2_guest *g, uint32_t fd, uint32_t lookup, uint32_t path, uint32_t len, uint64_t atim, uint64_t mtim, uint32_t flags) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R_PATH_FILESTAT_SET_TIMES, &d);
     if (rc) return rc;
     rc = fusedwasi_p1_times_flags_ok(flags);
-    return rc ? rc : fusedwasi_p1_be_times_path(g, dir, path, len, (lookup & FUSEDWASI_P1_LOOKUP_FOLLOW) != 0, atim, mtim, flags, trapped);
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    fusedwasi_p2_times t;
+    fusedwasi_p1_times(&t, atim, mtim, flags);
+    return fusedwasi_p1_rc(g, fusedwasi_p2_fs_set_times_at(g->state, d, fusedwasi_p1_mem(g) + path, len, lookup & FUSEDWASI_P1_LOOKUP_FOLLOW ? FUSEDWASI_P2_SYMLINK_FOLLOW : 0, &t, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_fd_fdstat_set_flags(void *vg, uint32_t fd, uint32_t flags, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_fdstat_set_flags(fusedwasi_p2_guest *g, uint32_t fd, uint32_t flags) {
+    FUSEDWASI_P1_FDS(g);
     fusedwasi_p1_entry *e;
-    uint32_t rc = fusedwasi_p1_entry_with(g, fd, FUSEDWASI_P1_R_FD_FDSTAT_SET_FLAGS, &e);
+    uint32_t rc = fusedwasi_p1_entry_with(fds, fd, FUSEDWASI_P1_R_FD_FDSTAT_SET_FLAGS, &e);
     if (rc) return rc;
     if (flags > 31) return FUSEDWASI_P1_E_INVAL;
     if (e->kind != FUSEDWASI_P1_K_FILE) return e->kind == FUSEDWASI_P1_K_STD ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_BADF;
-#ifndef _WIN32
-    int current = fcntl(e->d.fd, F_GETFL);
+#ifndef _WIN32  /* append is kept here and done by fd_write; no operation of 0.2 sets the others after the open, so they are set on the system descriptor */
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
+    int current = fcntl(d->fd, F_GETFL);
     if (current < 0) return fusedwasi_p1_errno(errno);
-    int all = fusedwasi_p1_native_fdflags(FUSEDWASI_P1_FD_APPEND | FUSEDWASI_P1_FD_DSYNC | FUSEDWASI_P1_FD_NONBLOCK | FUSEDWASI_P1_FD_RSYNC | FUSEDWASI_P1_FD_SYNC);
-    if (fcntl(e->d.fd, F_SETFL, (current & ~all) | fusedwasi_p1_native_fdflags(flags)) < 0) return fusedwasi_p1_errno(errno);
+    int all = fusedwasi_p1_native_fdflags(FUSEDWASI_P1_FD_DSYNC | FUSEDWASI_P1_FD_NONBLOCK | FUSEDWASI_P1_FD_RSYNC | FUSEDWASI_P1_FD_SYNC);
+    if (fcntl(d->fd, F_SETFL, (current & ~all) | fusedwasi_p1_native_fdflags(flags)) < 0) return fusedwasi_p1_errno(errno);
 #endif
     e->flags = (uint16_t)flags;
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
 /* the rights can only be given up, never gained */
-static inline uint32_t fusedwasi_p1_fd_fdstat_set_rights(void *vg, uint32_t fd, uint64_t base, uint64_t inheriting, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    (void)trapped;
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_fdstat_set_rights(fusedwasi_p2_guest *g, uint32_t fd, uint64_t base, uint64_t inheriting) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
     if (e == NULL) return FUSEDWASI_P1_E_BADF;
     if (e->kind == FUSEDWASI_P1_K_STD) {  /* the rights of a standard stream are fixed: giving some up (or none) is fine, getting more is not (the narrowing is not kept) */
-        uint64_t have = e->d.fd == 0 ? FUSEDWASI_P1_RIGHTS_STDIN : FUSEDWASI_P1_RIGHTS_STDOUT;
+        uint64_t have = e->handle == 0 ? FUSEDWASI_P1_RIGHTS_STDIN : FUSEDWASI_P1_RIGHTS_STDOUT;
         return (base & ~have) != 0 || inheriting != 0 ? FUSEDWASI_P1_E_NOTCAPABLE : FUSEDWASI_P1_E_SUCCESS;
     }
     if ((base & ~e->rights) != 0 || (inheriting & ~e->inheriting) != 0) return FUSEDWASI_P1_E_NOTCAPABLE;
@@ -1666,48 +1457,39 @@ static inline uint32_t fusedwasi_p1_fd_fdstat_set_rights(void *vg, uint32_t fd, 
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-static inline uint32_t fusedwasi_p1_path_create_directory(void *vg, uint32_t fd, uint32_t path, uint32_t len, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R_PATH_CREATE_DIRECTORY, &dir);
-    return rc ? rc : fusedwasi_p1_be_mkdir(g, dir, path, len, trapped);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_create_directory(fusedwasi_p2_guest *g, uint32_t fd, uint32_t path, uint32_t len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R_PATH_CREATE_DIRECTORY, &d);
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_create_directory_at(d, fusedwasi_p1_mem(g) + path, len, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_path_remove_directory(void *vg, uint32_t fd, uint32_t path, uint32_t len, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R_PATH_REMOVE_DIRECTORY, &dir);
-    return rc ? rc : fusedwasi_p1_be_remove(g, dir, path, len, 1, trapped);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_remove_directory(fusedwasi_p2_guest *g, uint32_t fd, uint32_t path, uint32_t len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R_PATH_REMOVE_DIRECTORY, &d);
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_remove_directory_at(d, fusedwasi_p1_mem(g) + path, len, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_path_unlink_file(void *vg, uint32_t fd, uint32_t path, uint32_t len, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R_PATH_UNLINK_FILE, &dir);
-    return rc ? rc : fusedwasi_p1_be_remove(g, dir, path, len, 0, trapped);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_unlink_file(fusedwasi_p2_guest *g, uint32_t fd, uint32_t path, uint32_t len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R_PATH_UNLINK_FILE, &d);
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_unlink_file_at(d, fusedwasi_p1_mem(g) + path, len, FUSEDWASI_P1_OPTS));
 }
 
-/* ---- positions, renaming, links, waiting ---------------------------------------------------------------------------------- */
+/* ---- positions, renaming, links ----------------------------------------------------------------------------------------------- */
 
 /* read or write at a position, leaving the position of the descriptor where it was */
-static inline long long fusedwasi_p1_at_position(int osfd, void *buf, size_t n, uint64_t offset, int writing) {
-#ifdef _WIN32
-    long long saved = _lseeki64(osfd, 0, SEEK_CUR);  /* Windows has no pread: seek, do it, seek back */
-    if (saved < 0 || _lseeki64(osfd, (long long)offset, SEEK_SET) < 0) return -1;
-    int count = (int)(n < 0x7fffffff ? n : 0x7fffffff);
-    long long done = writing ? _write(osfd, buf, (unsigned int)count) : _read(osfd, buf, (unsigned int)count);
-    int err = errno;
-    _lseeki64(osfd, saved, SEEK_SET);
-    errno = err;
-    return done;
-#else
-    return writing ? pwrite(osfd, buf, n, (off_t)offset) : pread(osfd, buf, n, (off_t)offset);
-#endif
-}
-
-static inline uint32_t fusedwasi_p1_fd_at(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t out, int writing) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, fd);
+static inline uint32_t fusedwasi_p1_fd_at(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t out, int writing) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, fd);
     if (e == NULL) return FUSEDWASI_P1_E_BADF;
     if (e->kind == FUSEDWASI_P1_K_STD) return FUSEDWASI_P1_E_SPIPE;
     if (e->kind == FUSEDWASI_P1_K_DIR) return FUSEDWASI_P1_E_ISDIR;
@@ -1719,91 +1501,108 @@ static inline uint32_t fusedwasi_p1_fd_at(void *vg, uint32_t fd, uint32_t iovs, 
         uint32_t bad = fusedwasi_p1_iovs_valid(g, iovs, count);
         if (bad) return bad;
     }
+    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+    if (d == NULL) return FUSEDWASI_P1_E_BADF;
     uint64_t total = 0;
+#ifndef _WIN32  /* a descriptor opened for appending: the system writes at the end whatever the offset (as the descriptor did before 0.1 went over 0.2) */
+    if (writing && (e->flags & FUSEDWASI_P1_FD_APPEND)) {
+        fusedwasi_p2_stat st;
+        if (fusedwasi_p2_fs_stat(d, &st) == FUSEDWASI_P2_OK) offset = st.size;
+    }
+#endif
     for (uint32_t i = 0; i < count; i++) {
         uint32_t base = 0, len = 0;
         fusedwasi_p1_get_u32(g, iovs + 8 * i, &base);
         fusedwasi_p1_get_u32(g, iovs + 8 * i + 4, &len);
         if (!fusedwasi_p1_in_memory(g, base, len)) return FUSEDWASI_P1_E_FAULT;
         if (len == 0) continue;
-        long long n = fusedwasi_p1_at_position(e->d.fd, FUSEDWASI_P1_MEM(g) + base, len, offset + total, writing);
-        if (n < 0) {
+        uint64_t n = 0;
+        int code = writing ? fusedwasi_p2_fs_write(d, fusedwasi_p1_mem(g) + base, len, offset + total, &n, FUSEDWASI_P1_OPTS)
+                           : fusedwasi_p2_fs_read(d, fusedwasi_p1_mem(g) + base, len, offset + total, &n, FUSEDWASI_P1_OPTS);
+        total += n;
+        if (code != FUSEDWASI_P2_OK) {
             if (total) break;
-            return fusedwasi_p1_errno(errno);
+            return fusedwasi_p1_of_code(code);
         }
-        total += (uint64_t)n;
-        if ((uint32_t)n < len) break;
+        if (n < len) break;
     }
     return fusedwasi_p1_put_u32(g, out, (uint32_t)total) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-static inline uint32_t fusedwasi_p1_fd_pread(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nread,
-                                     int *trapped) {
-    (void)trapped;
-    return fusedwasi_p1_fd_at(vg, fd, iovs, count, offset, nread, 0);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_pread(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nread) {
+    return fusedwasi_p1_fd_at(g, fd, iovs, count, offset, nread, 0);
 }
 
-static inline uint32_t fusedwasi_p1_fd_pwrite(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nwritten,
-                                      int *trapped) {
-    (void)trapped;
-    return fusedwasi_p1_fd_at(vg, fd, iovs, count, offset, nwritten, 1);
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_fd_pwrite(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint64_t offset, uint32_t nwritten) {
+    return fusedwasi_p1_fd_at(g, fd, iovs, count, offset, nwritten, 1);
 }
 
-static inline uint32_t fusedwasi_p1_path_rename(void *vg, uint32_t fd, uint32_t old, uint32_t old_len, uint32_t new_fd, uint32_t new_,
-                                        uint32_t new_len, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *from, *to;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R(16), &from);  /* path_rename_source */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_rename(fusedwasi_p2_guest *g, uint32_t fd, uint32_t old, uint32_t old_len, uint32_t new_fd, uint32_t new_, uint32_t new_len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *from, *to;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R(16), &from);  /* path_rename_source */
     if (rc) return rc;
-    rc = fusedwasi_p1_dir_with(g, new_fd, FUSEDWASI_P1_R(17), &to);  /* path_rename_target */
-    return rc ? rc : fusedwasi_p1_be_rename(g, from, old, old_len, to, new_, new_len, trapped);
+    rc = fusedwasi_p1_dir_with(g, fds, new_fd, FUSEDWASI_P1_R(17), &to);  /* path_rename_target */
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, old, old_len) || !fusedwasi_p1_in_memory(g, new_, new_len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_rename_at(from, fusedwasi_p1_mem(g) + old, old_len, to, fusedwasi_p1_mem(g) + new_, new_len, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_path_link(void *vg, uint32_t fd, uint32_t flags, uint32_t old, uint32_t old_len, uint32_t new_fd,
-                                      uint32_t new_, uint32_t new_len, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *from, *to;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R(11), &from);  /* path_link_source */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_link(fusedwasi_p2_guest *g, uint32_t fd, uint32_t flags, uint32_t old, uint32_t old_len, uint32_t new_fd, uint32_t new_, uint32_t new_len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *from, *to;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R(11), &from);  /* path_link_source */
     if (rc) return rc;
-    rc = fusedwasi_p1_dir_with(g, new_fd, FUSEDWASI_P1_R(12), &to);  /* path_link_target */
-    return rc ? rc : fusedwasi_p1_be_link(g, from, old, old_len, (flags & FUSEDWASI_P1_LOOKUP_FOLLOW) != 0, to, new_, new_len, trapped);
+    rc = fusedwasi_p1_dir_with(g, fds, new_fd, FUSEDWASI_P1_R(12), &to);  /* path_link_target */
+    if (rc) return rc;
+    if (!fusedwasi_p1_in_memory(g, old, old_len) || !fusedwasi_p1_in_memory(g, new_, new_len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_link_at(from, flags & FUSEDWASI_P1_LOOKUP_FOLLOW ? FUSEDWASI_P2_SYMLINK_FOLLOW : 0, fusedwasi_p1_mem(g) + old, old_len, to,
+                                                         fusedwasi_p1_mem(g) + new_, new_len, FUSEDWASI_P1_OPTS));
 }
 
 /* A link that leads out cannot be followed, and one that is absolute could not be anywhere else than outside: neither is made. */
-static inline uint32_t fusedwasi_p1_path_symlink(void *vg, uint32_t target, uint32_t target_len, uint32_t fd, uint32_t path, uint32_t len,
-                                         int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R(24), &dir);  /* path_symlink */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_symlink(fusedwasi_p2_guest *g, uint32_t target, uint32_t target_len, uint32_t fd, uint32_t path, uint32_t len) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R(24), &d);  /* path_symlink */
     if (rc) return rc;
     if (!fusedwasi_p1_in_memory(g, target, target_len)) return FUSEDWASI_P1_E_FAULT;
     if (target_len == 0) return FUSEDWASI_P1_E_NOENT;
-    if (memchr(FUSEDWASI_P1_MEM(g) + target, 0, target_len) != NULL) return FUSEDWASI_P1_E_INVAL;
-    if (FUSEDWASI_P1_MEM(g)[target] == '/') return FUSEDWASI_P1_E_NOTCAPABLE;
-    return fusedwasi_p1_be_symlink(g, FUSEDWASI_P1_MEM(g) + target, target_len, dir, path, len, trapped);
+    if (memchr(fusedwasi_p1_mem(g) + target, 0, target_len) != NULL) return FUSEDWASI_P1_E_INVAL;
+    if (fusedwasi_p1_mem(g)[target] == '/') return FUSEDWASI_P1_E_NOTCAPABLE;
+    char text[FUSEDWASI_P2_PATH_MAX];
+    if (target_len >= sizeof text) return FUSEDWASI_P1_E_NAMETOOLONG;
+    memcpy(text, fusedwasi_p1_mem(g) + target, target_len);
+    text[target_len] = '\0';
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    return fusedwasi_p1_of_code(fusedwasi_p2_fs_symlink_at(d, text, fusedwasi_p1_mem(g) + path, len, FUSEDWASI_P1_OPTS));
 }
 
-static inline uint32_t fusedwasi_p1_path_readlink(void *vg, uint32_t fd, uint32_t path, uint32_t len, uint32_t buf, uint32_t buf_len,
-                                          uint32_t used, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    fusedwasi_p1_entry *dir;
-    uint32_t rc = fusedwasi_p1_dir_with(g, fd, FUSEDWASI_P1_R(15), &dir);  /* path_readlink */
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_path_readlink(fusedwasi_p2_guest *g, uint32_t fd, uint32_t path, uint32_t len, uint32_t buf, uint32_t buf_len, uint32_t used) {
+    FUSEDWASI_P1_FDS(g);
+    fusedwasi_p2_descriptor *d;
+    uint32_t rc = fusedwasi_p1_dir_with(g, fds, fd, FUSEDWASI_P1_R(15), &d);  /* path_readlink */
     if (rc) return rc;
     if (!fusedwasi_p1_in_memory(g, buf, buf_len)) return FUSEDWASI_P1_E_FAULT;
-    char text[FUSEDWASI_P1_LINK_MAX];
-    size_t n = 0;
-    rc = fusedwasi_p1_be_readlink(g, dir, path, len, text, buf_len < sizeof text ? buf_len : sizeof text, &n, trapped);
-    if (rc || *trapped) return rc;
-    memcpy(FUSEDWASI_P1_MEM(g) + buf, text, n);
-    return fusedwasi_p1_put_u32(g, used, (uint32_t)n) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+    if (!fusedwasi_p1_in_memory(g, path, len)) return FUSEDWASI_P1_E_FAULT;
+    char text[FUSEDWASI_P1_LINK_MAX + 2];  /* the whole target: 0.1 cuts it to the room it has */
+    int code = fusedwasi_p2_fs_readlink_at(d, fusedwasi_p1_mem(g) + path, len, text, sizeof text, FUSEDWASI_P1_OPTS);
+    if (code != FUSEDWASI_P2_OK) return fusedwasi_p1_of_code(code);  /* (a rooted target is not-permitted: PERM) */
+    size_t n = strlen(text), room = buf_len < FUSEDWASI_P1_LINK_MAX ? buf_len : FUSEDWASI_P1_LINK_MAX;
+    size_t shown = buf_len ? (n < room ? n : room) : 0;  /* a buffer of 0 bytes still says whether this is a link */
+    memcpy(fusedwasi_p1_mem(g) + buf, text, shown);
+    return fusedwasi_p1_put_u32(g, used, (uint32_t)shown) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
 }
 
-/* poll_oneoff: the descriptors of files are always ready; what makes the program wait is a clock, and it sleeps (in C, without the
-   interpreter, so that other threads run) until the first one. `legacy`: the first snapshot, whose clock subscription starts with an identifier. */
+/* ---- poll_oneoff ----------------------------------------------------------------------------------------------------------------- */
+
+/* A clock subscription is arithmetic on the clock of the state (and, when only clocks are waited for, the hook `sleep`). What a descriptor waits for is a pollable of 0.2: the readiness of
+   the stream of a standard input that the state gave (`std[0]`), or, for the standard input of the process and for a file that is a pipe, a FIFO or a terminal, the system's own poll
+   with no wait; the program waits between two looks with the `wait` of the guest. A regular file, a directory and a standard output are always ready. `legacy`: the first snapshot,
+   whose clock subscription starts with an identifier. */
+
 /* how long a clock subscription still has to wait (0: it is due), or an errno of WASI */
-static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p1_guest *g, uint32_t sub, int legacy, uint64_t entry_now[2], int have[2],
-                                              uint64_t *wait, int *trapped) {
-    (void)trapped;
+static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p2_guest *g, uint32_t sub, int legacy, uint64_t entry_now[2], int have[2], uint64_t *wait) {
     uint32_t shift = legacy ? 8 : 0;
     uint32_t id = 0, flags16 = 0;
     uint64_t timeout = 0;
@@ -1812,7 +1611,7 @@ static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p1_guest *g, uin
     fusedwasi_p1_get_u32(g, sub + 24 + shift, &lo);
     fusedwasi_p1_get_u32(g, sub + 28 + shift, &hi);
     timeout = ((uint64_t)hi << 32) | lo;
-    flags16 = FUSEDWASI_P1_MEM(g)[sub + 40 + shift] | ((uint32_t)FUSEDWASI_P1_MEM(g)[sub + 41 + shift] << 8);
+    flags16 = fusedwasi_p1_mem(g)[sub + 40 + shift] | ((uint32_t)fusedwasi_p1_mem(g)[sub + 41 + shift] << 8);
     if (id > 1) return FUSEDWASI_P1_E_INVAL;  /* the clocks of the process and the thread are not something to wait for */
     if (flags16 & ~1u) return FUSEDWASI_P1_E_INVAL;  /* subclockflags has one flag, abstime */
     if (!(flags16 & 1)) {
@@ -1828,15 +1627,23 @@ static inline uint32_t fusedwasi_p1_subscription_wait(fusedwasi_p1_guest *g, uin
     return FUSEDWASI_P1_E_SUCCESS;
 }
 
-/* A subscription to a descriptor: 0 if it is answered at once (a bad descriptor, a right that is missing, a regular file, a directory, a stream that
-   goes through a hook, the standard output); 1 if the system has to say when it is ready (a pipe, a FIFO, a terminal, a socket, the standard input).
-   `*error` is the error of the event (a right that is missing is NOTCAPABLE, as the descriptor is not one to wait for) and `*fd` the descriptor to poll. */
-static inline int fusedwasi_p1_poll_kind(fusedwasi_p1_guest *g, uint32_t sub, uint8_t tag, uint32_t *error, int *fd) {
+/* What a subscription to a descriptor waits for. `native_fd` >= 0: the system's poll on it; else `stream`: the stream of a state (a pollable of 0.2 on it); neither: it is answered at
+   once (a bad descriptor, a right that is missing, a regular file, a directory, a standard output). `*error` is the error of the event (a right that is missing is NOTCAPABLE, as the
+   descriptor is not one to wait for). */
+typedef struct {
+    int native_fd;
+    fusedwasi_p2_stream *stream;
+    short events, revents;
+    int ready;
+} fusedwasi_p1_waiter;
+
+static inline int fusedwasi_p1_poll_kind(fusedwasi_p2_guest *g, fusedwasi_p1_fds *fds, uint32_t sub, uint8_t tag, uint32_t *error, fusedwasi_p1_waiter *w) {
     uint32_t number = 0;
     fusedwasi_p1_get_u32(g, sub + 16, &number);
-    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, number);
+    fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, number);
     *error = FUSEDWASI_P1_E_SUCCESS;
-    *fd = -1;
+    memset(w, 0, sizeof *w);
+    w->native_fd = -1;
     if (e == NULL) {
         *error = FUSEDWASI_P1_E_BADF;
         return 0;
@@ -1844,11 +1651,16 @@ static inline int fusedwasi_p1_poll_kind(fusedwasi_p1_guest *g, uint32_t sub, ui
     uint64_t need = FUSEDWASI_P1_R_POLL_FD_READWRITE | (tag == 1 ? FUSEDWASI_P1_R_FD_READ : FUSEDWASI_P1_R_FD_WRITE);
     if (e->kind == FUSEDWASI_P1_K_STD) {  /* the rights of the standard streams are fixed and include polling */
 #if FUSEDWASI_P1_NATIVE_POLL
-        if (tag == 1 && e->d.fd == 0 && g->state->core->std[0] == NULL) {
-            *fd = 0;
+        if (tag == 1 && e->handle == 0 && g->state->std[0] == NULL) {  /* the standard input of the process */
+            w->native_fd = 0;
+            w->events = POLLIN;
             return 1;
         }
 #endif
+        if (tag == 1 && e->handle == 0 && g->state->std[0] != NULL && g->state->std[0]->ready != NULL) {  /* a stream of the state that can say whether it is ready */
+            w->stream = g->state->std[0];
+            return 1;
+        }
         return 0;
     }
     if ((e->rights & need) != need) {
@@ -1856,10 +1668,11 @@ static inline int fusedwasi_p1_poll_kind(fusedwasi_p1_guest *g, uint32_t sub, ui
         return 0;
     }
 #if FUSEDWASI_P1_NATIVE_POLL
-    if (e->kind == FUSEDWASI_P1_K_FILE && e->d.fd >= 0) {
-        struct stat st;
-        if (fstat(e->d.fd, &st) == 0 && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
-            *fd = e->d.fd;
+    if (e->kind == FUSEDWASI_P1_K_FILE && e->filetype != FUSEDWASI_P1_FT_REGULAR) {
+        fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+        if (d != NULL && d->fd >= 0) {
+            w->native_fd = d->fd;
+            w->events = tag == 1 ? POLLIN : POLLOUT;
             return 1;
         }
     }
@@ -1867,183 +1680,185 @@ static inline int fusedwasi_p1_poll_kind(fusedwasi_p1_guest *g, uint32_t sub, ui
     return 0;
 }
 
-static inline uint32_t fusedwasi_p1_poll(fusedwasi_p1_guest *g, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int legacy,
-                                 int *trapped) {
+/* asks the waiter once, without waiting */
+static inline void fusedwasi_p1_waiter_ask(fusedwasi_p2_state *state, fusedwasi_p1_waiter *w) {
+#if FUSEDWASI_P1_NATIVE_POLL
+    if (w->native_fd >= 0) {
+        struct pollfd p;
+        p.fd = w->native_fd;
+        p.events = w->events;
+        p.revents = 0;
+        int r;
+        do r = poll(&p, 1, 0);
+        while (r < 0 && errno == EINTR);
+        w->revents = r > 0 ? p.revents : 0;
+        w->ready = (w->revents & (POLLIN | POLLOUT | POLLHUP | POLLERR | POLLNVAL)) != 0;
+        return;
+    }
+#endif
+    fusedwasi_p2_pollable p;
+    memset(&p, 0, sizeof p);
+    p.ctx = w->stream;
+    w->ready = w->stream != NULL && fusedwasi_p2_stream_pollable_ready(state, &p);
+}
+
+static inline uint32_t fusedwasi_p1_poll(fusedwasi_p2_guest *g, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int legacy) {
+    FUSEDWASI_P1_FDS(g);
     uint32_t stride = legacy ? 56 : 48;
     if (count == 0) return FUSEDWASI_P1_E_INVAL;
     if (!fusedwasi_p1_in_memory(g, in, (uint64_t)count * stride) || !fusedwasi_p1_in_memory(g, out, (uint64_t)count * 32)) return FUSEDWASI_P1_E_FAULT;
     uint64_t entry_now[2] = {0, 0}, shortest = 0;
     int have[2] = {0, 0}, immediate = 0, timed = 0;  /* timed: a clock was subscribed, so `shortest` is a time (it may be UINT64_MAX: forever) */
-    uint32_t polled = 0;                              /* how many descriptors the system has to say about */
+    uint32_t waiting = 0;                             /* how many descriptors have to be waited for */
+    fusedwasi_p1_waiter *waiters = (fusedwasi_p1_waiter *)calloc(count, sizeof *waiters);
+    int *slot = (int *)malloc(count * sizeof *slot);
+    if (waiters == NULL || slot == NULL) {
+        free(waiters);
+        free(slot);
+        return FUSEDWASI_P1_E_NOMEM;
+    }
+    uint32_t rc = FUSEDWASI_P1_E_SUCCESS;
     for (uint32_t i = 0; i < count; i++) {  /* first, what is ready and how long the clocks wait */
         uint32_t sub = in + i * stride;
-        uint8_t tag = FUSEDWASI_P1_MEM(g)[sub + 8];
+        uint8_t tag = fusedwasi_p1_mem(g)[sub + 8];
+        slot[i] = -1;
         if (tag == 0) {
             uint64_t wait;
-            uint32_t rc = fusedwasi_p1_subscription_wait(g, sub, legacy, entry_now, have, &wait, trapped);
-            if (rc == FUSEDWASI_P1_E_SUCCESS && !*trapped && (!timed || wait < shortest)) {
+            uint32_t r = fusedwasi_p1_subscription_wait(g, sub, legacy, entry_now, have, &wait);
+            if (r == FUSEDWASI_P1_E_SUCCESS && (!timed || wait < shortest)) {
                 shortest = wait;
                 timed = 1;
             }
-            if (rc == FUSEDWASI_P1_E_INVAL) immediate = 1;
-            else if (rc || *trapped) return rc;
+            if (r == FUSEDWASI_P1_E_INVAL) {
+                immediate = 1;
+            } else if (r) {
+                rc = r;
+                goto done;
+            }
         } else if (tag == 1 || tag == 2) {
             uint32_t error;
-            int fd;
-            if (fusedwasi_p1_poll_kind(g, sub, tag, &error, &fd)) polled++;
+            if (fusedwasi_p1_poll_kind(g, fds, sub, tag, &error, &waiters[waiting])) slot[i] = (int)waiting++;
             else immediate = 1;
         } else {
-            return FUSEDWASI_P1_E_INVAL;
+            rc = FUSEDWASI_P1_E_INVAL;
+            goto done;
         }
     }
-    (void)polled;  /* only the native poll uses the count */
-    /* what the system says about the descriptors: ready or not, and the end of the wait (a clock, or the first descriptor that is ready) */
-    short *revents = NULL; (void)revents;
-    int *slot = NULL;
     uint64_t waited = 0;
-#if FUSEDWASI_P1_NATIVE_POLL
-    if (polled) {
-        struct pollfd *fds = (struct pollfd *)FUSEDWASI_P1_MALLOC(polled * sizeof *fds);
-        revents = (short *)FUSEDWASI_P1_MALLOC(polled * sizeof *revents);
-        slot = (int *)FUSEDWASI_P1_MALLOC(count * sizeof *slot);
-        if (fds == NULL || revents == NULL || slot == NULL) {
-            FUSEDWASI_P1_FREE(fds);
-            FUSEDWASI_P1_FREE(revents);
-            FUSEDWASI_P1_FREE(slot);
-            return FUSEDWASI_P1_E_NOMEM;
-        }
-        uint32_t k = 0;
-        for (uint32_t i = 0; i < count; i++) {
-            uint32_t sub = in + i * stride, error;
-            uint8_t tag = FUSEDWASI_P1_MEM(g)[sub + 8];
-            int fd;
-            slot[i] = -1;
-            if ((tag == 1 || tag == 2) && fusedwasi_p1_poll_kind(g, sub, tag, &error, &fd)) {
-                fds[k].fd = fd;
-                fds[k].events = tag == 1 ? POLLIN : POLLOUT;
-                fds[k].revents = 0;
-                slot[i] = (int)k++;
-            }
-        }
+    if (waiting) {
+        /* ask the pollables; when none is ready, wait (the `wait` of the guest) until one is or the clocks are due */
         uint64_t started = 0;
-        int have_start = g->state->core->clock(g->state->core, 1, &started) == 0;
+        int have_start = g->state->clock(g->state, 1, &started) == 0;
         int ready = 0;
         for (;;) {
-            int timeout = 0;  /* ms; the wait is for the clocks, or for ever when there is none */
-            if (!immediate) {
-                if (!timed) {
-                    timeout = -1;
-                } else {
-                    uint64_t spent = 0, now;
-                    if (have_start && g->state->core->clock(g->state->core, 1, &now) == 0) spent = now - started;
-                    uint64_t left = shortest > spent ? shortest - spent : 0;
-                    timeout = left > 2000000000ull ? 2000000000 : (int)((left + 999999u) / 1000000u);
-                }
+            for (uint32_t k = 0; k < waiting; k++) {
+                fusedwasi_p1_waiter_ask(g->state, &waiters[k]);
+                if (waiters[k].ready) ready++;
             }
-            ready = poll(fds, polled, timeout);
-            if (ready < 0 && errno == EINTR) continue;
-            break;
+            if (ready || immediate) break;
+            if (timed) {
+                uint64_t spent = 0, now;
+                if (have_start && g->state->clock(g->state, 1, &now) == 0) spent = now - started;
+                if (spent >= shortest) break;
+            }
+            g->wait(g);
         }
-        for (uint32_t i = 0; i < polled; i++) revents[i] = fds[i].revents;
-        FUSEDWASI_P1_FREE(fds);
         if (ready <= 0 && !immediate && timed) {
             waited = shortest;  /* the wait is over: the clocks are due */
         } else if (ready > 0 && have_start) {
             uint64_t now;
-            if (g->state->core->clock(g->state->core, 1, &now) == 0) waited = now - started;
+            if (g->state->clock(g->state, 1, &now) == 0) waited = now - started;
         }
-    } else
-#endif
-    if (!immediate && timed && shortest > 0) {
-        if (g->state->core->sleep(g->state->core, shortest) != 0) return FUSEDWASI_P1_E_NOTSUP;
+    } else if (!immediate && timed && shortest > 0) {
+        if (g->state->sleep(g->state, shortest) != 0) {
+            rc = FUSEDWASI_P1_E_NOTSUP;
+            goto done;
+        }
         waited = shortest;
     }
     uint32_t made = 0;
     for (uint32_t i = 0; i < count; i++) {
         uint32_t sub = in + i * stride, event = out + made * 32;
-        uint8_t tag = FUSEDWASI_P1_MEM(g)[sub + 8];
+        uint8_t tag = fusedwasi_p1_mem(g)[sub + 8];
         uint32_t error = FUSEDWASI_P1_E_SUCCESS;
         uint64_t nbytes = 0;
         uint16_t flags = 0;
         if (tag == 0) {
             uint64_t wait;
-            error = fusedwasi_p1_subscription_wait(g, sub, legacy, entry_now, have, &wait, trapped);
-            if (*trapped) {
-                FUSEDWASI_P1_FREE(revents);
-                FUSEDWASI_P1_FREE(slot);
-                return 0;
-            }
+            error = fusedwasi_p1_subscription_wait(g, sub, legacy, entry_now, have, &wait);
             if (error == FUSEDWASI_P1_E_SUCCESS && wait > waited) continue;  /* not yet */
         } else {
             uint32_t number = 0;
             fusedwasi_p1_get_u32(g, sub + 16, &number);
-            fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(g, number);
-            int fd;
+            fusedwasi_p1_entry *e = fusedwasi_p1_entry_of(fds, number);
+            if (slot[i] >= 0) {  /* the descriptor was waited for */
+                fusedwasi_p1_waiter *w = &waiters[slot[i]];
+                if (!w->ready) continue;  /* not ready */
 #if FUSEDWASI_P1_NATIVE_POLL
-            if (slot != NULL && slot[i] >= 0) {  /* the system has said */
-                short r = revents[slot[i]];
-                if (!(r & (POLLIN | POLLOUT | POLLHUP | POLLERR | POLLNVAL))) continue;  /* not ready */
-                if (r & POLLNVAL) error = FUSEDWASI_P1_E_BADF;
-                else if (r & (POLLHUP | POLLERR) && !(r & (POLLIN | POLLOUT))) flags = 1;  /* fd_readwrite_hangup */
-                if (tag == 1 && !(r & POLLNVAL)) {
-                    int pending = 0;
-                    if (ioctl(e->kind == FUSEDWASI_P1_K_STD ? 0 : e->d.fd, FIONREAD, &pending) == 0 && pending > 0) nbytes = (uint64_t)pending;
+                if (w->native_fd >= 0) {
+                    short r = w->revents;
+                    if (r & POLLNVAL) error = FUSEDWASI_P1_E_BADF;
+                    else if (r & (POLLHUP | POLLERR) && !(r & (POLLIN | POLLOUT))) flags = 1;  /* fd_readwrite_hangup */
+                    if (tag == 1 && !(r & POLLNVAL)) {
+                        int pending = 0;
+                        if (ioctl(w->native_fd, FIONREAD, &pending) == 0 && pending > 0) nbytes = (uint64_t)pending;
+                    }
                 }
-            } else
 #endif
-            if (!fusedwasi_p1_poll_kind(g, sub, tag, &error, &fd) && error != FUSEDWASI_P1_E_SUCCESS) {
-                /* a bad descriptor or a right that is missing: told in the event */
-            } else if (e != NULL && e->kind == FUSEDWASI_P1_K_FILE && tag == 1) {
-                fusedwasi_p1_stat st;
-                memset(&st, 0, sizeof st);
-                long long at = FUSEDWASI_P1_LSEEK(e->d.fd, 0, SEEK_CUR);
-                if (at >= 0 && fusedwasi_p1_be_stat_fd(g, e, &st, trapped) == FUSEDWASI_P1_E_SUCCESS && st.size > (uint64_t)at) nbytes = st.size - (uint64_t)at;
-                *trapped = 0;
+            } else {
+                uint32_t answer;
+                fusedwasi_p1_waiter w;
+                if (!fusedwasi_p1_poll_kind(g, fds, sub, tag, &answer, &w) && answer != FUSEDWASI_P1_E_SUCCESS) {
+                    error = answer; /* a bad descriptor or a right that is missing: told in the event */
+                } else if (e != NULL && e->kind == FUSEDWASI_P1_K_FILE && tag == 1) {
+                    fusedwasi_p2_descriptor *d = fusedwasi_p1_desc(g, e);
+                    fusedwasi_p2_stat st;
+                    if (d != NULL && fusedwasi_p2_fs_stat(d, &st) == FUSEDWASI_P2_OK && st.size > e->position) nbytes = st.size - e->position;
+                }
             }
         }
-        memset(FUSEDWASI_P1_MEM(g) + event, 0, 32);
-        memcpy(FUSEDWASI_P1_MEM(g) + event, FUSEDWASI_P1_MEM(g) + sub, 8);  /* userdata */
+        memset(fusedwasi_p1_mem(g) + event, 0, 32);
+        memcpy(fusedwasi_p1_mem(g) + event, fusedwasi_p1_mem(g) + sub, 8);  /* userdata */
         fusedwasi_p1_put_u16(g, event + 8, (uint16_t)error);
-        FUSEDWASI_P1_MEM(g)[event + 10] = tag;
+        fusedwasi_p1_mem(g)[event + 10] = tag;
         if (tag != 0) {
             fusedwasi_p1_put_u64(g, event + 16, nbytes);
             fusedwasi_p1_put_u16(g, event + 24, flags);
         }
         made++;
     }
-    FUSEDWASI_P1_FREE(revents);
-    FUSEDWASI_P1_FREE(slot);
-    return fusedwasi_p1_put_u32(g, nevents, made) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+    rc = fusedwasi_p1_put_u32(g, nevents, made) ? FUSEDWASI_P1_E_SUCCESS : FUSEDWASI_P1_E_FAULT;
+done:
+    free(waiters);
+    free(slot);
+    return rc;
 }
 
-static inline uint32_t fusedwasi_p1_poll_oneoff(void *vg, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents, int *trapped) {
-    FUSEDWASI_P1_GUEST(vg);
-    return fusedwasi_p1_poll(g, in, out, count, nevents, 0, trapped);
-}
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_poll_oneoff(fusedwasi_p2_guest *g, uint32_t in, uint32_t out, uint32_t count, uint32_t nevents) { return fusedwasi_p1_poll(g, in, out, count, nevents, 0); }
 
-/* ---- sockets: a program cannot make one, so there is none to speak of --------------------------------------------------------- */
+/* ---- sockets: a program cannot make one, so there is none to speak of ------------------------------------------------------------ */
 
 /* a descriptor is never a socket (a program cannot make one): the call says so, or that there is no such descriptor */
-#define FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped) \
-    FUSEDWASI_P1_GUEST(vg); \
-    (void)trapped; \
-    return fusedwasi_p1_entry_of(g, fd) == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_NOTSOCK
+static inline uint32_t fusedwasi_p1_not_a_socket(fusedwasi_p2_guest *g, uint32_t fd) {
+    FUSEDWASI_P1_FDS(g);
+    return fusedwasi_p1_entry_of(fds, fd) == NULL ? FUSEDWASI_P1_E_BADF : FUSEDWASI_P1_E_NOTSOCK;
+}
 
-static inline uint32_t fusedwasi_p1_sock_accept(void *vg, uint32_t fd, uint32_t flags, uint32_t result, int *trapped) {
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_sock_accept(fusedwasi_p2_guest *g, uint32_t fd, uint32_t flags, uint32_t result) {
     (void)flags, (void)result;
-    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+    return fusedwasi_p1_not_a_socket(g, fd);
 }
-static inline uint32_t fusedwasi_p1_sock_recv(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nread, uint32_t roflags, int *trapped) {
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_sock_recv(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nread, uint32_t roflags) {
     (void)iovs, (void)count, (void)flags, (void)nread, (void)roflags;
-    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+    return fusedwasi_p1_not_a_socket(g, fd);
 }
-static inline uint32_t fusedwasi_p1_sock_send(void *vg, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nsent, int *trapped) {
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_sock_send(fusedwasi_p2_guest *g, uint32_t fd, uint32_t iovs, uint32_t count, uint32_t flags, uint32_t nsent) {
     (void)iovs, (void)count, (void)flags, (void)nsent;
-    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+    return fusedwasi_p1_not_a_socket(g, fd);
 }
-static inline uint32_t fusedwasi_p1_sock_shutdown(void *vg, uint32_t fd, uint32_t how, int *trapped) {
+FUSEDWASI_P1_FN uint32_t fusedwasi_p1_sock_shutdown(fusedwasi_p2_guest *g, uint32_t fd, uint32_t how) {
     (void)how;
-    FUSEDWASI_P1_SOCKET_BODY(vg, fd, trapped);
+    return fusedwasi_p1_not_a_socket(g, fd);
 }
 
 #endif

@@ -10,7 +10,6 @@ from typing import Any
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_unstable
 from fusedwasi.p1.wasi_p1_core import E_PERM, E_SUCCESS, Exit, Guest, State
-from fusedwasi.p2.wasi_p2_core import State as P2State
 from fusedwasi.p2.wasi_p2_io import InputStream, OutputStream, StreamFailed
 
 _TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
@@ -122,14 +121,14 @@ def run(script: Path, tmp: str, remote: bool = False) -> list[str]:
             hooks_on = t[1] == b"on"
         elif word == "start":
             memory = bytearray(int(t[1]))
-            core = P2State(
+            state = State(
                 args=[a.decode() for a in args] or ["program"],
                 env=[(k.decode(), v.decode()) for k, _, v in (e.partition(b"=") for e in env)],
+                preopens=preopens,
             )
             if hooks_on:
-                core.clock, core.random_bytes, core.sleep = hook_clock, hook_random, hook_sleep
-                core.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
-            state = State(core=core, preopens=preopens)
+                state.clock, state.random_bytes, state.sleep = hook_clock, hook_random, hook_sleep
+                state.std.update(stdin=Stdin(), stdout=Stdout(1), stderr=Stdout(2))
             guest = Guest(state, Remote(memory) if remote else memory)
         elif word == "signal":
             assert guest is not None

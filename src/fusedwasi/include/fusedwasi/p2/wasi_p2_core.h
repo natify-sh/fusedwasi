@@ -82,7 +82,8 @@ enum { FUSEDWASI_P2_KIND_POLLABLE = 1, FUSEDWASI_P2_KIND_ERROR = 2, FUSEDWASI_P2
        FUSEDWASI_P2_KIND_OUTGOING_DATAGRAM_STREAM = 13, FUSEDWASI_P2_KIND_RESOLVE_STREAM = 14,
        FUSEDWASI_P2_KIND_FIELDS = 15, FUSEDWASI_P2_KIND_INCOMING_REQUEST = 16, FUSEDWASI_P2_KIND_OUTGOING_REQUEST = 17, FUSEDWASI_P2_KIND_REQUEST_OPTIONS = 18,
        FUSEDWASI_P2_KIND_RESPONSE_OUTPARAM = 19, FUSEDWASI_P2_KIND_INCOMING_RESPONSE = 20, FUSEDWASI_P2_KIND_INCOMING_BODY = 21, FUSEDWASI_P2_KIND_FUTURE_TRAILERS = 22,
-       FUSEDWASI_P2_KIND_OUTGOING_RESPONSE = 23, FUSEDWASI_P2_KIND_OUTGOING_BODY = 24, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE = 25 };
+       FUSEDWASI_P2_KIND_OUTGOING_RESPONSE = 23, FUSEDWASI_P2_KIND_OUTGOING_BODY = 24, FUSEDWASI_P2_KIND_FUTURE_INCOMING_RESPONSE = 25,
+       FUSEDWASI_P2_KIND_P1_FDS = 26 /* the descriptors of WASI 0.1, private (p1/wasi_p1_core.h): a slot so that the state frees them with the rest */ };
 
 enum { FUSEDWASI_P2_TERMINAL_STDIN = 1, FUSEDWASI_P2_TERMINAL_STDOUT = 2, FUSEDWASI_P2_TERMINAL_STDERR = 4 };
 
@@ -153,6 +154,7 @@ typedef struct fusedwasi_p2_state {
     /* how a call of 0.1 that sleeps (`poll_oneoff` on a clock) waits `ns` nanoseconds; returns 0, or nonzero if interrupted (the guest traps) */
     int (*sleep)(struct fusedwasi_p2_state *state, uint64_t ns);
     void *user; /* the pointer of whoever made the state, given back to its hooks: the library never reads, writes or frees it (`fusedwasi_p2_init` makes it NULL); `State.user` in Python */
+    uint32_t p1_table; /* private: the handle of the descriptors of WASI 0.1, made by the first function of 0.1 (p1/wasi_p1_core.h); 0 until then */
 } fusedwasi_p2_state;
 
 /* The caller: one for each instance, made once (`fusedwasi_p2_guest_init`), never rewritten per call. */
@@ -168,8 +170,10 @@ typedef struct fusedwasi_p2_guest {
     /* what a blocking call does between two looks at a pollable; it can trap: it is where the caller may be interrupted */
     void (*wait)(struct fusedwasi_p2_guest *g);
     /* The end of a call is what one call leaves, so it is the guest's. The guest called wasi:cli/exit: `exit` is told, and by default records the code and traps; the code is in
-       `exit_code` when `exited`. (`proc_exit` of 0.1 only records and reports its trap in its own way; see wasi_p1_core.h.) The host clears `exited` before the next call. */
+       `exit_code` when `exited`. (`proc_exit` of 0.1 is this same exit.) The host clears `exited` before the next call. */
     void (*exit)(struct fusedwasi_p2_guest *g, uint32_t code);
+    /* `proc_raise` of WASI 0.1 asks it, with the signal number (1 to 30). It returns the errno of WASI for the call, or ends the program by its own means (a trap, a longjmp). NULL (the default): NOTSUP, the program goes on. */
+    uint32_t (*signal)(struct fusedwasi_p2_guest *g, uint32_t number);
     int exited;
     uint32_t exit_code;
     void *user; /* the pointer of whoever made the guest, given back to its hooks: the library never reads, writes or frees it (`fusedwasi_p2_guest_init` makes it NULL) */
@@ -315,7 +319,10 @@ FUSEDWASI_P2_FN void fusedwasi_p2_guest_init(fusedwasi_p2_guest *g, fusedwasi_p2
 /* frees what the state holds: every live handle is destroyed (there is no guest then), and the table. The guests that point to it must not be used afterwards. */
 FUSEDWASI_P2_FN void fusedwasi_p2_free(fusedwasi_p2_state *state) {
     for (uint32_t i = 1; i < state->slot_count; i++)
-        if (state->slots[i].live && state->slots[i].destroy) state->slots[i].destroy(state, state->slots[i].obj);
+        if (state->slots[i].live) { /* not live while it is destroyed: a destroy that drops other handles (the descriptors of 0.1) finds the ones already gone */
+            state->slots[i].live = 0;
+            if (state->slots[i].destroy) state->slots[i].destroy(state, state->slots[i].obj);
+        }
     for (int i = 0; i < 3; i++) free(state->std_default[i]), state->std_default[i] = NULL;
     free(state->slots);
     state->slots = NULL;

@@ -196,6 +196,9 @@ FUSEDWASI_P2_FN int fusedwasi_p2_fs_is_itself(const fusedwasi_p2_walk *w, uint32
 
 FUSEDWASI_P2_FN int fusedwasi_p2_fs_stat(const fusedwasi_p2_descriptor *d, fusedwasi_p2_stat *out) { return fusedwasi_p2_sys_fstat(d, out); }
 
+/* the stat of a name directly in the directory (`.` and `..` too), no link followed, no walk: what `fd_readdir` of 0.1 needs for the inode */
+FUSEDWASI_P2_FN int fusedwasi_p2_fs_stat_entry(const fusedwasi_p2_descriptor *d, const char *name, fusedwasi_p2_stat *out) { return fusedwasi_p2_sys_lstat(FUSEDWASI_P2_DIRREF_OF(d), name, out); }
+
 /* read at an offset: the bytes are in `buf`, `*got` of them (0 at the end of the file) */
 FUSEDWASI_P2_FN int fusedwasi_p2_fs_read(const fusedwasi_p2_descriptor *d, uint8_t *buf, uint64_t len, uint64_t offset, uint64_t *got, uint32_t opts) {
     *got = 0;

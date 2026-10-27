@@ -1,5 +1,6 @@
 """WASI 0.1 in Python (`fusedwasi.p1`) against the C core (`fusedwasi/p1/wasi_p1_core.h`): the same script of calls in Python and in C, the outputs are equal."""
 
+import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from p1_script import run
 DATA = Path(__file__).parent / "data"
 P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
 CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-SCRIPTS = sorted(path.stem for path in (DATA / "p1").glob("*.txt"))
+SCRIPTS = sorted(path.stem for path in (DATA / "p1").glob("*.txt") if sys.platform != "win32" or path.stem != "fifo")
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +55,8 @@ def make_tree(root: Path) -> None:
     (root / "dirlink").symlink_to("sub", target_is_directory=True)
     (root / "abslink").symlink_to("/etc")  # an absolute target: path_readlink does not show it
     (root / "esc").symlink_to(f"../{root.name}-outside", target_is_directory=True)
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(root / "pipe1")  # not a regular file: fifo.txt
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
@@ -114,6 +117,26 @@ def test_what_the_first_stage_gives(tmp_path: Path) -> None:
     ]  # (the host clears the record before a call; the script does not)
 
 
+def test_append_by_hand(tmp_path: Path) -> None:
+    """Read by hand: a write and a pwrite on a descriptor opened for appending go to the end (the system's rule for pwrite, kept when 0.1 went over 0.2); with the flag off they go where told."""
+    lines = run(DATA / "p1" / "append.txt", str(tmp_path))
+    assert "tell_after_write 0300000000000000" in lines  # "abc" written: the position is 3
+    assert "content 6162635a5a000000" in lines  # the pwrite of "ZZ" at 0 went to the end
+    assert "content2 5a5a635a5a61626300000000" in lines  # flag off: pwrite at 0 overwrote "ab"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no FIFO")
+def test_a_fifo_by_hand(tmp_path: Path) -> None:
+    """A FIFO opened by a path is not a regular file: read and written at the position of the system, it cannot seek, and polling it says what is waiting."""
+    make_tree(tmp_path / "t")
+    lines = run(DATA / "p1" / "fifo.txt", str(tmp_path / "t"))
+    assert "written 03000000" in lines and "content 6162630000000000" in lines  # "abc" in, "abc" out
+    assert "fd_tell 70" in lines and "fd_seek 70" in lines and "fd_pread 70" in lines  # SPIPE
+    assert any(
+        line.startswith("ev 09000000000000000000010000000000030000") for line in lines
+    )  # fd_read ready, 3 bytes waiting
+
+
 def test_proc_exit_is_the_end_of_wasi_02(tmp_path: Path) -> None:
     """The code of proc_exit is where a host of 0.2 reads an exit: `exited` and `exit_code` of the state of 0.2, in C and in Python."""
     assert run(DATA / "p1" / "exit.txt", str(tmp_path)) == ["proc_exit trapped", "exit 1 7"]
@@ -141,10 +164,9 @@ import struct, sys
 from fusedwasi.p1 import wasi_p1
 from fusedwasi.p1.wasi_p1_core import Guest, State
 from fusedwasi.p2.wasi_p2_cli import FdInput
-from fusedwasi.p2.wasi_p2_core import State as P2State
 
 memory = bytearray(4096)
-s = Guest(State(core=P2State(stdin=FdInput(0))), memory)  # the descriptor of the process, not the Python stream
+s = Guest(State(stdin=FdInput(0)), memory)  # the descriptor of the process, not the Python stream
 struct.pack_into("<QBxxxxxxxI", memory, 0, 1, 1, 0)  # fd_read of fd 0
 struct.pack_into("<QBxxxxxxxIxxxxQQHxxxxxx", memory, 48, 2, 0, 1, 20_000_000, 0, 0)  # a clock of 20 ms
 rc = wasi_p1.poll_oneoff(s, 0, 1000, 2, 900)

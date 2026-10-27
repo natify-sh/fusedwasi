@@ -1431,7 +1431,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_read_chunked(fusedwasi_p2_http_reader *r, 
     *len = 0;
     *trailers = NULL;
     for (;;) {
-        uint8_t *line;
+        uint8_t *line = NULL;
         size_t n = 0;
         if (fusedwasi_p2_http_line(r, err, &line, &n)) return 1;
         size_t k = 0;

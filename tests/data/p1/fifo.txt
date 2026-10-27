@@ -1,0 +1,36 @@
+# WASI 0.1, a FIFO opened by a path (not a regular file, so not read or written at an offset): written, polled, read at the position of the system; it cannot seek (POSIX only: the test makes the FIFO).
+preopen "$TMP" "/data" rw
+hooks off
+start 8192
+mem put 1000 "pipe1"
+mem u32 5000 3100
+mem u32 5004 3
+mem put 3100 "abc"
+mem u32 5100 6000
+mem u32 5104 16
+call path_open 3 1 1000 5 0 536870911 536870911 0 4000
+mem dump 4000 4 fd
+mem zero 5200 64
+mem u64 5200 9
+mem put 5208 "\x01"
+mem u32 5216 4
+mem u64 5248 22
+mem put 5256 "\x00"
+mem u32 5264 1
+mem u64 5272 30000000
+call poll_oneoff 5200 5300 2 4100
+mem dump 4100 4 nev
+call fd_write 4 5000 1 4100
+mem dump 4100 4 written
+call poll_oneoff 5200 5300 2 4100
+mem dump 4100 4 nev
+mem dump 5300 64 ev
+call fd_tell 4 4200
+call fd_seek 4 0 0 4200
+call fd_read 4 5100 1 4300
+mem dump 4300 4 n
+mem dump 6000 8 content
+call fd_pread 4 5100 1 0 4300
+call fd_filestat_get 4 7000
+mem dump 7016 1 ftype
+call fd_close 4
