@@ -308,13 +308,27 @@ def test_bind_memory_follows_a_moved_base_in_c_and_python(tmp_path: Path) -> Non
         cli.wasi_cli_terminal_stdin_get_terminal_stdin(mixed, 1, 40)
 
 
-def test_bind_memory_is_in_c_and_the_python_twin_takes_callables(tmp_path: Path) -> None:
-    text = (C_P2 / "wasi_p2_core.h").read_text()
-    assert re.search(
-        r"int fusedwasi_p2_bind_memory\(fusedwasi_p2_state \*s, uint32_t comp, uint8_t \*\*data, uint64_t \*size\)",
-        text,
-    )
-    assert re.search(
-        r"int fusedwasi_p2_set_memory\(fusedwasi_p2_state \*s, uint32_t comp, uint8_t \*base, uint64_t size\)", text
-    )
-    assert "memories" in Host.__init__.__annotations__
+def test_c_and_python_see_a_moved_memory_the_same_way(tmp_path: Path) -> None:
+    """The same steps in both: the outcome of each (`ok <byte>`, or a trap of the kind `outside` or `unbound`) is equal."""
+    c_lines = build_and_run(tmp_path, BIND_C).splitlines()
+    c_outcomes = {
+        line.split()[0]: ("ok " + line.split()[2] if " ok " in line else "outside" if "outside" in line else "unbound")
+        for line in c_lines
+        if line.split()[0] in {"first", "outside", "grown", "unbound"}
+    }
+
+    def step(host: Host, comp: int, at: int) -> str:
+        try:
+            cli.wasi_cli_terminal_stdin_get_terminal_stdin(host, comp, at)
+        except core.Trap as trap:
+            return "outside" if "outside" in str(trap) else "unbound"
+        return "ok 1"
+
+    cell = [bytearray(16)]
+    host = Host([lambda: cell[0]], terminals=core.TERMINAL_STDIN)
+    first = step(host, 0, 8)
+    outside = step(host, 0, 40)
+    cell[0] = bytearray(64)  # what C does with realloc of the cell: no rebind
+    grown = step(host, 0, 40)
+    unbound = step(host, 1, 0)
+    assert {"first": first, "outside": outside, "grown": grown, "unbound": unbound} == c_outcomes
