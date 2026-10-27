@@ -48,3 +48,25 @@ jobs:
           print(f"{passed} passed, {failed} failed")
           assert failed == 0 and passed >= 72
           PY
+
+  c-wasm3:
+    name: C over wasm3 (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # the engine is not in this repository: the tag v0.5.0
+      - uses: actions/checkout@v7
+        with:
+          repository: wasm3/wasm3
+          ref: 6b8bcb1e07bf26ebef09a7211b0a37a446eafd52
+          path: wasm3
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # Python is here to write the glue out of the public table of signatures, to turn the text of the programs into modules, and for the reference run under Wasmtime
+      - run: uv sync --group neutral
+      - name: The driver is built from the public headers and run on the programs
+        run: uv run --no-sync pytest tests/neutral/test_neutral_wasm3.py -q
+        env:
+          WASM3_SRC: ${{ github.workspace }}/wasm3

@@ -14,79 +14,12 @@ from pathlib import Path
 import neutral_wasmtime as user
 import pytest
 import wasmtime as wt
-import wasmtime.component as wtc
+from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
 from fusedwasi.p1 import wasi_p1_core
 from fusedwasi.p2 import wasi_p2_core, wasi_p2_io
 
 HERE = Path(__file__).resolve().parent
-PROGRAMS = HERE / "programs"
-ARGS = ["prog", "a", "b"]
-ENV = [("K", "V"), ("X", "")]
-
-
-def program(name: str) -> str:
-    return (PROGRAMS / name).read_text()
-
-
-@pytest.fixture(scope="module")
-def engine() -> wt.Engine:
-    return wt.Engine()
-
-
-# ---- the same program under Wasmtime's own WASI ------------------------------------------------------------------------------
-
-
-def wasmtime_config(directory: Path, stdout: Path, preopen: Path | None = None) -> wt.WasiConfig:
-    config = wt.WasiConfig()
-    config.argv = ARGS
-    config.env = ENV
-    config.stdout_file = str(stdout)
-    if preopen is not None:
-        config.preopen_dir(str(preopen), "/")
-    return config
-
-
-def wasmtime_p1(engine: wt.Engine, wats: list[str], directory: Path) -> tuple[bytes, list[int | None]]:
-    """The modules, one after the other in one store (so one world): what they wrote to standard output and the status of each (None when it returned)."""
-    root = directory / "root"
-    root.mkdir()
-    store = wt.Store(engine)
-    store.set_wasi(wasmtime_config(directory, directory / "out", root))
-    linker = wt.Linker(engine)
-    linker.define_wasi()
-    statuses: list[int | None] = []
-    for wat in wats:
-        instance = linker.instantiate(store, wt.Module(engine, wat))
-        start = instance.exports(store)["_start"]
-        assert isinstance(start, wt.Func)
-        try:
-            start(store)
-            statuses.append(None)
-        except wt.ExitTrap as caught:
-            statuses.append(caught.code)
-    return (directory / "out").read_bytes(), statuses
-
-
-def wasmtime_p2(engine: wt.Engine, directory: Path) -> tuple[bytes, int | None]:
-    component = wtc.Component(engine, program("p2_command.component.wat"))
-    linker = wtc.Linker(engine)
-    linker.add_wasip2()
-    store = wt.Store(engine)
-    store.set_wasi(wasmtime_config(directory, directory / "out"))
-    instance = linker.instantiate(store, component)
-    outer = instance.get_export_index(store, "wasi:cli/run@0.2.6")
-    assert outer is not None
-    index = instance.get_export_index(store, "run", outer)
-    assert index is not None
-    run = instance.get_func(store, index)
-    assert run is not None
-    status: int | None = None
-    try:
-        run(store)
-    except wt.ExitTrap as caught:
-        status = caught.code
-    return (directory / "out").read_bytes(), status
 
 
 # ---- the same program under the functions of fusedwasi -----------------------------------------------------------------------
@@ -238,6 +171,13 @@ def test_two_commands_over_one_state_and_a_trap_in_a_third(engine: wt.Engine) ->
     assert first.guest.exited and second.guest.exited and first.guest is not second.guest
     assert bytes(out.data) == 2 * b"prog\na\nb\nK=V\nX=\nt\nbye\n"
     assert first.start("run").exit_code == 1  # the same instance again: the flags were cleared before the call
+
+
+def test_a_memory_that_moves_in_the_middle_of_a_call_is_followed(engine: wt.Engine) -> None:
+    """`cabi_realloc` grows the memory while a function of fusedwasi is writing a list and its strings into it."""
+    state, out = world_p2()
+    assert user.Instance(engine, program("p2_grow.wat"), state).start("run") == user.Outcome()
+    assert bytes(out.data) == b"progab"
 
 
 # ---- the official testsuite --------------------------------------------------------------------------------------------------
