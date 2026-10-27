@@ -10,13 +10,15 @@ What `wasmext` (C) and `wasmhost` (Python) use today is, in effect, the public i
 
 C (counted in `wasmext/src`, by use):
 
-- State of 0.2: `fusedwasi_p2_state` (fields read or written from outside: `user`, `trap`, `realloc`, `exited`, `exit_code`, `std[]`, `args`, `env_*`, `preopens`, `clock`, `random_bytes`, `sleep`, `wait`, `socket_addr_check`, `http_check`), `fusedwasi_p2_init`, `fusedwasi_p2_free`, `fusedwasi_p2_bind_memory` (primary), `fusedwasi_p2_set_memory` (convenience), `fusedwasi_p2_stream` with `FUSEDWASI_P2_STREAM_OK / CLOSED / FAILED`, `fusedwasi_p2_preopen`.
-- State of 0.1: `fusedwasi_p1_state` (fields: `core`, `user`, `finished`, `end_value`, `memory_data`, `memory_size`), `fusedwasi_p1_config`, `fusedwasi_p1_preopen`, `fusedwasi_p1_create`, `fusedwasi_p1_destroy`, `fusedwasi_p1_bind`, `fusedwasi_p1_errno`, `fusedwasi_p1_copy`, `FUSEDWASI_P1_END_EXIT / END_SIGNAL`, and the macros `FUSEDWASI_P1_MALLOC / CALLOC / FREE / WRITE`.
+- State of 0.2 (the world): `fusedwasi_p2_state` (fields read or written from outside: `user`, `std[]`, `args`, `env_*`, `preopens`, `clock`, `random_bytes`, `sleep`, `socket_addr_check`, `http_check`), `fusedwasi_p2_init`, `fusedwasi_p2_free`, `fusedwasi_p2_stream` with `FUSEDWASI_P2_STREAM_OK / CLOSED / FAILED`, `fusedwasi_p2_preopen`.
+- Guest of 0.2 (the caller): `fusedwasi_p2_guest` (fields: `state`, `user`, `trap`, `realloc`, `wait`, `exit`, `exited`, `exit_code`), `fusedwasi_p2_guest_init`, `fusedwasi_p2_bind_memory` (primary), `fusedwasi_p2_set_memory` (convenience).
+- State of 0.1: `fusedwasi_p1_state` (fields: `core`, `user`), `fusedwasi_p1_config`, `fusedwasi_p1_preopen`, `fusedwasi_p1_create`, `fusedwasi_p1_destroy`, `fusedwasi_p1_errno`, `fusedwasi_p1_copy`, and the macros `FUSEDWASI_P1_MALLOC / CALLOC / FREE / WRITE`.
+- Guest of 0.1: `fusedwasi_p1_guest` (fields: `core` (a guest of 0.2: memory, `trap`, `wait`, `exited`, `exit_code`, `user`), `state`, `signal`), `fusedwasi_p1_guest_init`, `fusedwasi_p1_bind`.
 - The function of each import (`fusedwasi_p1_<name>`, `fusedwasi_p2_<package>_<name>`) is bound by the generator by name, so these names are an interface too.
 
-Python (`wasmhost`): `fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`, `wasi_p1_core.State` and `Exit`, `fusedwasi.p2.wasi_p2_core.Host`, `wasi_p2_io.InputStream / OutputStream / StreamClosed / StreamFailed`.
+Python (`wasmhost`): `fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`, `wasi_p1_core.State`, `Guest` and `Exit`, `fusedwasi.p2.wasi_p2_core.State` and `Guest`, `wasi_p2_io.InputStream / OutputStream / StreamClosed / StreamFailed`.
 
-To decide: which fields are public (and read-only for the host), which are private. Today the end of a program is read straight from `core->exited` and `finished`; that is fine if it is written down as the contract.
+To decide: which fields are public (and read-only for the host), which are private. The end of a call is read from the guest (`exited`, `exit_code`; for 0.1 `g->core.exited`); that is fine if it is written down as the contract.
 
 ## 2. Behaviour not yet checked against a real host
 

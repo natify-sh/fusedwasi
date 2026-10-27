@@ -81,7 +81,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 2. ~~The name~~ decided: Guest (first Session, changed 2026-10-27: a Session sounds like Wasmtime's WasiCtx, which is the State here). The first parameter of a function is the guest: `g` in C, `guest` in Python (not `s`, which would read as the state); the state is `g->state.
 3. ~~The border cases~~ settled (section 3). `proc_raise` decided (owner, 2026-10-27): a hook `signal` on the guest; the default answers `NOTSUP` as Wasmtime does; the library no longer ends the program by itself (section 10).
 4. ~~Typed `std[3]`~~ decided with the split: `fusedwasi_p2_stream *std[3]` (a forward declaration), the one-line casts of derived structs in the drivers are fixed in the same change.
-5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
+5. **Order**: the doc is reviewed, then the C and the twin of the memory and the guest (one change; **step 1 done**, see "Step 1: what was learned" below), then the shared state, then the public/private marks and the dead names, then the checklist (`release_checklist.md`: Wasmtime comparison, Windows and macOS, the package test), then `0.1.0a1`.
 
 ## 8. What the users do after
 
@@ -127,3 +127,14 @@ What a signal does to a program is the host's decision, not WASI's: the guest on
 Rules for both: they include only the public headers and import only the public Python names; they live in the repository of fusedwasi; they run in its CI; a change of the public API that breaks one of them is a change that is reviewed, not worked around.
 
 Where it fits in the order (section 7, item 5): after the split (step 1) and 0.1 over 0.2 (step 2), before the public/private marks are frozen and before `0.1.0a1`. The first user (Python over `wasmtime-py`) can start as soon as the split is pushed and is the quickest check that the split is neutral.
+
+## 11. Step 1: what was learned (done 2026-10-27)
+
+The split is made in C and in Python in one change: `fusedwasi_p2_state` / `fusedwasi_p2_guest` (Python `State` / `Guest` of `fusedwasi.p2.wasi_p2_core`) and `fusedwasi_p1_state` / `fusedwasi_p1_guest` (Python `State` / `Guest` of `fusedwasi.p1.wasi_p1_core`). The 0.1 and 0.2 states are still two; the 0.1 guest is built so that step 2 can drop it. Things the doc did not say:
+
+* **The guest of 0.1 contains a guest of 0.2** (`fusedwasi_p1_guest.core`, the first member). The calls of 0.1 go through 0.2 for the standard streams, the clock that traps, the listing of a directory and `wait`; all of them can trap or wait, so they need a guest of 0.2. Embedding it means a host makes one object for an instance of 0.1 (`fusedwasi_p1_guest_init`), the memory of 0.1 is memory 0 of that guest, and `trap`, `wait`, `exited`, `exit_code` and `user` of the guest are the ones of the embedded guest. In step 2 `fusedwasi_p1_guest` becomes `fusedwasi_p2_guest` and `core.` goes away. `signal` is on the guest of 0.1 only (0.2 has no signal).
+* **Callbacks of an object (`fusedwasi_p2_stream.read/write/...`, `fusedwasi_p2_pollable.ready`) take the guest** that is calling: they run inside a call and some of them trap (out of memory). Only the hooks of the configuration (`clock`, `sleep`, `random_bytes`, `socket_addr_check`, `http_check`, `http_send`) and what can run when the state is freed (`destroy` of a slot or of a stream, no guest then) take the state.
+* `proc_exit` of 0.1 still records the code and reports `*trapped`; it does not call the `exit` hook (0.1 never had one). Python: `proc_exit` sets `exited` and `exit_code` of the guest and raises `Exit`.
+* A hook of the guest in Python takes no guest argument (a closure carries its data), as the hooks of the state already did: `trap(message)`, `exit(code)`, `signal(number)`, `wait()`, `realloc(comp, ...)`. In C they take the guest, which is how a hook finds `user`.
+* The helpers that make a resource for a guest (`fusedwasi_p2_memory_input_new`, `fusedwasi_p2_fd_input_new`, `fusedwasi_p2_table_new`, ...) take the guest, because they can trap.
+* `FUSEDWASI_P1_HOOK_TRAP`, `FUSEDWASI_P1_END_*`, `finished`, `end_value`, Python `Signal`/`WasiSignal` and `END_*` are gone. `proc_raise` asks the hook for every number from 1 to 30; the table of signals that are ignored moved to whoever writes the hook.
