@@ -57,7 +57,7 @@ fusedwasi_p2_free(&state);           /* after the guests are done with it */
 ```
 
 ```python
-from fusedwasi import Guest, State
+from fusedwasi.p2 import Guest, State  # fusedwasi.p1 has a State and a Guest of its own, for WASI 0.1
 from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers
 
 state = State(args=["prog"])  # the world: files, sockets, the clocks
@@ -74,7 +74,7 @@ fusedwasi_p2_fd_stream *out = fusedwasi_p2_fd_output_new(&state, 1);   /* NULL w
 state.std[1] = &out->base;
 ```
 
-For 0.1 the same two parts: `fusedwasi_p1_state` (made by `fusedwasi_p1_create` over a state of 0.2) and `fusedwasi_p1_guest` (`fusedwasi_p1_guest_init(&g, p1_state)`; its guest of 0.2 is `g.core`, and `fusedwasi_p1_bind(&g, &m->data, &m->size)` binds the memory); in Python `fusedwasi.p1.wasi_p1_core.State` and `Guest`.
+For 0.1 the same two parts: `fusedwasi_p1_state` (made by `fusedwasi_p1_create` over a state of 0.2) and `fusedwasi_p1_guest` (`fusedwasi_p1_guest_init(&g, p1_state)`; its guest of 0.2 is `g.core`, and `fusedwasi_p1_bind(&g, &m->data, &m->size)` binds the memory); in Python `fusedwasi.p1.State` and `fusedwasi.p1.Guest` (each family has its own `State`, `Guest` and `Exit`: `fusedwasi.p1.State` and `fusedwasi.p2.State` are different classes). `fusedwasi.signatures.find_import(module, name)` gives, for an import of a core module (of 0.1, or of any `0.2.N`), the row of the table of signatures with the C symbol, the Python function (`python_function()`) and whether it takes the number of the memory (`takes_comp`).
 
 | Part | What the host gives | What the library does |
 |---|---|---|
