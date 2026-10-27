@@ -30,6 +30,8 @@ The draft splits them.
 
 The functions keep their names and their parameters. Only the first one changes its type: it was the state, it is the session (which reaches the state). The table of signatures and the Protocols (`signatures/`) do not change, because they never named that parameter.
 
+A session is what Wasmtime gives a call as `GuestMemory` and `Caller`: the memory of the caller and the way back into it. Wasmtime builds it for each call; a user of fusedwasi may do the same (a small struct on the stack, filled by the glue) or make it once for each instance and pass a pointer. The library asks for neither: it only reads the session it is given.
+
 What is on which side (draft, to be settled in review):
 
 | State (world) | Session (caller) |
@@ -43,11 +45,15 @@ What is on which side (draft, to be settled in review):
 
 `wait` (a poll that blocks) is on the border: it blocks a call, so it may want the session. Open (section 7).
 
-## 4. 0.1 and 0.2 over one state
+## 4. 0.1 and 0.2 over one state (decided by the owner, 2026-10-27)
 
-WASI 0.1 and 0.2 are two ways to ask for the same things (files, clocks, random, sockets). Wasmtime implements 0.1 over the state of 0.2: a descriptor of 0.1 is a map to a resource of 0.2, so a file opened by a module of 0.1 is the same resource a module of 0.2 sees in the same store.
+WASI 0.1 and 0.2 are two ways to ask for the same things (files, clocks, random, sockets). **Decided: as in Wasmtime, 0.1 is implemented over 0.2.** There is one State; its ground is the state of 0.2 (the tables of resources, the configuration, the policies); a descriptor of 0.1 is a map to a resource of 0.2 (Wasmtime: `WasiP1Adapter` over `WasiCtx` and `ResourceTable`), and the functions of 0.1 do their work through the operations of 0.2. A file opened by a module of 0.1 is the same resource that a module of 0.2 sees in the same state.
 
-The draft follows that: **one State**, with the tables of 0.2 as the ground, and the descriptors of 0.1 as a thin table over it. Whether this is the right size for fusedwasi, and whether the functions of 0.1 are rewritten over the calls of 0.2 or keep their own bodies and only share the table, is the big open decision (section 7). If it is not taken, the honest statement is "0.1 and 0.2 are two independent worlds in one library", and a user that wants one `Host` gets two states.
+Why not "a shared table only": a descriptor of 0.2 is a resource with its own position, rights and system descriptor. A function of 0.1 can work on the same file only through the operations of 0.2, so the shared table already is "0.1 over 0.2".
+
+What it costs: the 46 functions of 0.1 are rewritten over 0.2, in C and in Python. What guards it: the official wasi-testsuite (72 tests for 0.1, run in the CI of wasmext), `tests/test_parity_surface.py`, and the drivers that compare the C with the Python.
+
+Order: it is done after the split of section 3 (the session), on the finished session, not together with it. Until then 0.1 keeps its own state.
 
 ## 5. Public and private
 
@@ -69,7 +75,7 @@ Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in
 
 ## 7. Open decisions (the owner)
 
-1. **One state for 0.1 and 0.2** (section 4), and how deep: a shared table of descriptors only, or the functions of 0.1 over those of 0.2.
+1. ~~One state for 0.1 and 0.2~~ decided: 0.1 over 0.2 (section 4).
 2. **The names**: `session` or another word; whether the first parameter keeps `s`.
 3. **The border cases** of section 3 (`wait`, `exit`, `user`).
 4. **Typed `std[3]`**: tried and reverted once (a derived struct broke the assignment); with the session split it may be settled differently.
