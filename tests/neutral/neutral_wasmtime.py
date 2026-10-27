@@ -80,8 +80,7 @@ class Instance:
         """The linear memory of the instance as it is now (it moves when it grows)."""
         pointer = self._memory.data_ptr(self.caller or self.store)
         size = self._memory.data_len(self.caller or self.store)
-        # `cast("B")`: the view of a ctypes array has the format "<B", which fusedwasi cannot assign slices to (see docs/design_model.md, section 11)
-        return memoryview((ctypes.c_ubyte * size).from_address(ctypes.addressof(pointer.contents))).cast("B")
+        return memoryview((ctypes.c_ubyte * size).from_address(ctypes.addressof(pointer.contents)))
 
     def realloc(self, comp: int, old_ptr: int, old_size: int, align: int, new_size: int) -> int:
         """The `cabi_realloc` of the module."""

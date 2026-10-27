@@ -1,7 +1,7 @@
 """The state of a host of WASI 0.2 and the helpers of the canonical ABI that every package uses (the twin of `include/fusedwasi/p2/wasi_p2_core.h`).
 
 No mutable state at the level of the module: everything that changes is in a `Host`, which is passed as the first argument of every function of the packages.
-A memory is any writable buffer (`bytearray`, `memoryview`) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
+A memory is any writable buffer (`bytearray`, `memoryview`, a `ctypes` array, `mmap`: seen as flat bytes by `flat_view`) or a function of no arguments that gives it (as `memory` of 0.1; it is called at each access, so a memory
 that moves is followed: the twin of `fusedwasi_p2_bind_memory`); a module fused from components has one for each component, and a function takes the number of its own.
 """
 
@@ -266,13 +266,22 @@ def table_drop(guest: Guest, handle: int, kind: int) -> None:
 # memory: little-endian, checked
 
 
+def flat_view(memory: object) -> memoryview:
+    """A writable buffer as a flat view of bytes (format `B`, one dimension), whatever the buffer is: a `bytearray`, a `memoryview`, an `mmap`, a view of a `ctypes` array (format `<B`), an array of
+    another item size. The twin of a base and a size in C. Raises `TypeError` for an object that is not a buffer."""
+    view = memoryview(memory)  # type: ignore[call-overload]
+    if view.format != "B" or view.ndim != 1:
+        view = view.cast("B")
+    return view
+
+
 def _check(guest: Guest, comp: int, ptr: int, size: int) -> memoryview:
     if comp >= len(guest.memories):
         trap(guest, f"no memory {comp}")
     memory = guest.memories[comp]
     if callable(memory):  # a function that gives the buffer: a memory that moves is followed
         memory = memory()
-    view = memoryview(memory)  # type: ignore[call-overload]
+    view = flat_view(memory)
     if ptr < 0 or ptr + size > len(view):
         trap(guest, f"pointer {ptr:#x}+{size} is outside the memory")
     return view

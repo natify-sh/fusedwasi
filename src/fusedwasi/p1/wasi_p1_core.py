@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..p2.wasi_p2_cli import FdInput, FdOutput, std
 from ..p2.wasi_p2_core import State as P2State
+from ..p2.wasi_p2_core import flat_view
 from ..p2.wasi_p2_io import StreamClosed, StreamFailed
 
 if TYPE_CHECKING:
@@ -418,7 +419,7 @@ class Guest:
         if memory is None:
             return None, None
         try:
-            return memoryview(memory), memory  # type: ignore[arg-type]
+            return flat_view(memory), memory
         except TypeError:
             return None, memory
 
