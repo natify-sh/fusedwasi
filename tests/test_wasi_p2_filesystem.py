@@ -4,13 +4,12 @@ The tree is made by the test (two identical ones, one for each host). What is co
 """
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_filesystem as fs
@@ -19,8 +18,6 @@ from fusedwasi.p2.wasi_p2_core import Trap, _load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_filesystem_driver.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-LIBS: list[str] = ["-lbcrypt"] if sys.platform == "win32" else []  # the random bytes of the core
 
 SCENARIOS = ["main", "child_dir", "bad_handle", "outside", "closed_handle", "closed_new"]
 
@@ -388,9 +385,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2fs") / ("driver.exe" if sys.platform == "win32" else "driver")
-    build(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
-    )
+    compile_c(DRIVER, binary, [C_P2])
     return binary
 
 
@@ -548,7 +543,7 @@ def test_errno_tables_of_c_and_python_agree(tmp_path: Path) -> None:
         pytest.skip("no C compiler")
     binary = tmp_path / "errno_driver"
     source = Path(__file__).parent / "data" / "wasi_p2_errno_driver.c"
-    build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(source), "-o", str(binary)])
+    compile_c(source, binary, [C_P2])
     rows = [
         line.split()
         for line in subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.splitlines()

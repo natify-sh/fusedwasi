@@ -5,7 +5,6 @@ The port is the one the system gives, so it is never printed: the server masks i
 the bytes of every `error-code` that the guest receives (layout and strings), so the layouts of the Canonical ABI are compared too.
 """
 
-import shutil
 import socket
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
@@ -25,10 +24,6 @@ from fusedwasi.p2.wasi_p2_core import Trap, _load_u32, _store_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_http_driver.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-LIBS: list[str] = (
-    ["-lws2_32", "-lbcrypt"] if sys.platform == "win32" else []
-)  # Winsock and the random bytes of the core
 
 SCENARIOS = [
     "main",
@@ -720,9 +715,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2http") / ("driver.exe" if sys.platform == "win32" else "driver")
-    build(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary), *LIBS],
-    )
+    compile_c(DRIVER, binary, [C_P2])
     return binary
 
 

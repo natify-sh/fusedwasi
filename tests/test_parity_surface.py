@@ -1,16 +1,15 @@
 """The surface of the C and of the Python twins that a host touches is the same: `user` (of the state and of the guest), the `use` of the policy of sockets, `terminals`, the preopen, the constants of 0.1,
 the memory of a guest, the hooks of a guest (`trap`, `exit`, `signal`) and several guests over one state.
 
-Each test builds a small C program (skipped without a C compiler; not run on Windows, where the libraries to link differ and no runner was available to try) and compares it with the Python.
+Each test builds a small C program (skipped without a C compiler; on Windows with MinGW or with MSVC, `FUSEDWASI_TEST_CC=cl`) and compares it with the Python.
 """
 
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 
 from fusedwasi.p1 import wasi_p1, wasi_p1_core
 from fusedwasi.p2 import wasi_p2_cli as cli
@@ -21,7 +20,6 @@ from fusedwasi.p2.wasi_p2_core import Guest, State
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 C_P1 = C_P2.parent / "p1"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 
 def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:
@@ -30,22 +28,7 @@ def build_and_run(tmp_path: Path, source: str, name: str = "prog") -> str:
     path = tmp_path / f"{name}.c"
     path.write_text(source)
     binary = tmp_path / name
-    build(
-        [
-            CC,
-            "-std=gnu11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-I",
-            str(C_P2),
-            "-I",
-            str(C_P1),
-            str(path),
-            "-o",
-            str(binary),
-        ],
-    )
+    compile_c(path, binary, [C_P2, C_P1])
     return subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout
 
 

@@ -1,18 +1,16 @@
 """WASI 0.1 in Python (`fusedwasi.p1`) against the C core (`fusedwasi/p1/wasi_p1_core.h`): the same script of calls in Python and in C, the outputs are equal."""
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from p1_script import run
 
 DATA = Path(__file__).parent / "data"
 P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 SCRIPTS = sorted(path.stem for path in (DATA / "p1").glob("*.txt") if sys.platform != "win32" or path.stem != "fifo")
 
 
@@ -21,23 +19,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p1") / ("driver.exe" if sys.platform == "win32" else "driver")
-    build(
-        [
-            CC,
-            "-std=gnu11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-I",
-            str(P1),
-            "-I",
-            str(P1.parent / "p2"),
-            str(DATA / "wasi_p1_driver.c"),
-            "-o",
-            str(binary),
-            *(["-lbcrypt"] if sys.platform == "win32" else []),
-        ],
-    )
+    compile_c(DATA / "wasi_p1_driver.c", binary, [P1, P1.parent / "p2"])
     return binary
 
 

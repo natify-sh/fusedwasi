@@ -4,12 +4,11 @@ The sources are counters (the secure one starts at 0, the insecure one at 128), 
 """
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_random as rnd
@@ -17,7 +16,6 @@ from fusedwasi.p2.wasi_p2_core import Trap
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_random_driver.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 SCENARIOS = ["main", "too_many", "failing", "default_source"]
 
@@ -95,7 +93,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2random") / "driver"
-    build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
+    compile_c(DRIVER, binary, [C_P2])
     return binary
 
 

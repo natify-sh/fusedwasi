@@ -1,24 +1,27 @@
 """The headers of WASI 0.1 (`fusedwasi/p1/`) are plain C: strict C11, no warnings, no Python and no wasm2c runtime on the include path."""
 
+import os
 import re
 import shutil
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, build, command, is_msvc
 
 P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
 SOURCE = (
     '#include "wasi_p1_core.h"\n#include "wasi_p1.h"\n#include "wasi_p1_unstable.h"\nint main(void) { return 0; }\n'
 )
-COMPILERS = [c for c in ("gcc", "clang", "cc") if shutil.which(c)]
+COMPILERS = (
+    [CC] if os.environ.get("FUSEDWASI_TEST_CC") and CC else [c for c in ("gcc", "clang", "cc") if shutil.which(c)]
+)
 
 
-@pytest.mark.skipif(not COMPILERS, reason="a C compiler")
-@pytest.mark.parametrize("compiler", sorted(set(COMPILERS)))
-def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path: Path) -> None:
-    source = tmp_path / "check.c"
-    source.write_text(SOURCE)
+def check_syntax(compiler: str, source: Path, includes: list[Path]) -> None:
+    """Strict C11, every warning an error, nothing is linked."""
+    if is_msvc(compiler):  # /std:c11 /W4 /WX
+        build(command(source, source.with_suffix(".obj"), includes, compiler=compiler, compile_only=True))
+        return
     build(
         [
             compiler,
@@ -27,11 +30,18 @@ def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path:
             "-Wextra",
             "-Werror",
             "-fsyntax-only",
-            f"-I{P1}",
-            f"-I{P1.parent / 'p2'}",
+            *(f"-I{i}" for i in includes),
             str(source),
         ],
     )
+
+
+@pytest.mark.skipif(not COMPILERS, reason="a C compiler")
+@pytest.mark.parametrize("compiler", sorted(set(COMPILERS)))
+def test_the_headers_compile_strictly_with_nothing_else(compiler: str, tmp_path: Path) -> None:
+    source = tmp_path / "check.c"
+    source.write_text(SOURCE)
+    check_syntax(compiler, source, [P1, P1.parent / "p2"])
 
 
 def test_the_headers_do_not_name_python_or_the_runtime_of_wasm2c() -> None:
@@ -65,15 +75,4 @@ def test_the_headers_are_found_by_the_published_include_path_alone(compiler: str
     source.write_text(
         "#include <fusedwasi/p1/wasi_p1.h>\n#include <fusedwasi/p1/wasi_p1_unstable.h>\nint main(void) { return 0; }\n"
     )
-    build(
-        [
-            compiler,
-            "-std=c11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-fsyntax-only",
-            f"-I{P1.parent.parent}",
-            str(source),
-        ],
-    )
+    check_syntax(compiler, source, [P1.parent.parent])

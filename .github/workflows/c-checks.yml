@@ -49,3 +49,26 @@ jobs:
             cl /nologo /std:c11 /W3 /WX /c /Fo:NUL /I%INC%\p1 /I%INC%\p2 check.c || set FAIL=1
           )
           exit /b %FAIL%
+
+  msvc-run:
+    name: tests with the C drivers built by MSVC (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.11"
+      - run: uv sync
+      # The tests build their C with the compiler that FUSEDWASI_TEST_CC names: `cl` of the environment of vcvars64.bat, /std:c11 /W4 /WX, the same drivers that MinGW builds in test.yml,
+      # then run them and compare with the Python twin. The libraries are not on the command line: the headers ask for them with `#pragma comment(lib, ...)`, as for a user.
+      # -rs lists every skip with its reason; FUSEDWASI_ALLOWED_SKIPS fails the run when the reason is not one of what Windows does not have.
+      - name: Every C program and the Python twin of each, built with cl and run
+        shell: cmd
+        env:
+          FUSEDWASI_TEST_CC: cl
+          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers'
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          cl 2>&1 | findstr /i "Version"
+          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py

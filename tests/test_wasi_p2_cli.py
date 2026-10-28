@@ -4,14 +4,13 @@ The standard streams are streams of the caller (memory) and, in one scenario, pi
 """
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_cli as cli
@@ -20,7 +19,6 @@ from fusedwasi.p2.wasi_p2_core import TERMINAL_STDOUT, Exit, Trap, _load_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_cli_driver.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 SCENARIOS = ["main", "fd", "exit_ok", "exit_err", "exit_code"]
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="the driver uses pipe() and poll()")
@@ -124,7 +122,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2cli") / "driver"
-    build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
+    compile_c(DRIVER, binary, [C_P2])
     return binary
 
 

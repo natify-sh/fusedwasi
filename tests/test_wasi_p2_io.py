@@ -3,12 +3,11 @@
 No wasm2c and no module: a fake memory of 256 bytes, a bump allocator for `cabi_realloc`, the flat arguments as the core module gives them.
 """
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_io as io
@@ -16,7 +15,6 @@ from fusedwasi.p2.wasi_p2_core import Trap, _load_u32, _store_u32
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_io_driver.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 SCENARIOS = ["streams", "failure", "bad_handle", "oversize", "empty_poll", "no_realloc"]
 
@@ -147,7 +145,7 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     if CC is None:
         pytest.skip("no C compiler")
     binary = tmp_path_factory.mktemp("p2io") / "driver"
-    build([CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(DRIVER), "-o", str(binary)])
+    compile_c(DRIVER, binary, [C_P2])
     return binary
 
 

@@ -6,7 +6,6 @@ Nothing here is a feature; each test says what the host does where it does not d
 import importlib
 import inspect
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -15,15 +14,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_sockets as sk
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
-LIBS: list[str] = ["-lws2_32", "-lbcrypt"] if sys.platform == "win32" else []
 PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
 
 
@@ -191,9 +188,7 @@ int main(void) {
 """
     )
     binary = tmp_path / ("https.exe" if sys.platform == "win32" else "https")
-    build(
-        [CC, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(C_P2), str(source), "-o", str(binary), *LIBS],
-    )
+    compile_c(source, binary, [C_P2])
     out = subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.strip()
     rc, tag, message = out.split(" ", 2)
     assert rc != "0" and int(tag) == H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))

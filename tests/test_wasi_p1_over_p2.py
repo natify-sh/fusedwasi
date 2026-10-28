@@ -3,12 +3,11 @@ with the state; a preopen that cannot be opened is told; and (Python) a state ca
 
 import errno
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 
 from fusedwasi.p1 import E_NOENT, PreopenError, open_descriptors, wasi_p1
 from fusedwasi.p2 import KIND_DESCRIPTOR, Guest, State, wasi_p2_core
@@ -16,7 +15,6 @@ from fusedwasi.p2 import wasi_p2_filesystem as fs
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 C_P1 = C_P2.parent / "p1"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 
 def python_scenario(root: Path) -> list[str]:
@@ -129,22 +127,7 @@ def test_a_file_of_0_1_is_a_resource_of_0_2_in_the_same_state(tmp_path: Path) ->
     source = tmp_path / "scenario.c"
     source.write_text(C_SCENARIO)
     binary = tmp_path / "scenario"
-    build(
-        [
-            CC,
-            "-std=gnu11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-I",
-            str(C_P2),
-            "-I",
-            str(C_P1),
-            str(source),
-            "-o",
-            str(binary),
-        ]
-    )
+    compile_c(source, binary, [C_P2, C_P1])
     c_lines = subprocess.run(
         [str(binary), str(tmp_path / "c")], capture_output=True, text=True, check=True
     ).stdout.splitlines()
@@ -204,22 +187,7 @@ int main(int argc, char **argv) {
 """
     )
     binary = tmp_path / "bad"
-    build(
-        [
-            CC,
-            "-std=gnu11",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-I",
-            str(C_P2),
-            "-I",
-            str(C_P1),
-            str(source),
-            "-o",
-            str(binary),
-        ]
-    )
+    compile_c(source, binary, [C_P2, C_P1])
     (tmp_path / "there").mkdir()
     out = subprocess.run(
         [str(binary), str(tmp_path / "there"), str(tmp_path / "missing")], capture_output=True, text=True, check=True

@@ -4,17 +4,15 @@ Found by comparing with uvwasi, which maps 56 errnos; there were 27, and everyth
 """
 
 import errno
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from cbuild import build
+from cbuild import CC, compile_c
 
 C_P1 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p1"
 CHECK = Path(__file__).parent / "data" / "wasi_p1_errno_check.c"
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 # the errno enum of preview1 (witx), by name: the number a program sees
 WASI = {
@@ -33,20 +31,7 @@ WASI = {
 @pytest.mark.skipif(CC is None, reason="a C compiler")
 def test_every_errno_of_the_specification_has_its_own_number(tmp_path: Path) -> None:
     binary = tmp_path / "check"
-    build(
-        [
-            CC or "cc",
-            "-std=gnu11",
-            "-Wall",
-            "-I",
-            str(C_P1),
-            "-I",
-            str(C_P1.parent / "p2"),
-            str(CHECK),
-            "-o",
-            str(binary),
-        ],
-    )
+    compile_c(CHECK, binary, [C_P1, C_P1.parent / "p2"], werror=False)
     # on Windows Python's errno module has the Winsock numbers (10048 for EADDRINUSE) for the socket errors, and the C library has its own: those are left out there
     known = {name: getattr(errno, name) for name in WASI if hasattr(errno, name) and getattr(errno, name) < 10000}
     out = subprocess.run([str(binary), *map(str, known.values())], capture_output=True, text=True, check=True).stdout
