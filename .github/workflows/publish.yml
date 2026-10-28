@@ -52,7 +52,7 @@ jobs:
           cd /tmp
           /tmp/smoke/bin/python -c "import fusedwasi, fusedwasi.p1, fusedwasi.p2; from fusedwasi import signatures; print('ok', fusedwasi.__version__, fusedwasi.__file__, len(signatures.load('p2')))"
           printf '%s\n' '#include <fusedwasi/p1/wasi_p1.h>' '#include <fusedwasi/p2/wasi_p2_cli.h>' 'int main(void) { fusedwasi_p2_state s; fusedwasi_p2_init(&s); int c = fusedwasi_p2_state_closed(&s); fusedwasi_p2_free(&s); return c; }' > smoke.c
-          cc -std=c11 -Wall -Wextra -Werror -O2 -I"$(/tmp/smoke/bin/python -m fusedwasi)" smoke.c -o smoke && ./smoke
+          cc -std=c11 -Wall -Wextra -Werror -O2 -I"$(/tmp/smoke/bin/python -m fusedwasi)" smoke.c -o smoke_bin && ./smoke_bin
 
       - uses: actions/upload-artifact@v7
         with:
