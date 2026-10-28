@@ -11,26 +11,102 @@ Header-only C host for the WASI Component Model, for core modules fused from com
 
 ## The idea
 
-A tool such as `meld fuse` turns a composed component into **one core module**: a memory for each component, the adapters between them are plain wasm, and the imports are the flat core form of `wasi:*` functions. Such a module needs only a host that implements those imports. `fusedwasi` is that host and nothing else: no engine, no component parser, no canonical ABI between components (the fuse already built it in).
+fusedwasi is the **WASI side** of a program that runs outside an engine's own WASI: it implements the functions that a WebAssembly module imports from `wasi_snapshot_preview1`, `wasi_unstable` or `wasi:*@0.2.N`, as C headers and as a Python twin, with the state they need (files, streams, clocks, random bytes, tables of handles) and nothing else: no engine, no component parser, no canonical ABI between components. The engine is the one that runs the module; it gives the library a memory and calls one function per import. That is why any engine can use it, and why Wasmtime's or uvwasi's WASI, which belong to their own engines, are not needed.
+
+What it runs is a **core module** whose imports are WASI functions. A module built for WASI 0.1 is one already. A program built for WASI 0.2 is a *component*, which most engines for C and for Python cannot run (`wasm2c` refuses it, wasm3 and pywasm3 do not read it); the next section says how to get a core module out of it.
+
+## Fused modules: what they are and how to get one
+
+A **component** is the packaging of WASI 0.2: a wasm file that holds core modules and the wiring between them, in which a string or a list passes through the *canonical ABI* (a pointer and a length into a memory, the memory of whoever owns the value) and a resource is a handle. A **fused module** is the result of removing that wiring at build time: **one core module**, with one linear memory for each component that went in, in which the adapters between components are plain wasm and the imports that are left are the flat core form of the `wasi:*` functions (`wasi:cli/environment@0.2.6` `get-arguments` takes one `i32`, the pointer where the host writes the result). Such a module needs one thing from its host: those functions. `fusedwasi` has them.
+
+There are two ways to get one; take the first when there are several components or you want one file:
+
+| | `meld fuse` | `wasm-tools component unbundle` |
+|---|---|---|
+| What it does | joins one or more components into **one** core module (resolves the imports and exports between them, merges the index spaces, writes the adapters) | takes the core modules **out** of a component; nothing is joined |
+| Result | `fused.wasm`, one memory for each component | one core module for each core module inside, and `rest.wasm` (the wiring, which you do not need) |
+| Several components | yes | a core module for each component; the wiring is left in `rest.wasm`, so joining the modules is yours |
+| Where from | [pulseengine/meld](https://github.com/pulseengine/meld) (release tarball or `cargo build --release -p meld-cli`; the packages with that name on crates.io and PyPI are other projects) | [bytecodealliance/wasm-tools](https://github.com/bytecodealliance/wasm-tools) (release tarball, `cargo install wasm-tools`) |
+
+```sh
+# a program built as a component (clang from wasi-sdk shown; Rust: cargo build --target wasm32-wasip2; or compose your own with wasm-tools component new)
+clang --target=wasm32-wasip2 -O2 hello.c -o hello.component.wasm
+
+# 1. fuse: one component or several, into one core module
+meld fuse hello.component.wasm -o hello.fused.wasm
+meld fuse a.component.wasm b.component.wasm -o ab.fused.wasm
+
+# 2. or take the core modules out of a component (--threshold 0 takes all of them; by default only the ones above 10240 bytes are taken)
+wasm-tools component unbundle hello.component.wasm --module-dir modules --threshold 0 -o rest.wasm
+# modules/unbundled-module0.wasm is the program; the small ones next to it ("shim", "actual" imports) are the wiring of the component, not WASI
+
+# see what the module needs from its host: every import must be one that fusedwasi has
+wasm-tools print hello.fused.wasm | grep '(import'
+```
+
+This was run on a component of ours (`tests/neutral/programs/p2_command.component.wat`, with `meld 0.64.0` and `wasm-tools 1.262.0`): `meld fuse` gave one module of 2267 bytes with one memory and seven imports, all `wasi:*@0.2.6`; `unbundle --threshold 0` gave the same program as `unbundled-module0.wasm` with the same seven imports. Both ran on wasmtime-py through fusedwasi (`tests/neutral/neutral_wasmtime.py`) and wrote the same bytes and the same exit status. Every import of both was found by `fusedwasi.signatures.find_import(module, name)`, which is how a host checks a module before it runs it: a name that is not found is an import fusedwasi does not have.
+
+Two things to know. **meld** is not stable software: `meld 0.64.0` lost a `list<string>` inside a returned `option<record>` (fixed in 0.65.0 on the component where it was seen; the evidence is in the wasmext study of the component model), and it does not keep the async ABI of WASI 0.3 (see "Not here"); check a fused module against the unfused component on Wasmtime before you rely on it. **WASI 0.1 needs none of this**: a module built for `wasm32-wasip1` is a core module with `wasi_snapshot_preview1` imports already, and fusedwasi runs it as it is.
+
+## Using it with an engine
 
 ```mermaid
-flowchart TB
-    subgraph build["1. Build"]
-        direction LR
-        C1["component A<br/>(any language)"] --> F["meld fuse<br/>(or unbundle)"]
-        C2["component B"] --> F
-        F --> M["one core module<br/>memory per component<br/>imports wasi:*@0.2"]
-    end
+flowchart LR
+    src["your program<br/>C, Rust, Go, ..."]
+    src -->|"wasm32-wasip1"| core1["core module<br/>imports wasi_snapshot_preview1"]
+    src -->|"wasm32-wasip2"| comp["component(s)<br/>WASI 0.2"]
+    comp -->|"meld fuse<br/>one or many components"| fused["fused core module<br/>one memory per component<br/>imports wasi:...@0.2.N"]
+    comp -->|"wasm-tools component unbundle<br/>--threshold 0"| unb["core module taken out<br/>same wasi:... imports"]
 
-    subgraph run["2. Run"]
-        direction LR
-        H["C host (.h)<br/>wasm2c glue, other C hosts"] --> FW
-        Y["Python host (.py)<br/>Python engines"] --> FW
-        FW["fusedwasi<br/>state: handles, memories, hooks<br/>one function per import:<br/>cli · clocks · random · io · filesystem · sockets · http"]
-    end
+    core1 --> any{{"a core module whose<br/>imports are WASI functions"}}
+    fused --> any
+    unb --> any
 
-    build -- "AOT: wasm2c · runtime: any engine" --> run
+    any --> aot["AOT with wasm2c<br/>the C glue includes the headers,<br/>nothing is needed at run time"]
+    any --> ceng["a C engine<br/>wasm3, ...<br/>the embedder includes the headers"]
+    any --> peng["a Python engine<br/>wasmtime-py, pywasm3, ...<br/>the Python twin"]
+    any --> oop["an engine whose memory is outside<br/>the process: JavaScript, Pyodide<br/>memory is an object with read and write"]
+
+    aot --> fw["fusedwasi<br/>State: files, streams, clocks, random, handles<br/>Guest: memory, trap, realloc, exit<br/>one function for each import"]
+    ceng --> fw
+    peng --> fw
+    oop --> fw
 ```
+
+The engine and the library meet in the same few steps, whichever engine it is (a worked one is `tests/neutral/neutral_wasmtime.py`, about 130 lines for wasmtime-py; the C one over wasm3 is `tests/neutral/c_wasm3/neutral_wasm3.c`):
+
+```mermaid
+sequenceDiagram
+    participant H as host (your code and the engine)
+    participant T as fusedwasi.signatures
+    participant F as fusedwasi (State, Guest, functions)
+    participant M as the module
+
+    H->>F: State(args, env, preopens, ...) once, for as many instances as share a world
+    H->>F: Guest(state, memory, realloc, trap) for each instance
+    loop each import of the module
+        H->>T: find_import(module, name)
+        T-->>H: the row: C symbol, Python function, takes_comp
+        H->>H: bind the import to that function (arguments masked to unsigned)
+    end
+    H->>M: call _start, run or any export
+    M->>H: an import is called, with flat i32 and i64 arguments
+    H->>F: function(guest, [comp,] arguments)
+    F->>H: reads and writes the memory, calls realloc, calls the trap hook
+    F-->>M: the result: an errno, or a value
+    M-->>H: returns, or ends (guest.exited, guest.exit_code)
+```
+
+Pick by what you have:
+
+| You have | Do |
+|---|---|
+| a module for WASI 0.1 (`wasm32-wasip1`) | bind its imports with `find_import`; no fuse |
+| a component of WASI 0.2 | `meld fuse` it (or `unbundle` it), then as above |
+| a C program that is compiled ahead of time with `wasm2c` | `#include <fusedwasi/p2/wasi_p2_cli.h>` (and the others) in the glue; `python -m fusedwasi` prints the include path |
+| an embedder in C (wasm3, ...) | the same headers; the example is `tests/neutral/c_wasm3/` |
+| an engine for Python | `fusedwasi.p2.State` and `Guest`; one `Instance` class per engine, `tests/neutral/neutral_wasmtime.py` is about 130 lines |
+| an engine that keeps its memory out of the process | give `Guest` an object with `read(offset, length)`, `write(offset, data)` and `len()`: a call copies only the bytes it touches |
 
 **AOT and runtime.** The library asks the engine for two things only: the memory of each component (a base and a size) and a way to call a function for each import. So it does not matter how the module runs: compiled ahead of time to C with `wasm2c` (the C headers are included into the generated glue, nothing is needed at run time), or in an interpreter or a JIT that calls the same functions through its import table (the C headers from an embedder, the Python twin from a Python host). The AOT route (`wasm2c`) is run by users outside this repository; the runtime route is run here by the neutral users in `tests/neutral/` (C over wasm3, Python over wasmtime-py and over pywasm3).
 
