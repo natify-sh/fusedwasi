@@ -17,6 +17,9 @@
      copied out of its stack first, because the call reuses it);
    * the end of a program is read from the guest after the call: `g->exited` and `g->exit_code`, for 0.1 (`proc_exit`) and for 0.2 (`wasi:cli/exit`) alike. */
 
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS /* fopen: the standard function is what a portable user calls */
+#endif
 #include <setjmp.h>
 #include <stdint.h>
 #include <stdio.h>

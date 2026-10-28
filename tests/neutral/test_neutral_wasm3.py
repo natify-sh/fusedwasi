@@ -134,7 +134,7 @@ def run(
     done = subprocess.run([*command, *map(str, modules)], capture_output=True, check=False)
     results = [
         Result(m[2] == "1", int(m[3]), None if m[4] == "-" else m[4])
-        for m in re.finditer(r"^result (\d+) exited=(\d) code=(\d+) trap=(.*)$", done.stderr.decode(), re.MULTILINE)
+        for m in re.finditer(r"^result (\d+) exited=(\d) code=(\d+) trap=(.*?)\r?$", done.stderr.decode(), re.MULTILINE)
     ]
     return done.stdout, results, done.returncode
 
