@@ -30,6 +30,7 @@ dependencies = []
 
 [project.urls]
 Repository = "https://github.com/natify-sh/fusedwasi"
+Issues = "https://github.com/natify-sh/fusedwasi/issues"
 
 [build-system]
 requires = ["setuptools>=84", "setuptools-scm>=8"]
