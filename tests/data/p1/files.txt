@@ -1,0 +1,324 @@
+# WASI 0.1, the second stage: files and paths. The test builds the same tree under a root of its own for the C driver and for the Python twin:
+#   a.txt "hello file\n", sub/b.txt "bbb", link -> a.txt, loop -> loop, dirlink -> sub, esc -> ../outside, ro/ro.txt "readonly"
+# fd 3 is "/data" (read-write), fd 4 is "/ro" (read-only); the files opened here get 5, 6, ...
+preopen "$TMP" "/data" rw
+preopen "$TMP/ro" "/ro" ro
+start 16384
+
+# the stat of paths: type (1 byte at +16), links (+24), size (+32)
+mem put 1000 "a.txt"
+call path_filestat_get 3 1 1000 5 3000
+mem dump 3016 1 type
+mem dump 3024 16 nlink_size
+mem put 1000 "sub"
+call path_filestat_get 3 1 1000 3 3000
+mem dump 3016 1 type
+mem put 1000 "link"
+call path_filestat_get 3 1 1000 4 3000
+mem dump 3016 1 followed_type
+call path_filestat_get 3 0 1000 4 3000
+mem dump 3016 1 link_type
+mem put 1000 "dirlink"
+call path_filestat_get 3 1 1000 7 3000
+mem dump 3016 1 type
+mem put 1000 "loop"
+call path_filestat_get 3 1 1000 4 3000
+mem put 1000 "esc"
+call path_filestat_get 3 1 1000 3 3000
+mem put 1000 "missing"
+call path_filestat_get 3 1 1000 7 3000
+mem put 1000 "/a.txt"
+call path_filestat_get 3 1 1000 6 3000
+mem put 1000 "../a.txt"
+call path_filestat_get 3 1 1000 8 3000
+mem put 1000 "sub/../a.txt"
+call path_filestat_get 3 1 1000 12 3000
+mem put 1000 "sub/../../x"
+call path_filestat_get 3 1 1000 11 3000
+mem put 1000 "a.txt/"
+call path_filestat_get 3 1 1000 6 3000
+mem put 1000 "a.txt/x"
+call path_filestat_get 3 1 1000 7 3000
+mem put 1000 "sub/"
+call path_filestat_get 3 1 1000 4 3000
+mem put 1000 "."
+call path_filestat_get 3 1 1000 1 3000
+mem dump 3016 1 dot_type
+call path_filestat_get 3 1 1000 0 3000
+call path_filestat_get 3 1 1000 1 8190
+call path_filestat_get 99 1 1000 1 3000
+call path_filestat_get 1 1 1000 1 3000
+
+# reading a file
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+mem dump 3100 4 fd_a
+mem u32 2000 4000
+mem u32 2004 5
+mem u32 2008 4100
+mem u32 2012 100
+call fd_read 5 2000 2 3200
+mem dump 3200 4 nread
+mem dump 4000 5 part1
+mem dump 4100 6 part2
+call fd_read 5 2000 2 3200
+mem dump 3200 4 nread_eof
+call fd_tell 5 3208
+mem dump 3208 8 tell
+call fd_seek 5 2 0 3208
+mem dump 3208 8 seek_set
+call fd_seek 5 -3 2 3208
+mem dump 3208 8 seek_end
+call fd_seek 5 1 1 3208
+mem dump 3208 8 seek_cur
+call fd_seek 5 -100 0 3208
+call fd_seek 5 0 7 3208
+call fd_pread 5 2000 1 6 3216
+mem dump 3216 4 pread
+mem dump 4000 5 pread_data
+call fd_tell 5 3208
+mem dump 3208 8 tell_after_pread
+call fd_filestat_get 5 3000
+mem dump 3016 1 fstat_type
+mem dump 3032 8 fstat_size
+call fd_fdstat_get 5 3300
+mem dump 3300 24 fdstat_a
+call fd_write 5 2000 1 3200
+call fd_close 5
+call fd_close 5
+call fd_read 5 2000 1 3200
+
+# the iovecs out of the memory
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+mem u32 2000 16380
+mem u32 2004 100
+call fd_read 5 2000 1 3200
+call fd_read 5 8190 1 3200
+call fd_read 5 2000 1 8190
+call fd_close 5
+
+# creating, writing, truncating
+mem put 1000 "new.txt"
+call path_open 3 1 1000 7 1 536870911 536870911 0 3100
+mem dump 3100 4 fd_new
+call path_open 3 1 1000 7 5 536870911 536870911 0 3104
+mem put 4000 "0123456789"
+mem u32 2000 4000
+mem u32 2004 10
+call fd_write 5 2000 1 3200
+mem dump 3200 4 written
+call fd_pwrite 5 2000 1 20 3200
+call fd_filestat_get 5 3000
+mem dump 3032 8 size_after_pwrite
+call fd_filestat_set_size 5 4
+call fd_filestat_get 5 3000
+mem dump 3032 8 size_after_set_size
+call fd_allocate 5 0 100
+call fd_filestat_get 5 3000
+mem dump 3032 8 size_after_allocate
+call fd_sync 5
+call fd_datasync 5
+call fd_advise 5 0 10 0
+call fd_advise 5 0 10 9
+call fd_seek 5 0 0 3208
+call fd_read 5 2000 1 3200
+call fd_close 5
+call path_open 3 1 1000 7 8 536870911 536870911 0 3100
+call fd_filestat_get 5 3000
+mem dump 3032 8 size_after_trunc
+call fd_close 5
+
+# the flags of path_open
+mem put 1000 "sub"
+call path_open 3 1 1000 3 2 536870911 536870911 0 3100
+mem dump 3100 4 fd_dir
+call fd_close 5
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 2 536870911 536870911 0 3100
+mem put 1000 "sub"
+call path_open 3 1 1000 3 8 536870911 536870911 0 3100
+call path_open 3 1 1000 3 0 2 0 0 3100
+mem dump 3100 4 fd_dir_read
+call fd_close 5
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 5 536870911 536870911 0 3100
+call path_open 3 1 1000 5 4 536870911 536870911 0 3100
+mem put 1000 "missing"
+call path_open 3 1 1000 7 0 536870911 536870911 0 3100
+mem put 1000 "link"
+call path_open 3 1 1000 4 0 536870911 536870911 0 3100
+call fd_close 5
+call path_open 3 0 1000 4 0 536870911 536870911 0 3100
+mem put 1000 "loop"
+call path_open 3 1 1000 4 0 536870911 536870911 0 3100
+mem put 1000 "esc"
+call path_open 3 1 1000 3 0 536870911 536870911 0 3100
+mem put 1000 "../a.txt"
+call path_open 3 1 1000 8 0 536870911 536870911 0 3100
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 0 536870911 536870911 32 3100
+call fd_close 5
+call path_open 3 1 1000 5 0 536870911 536870911 4 3100
+call fd_fdstat_get 5 3300
+mem dump 3300 24 fdstat_append
+mem u32 2000 4000
+mem u32 2004 1
+call fd_write 5 2000 1 3200
+call fd_fdstat_set_flags 5 0
+call fd_fdstat_set_flags 5 16
+call fd_fdstat_set_rights 5 64 0
+call fd_fdstat_set_rights 5 536870911 0
+call fd_close 5
+call path_open 3 1 1000 5 0 2 0 0 3100
+call fd_write 5 2000 1 3200
+call fd_seek 5 0 0 3208
+call fd_close 5
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+call path_open 99 1 1000 5 0 1 0 0 3100
+call path_open 1 1 1000 5 0 1 0 0 3100
+call path_open 3 1 1000 5 0 1 0 0 8190
+
+# directories: create, remove, unlink
+mem put 1000 "d1"
+call path_create_directory 3 1000 2
+call path_create_directory 3 1000 2
+mem put 1000 "d1/d2"
+call path_create_directory 3 1000 5
+mem put 1000 "x/y"
+call path_create_directory 3 1000 3
+mem put 1000 "d1"
+call path_remove_directory 3 1000 2
+call path_unlink_file 3 1000 2
+mem put 1000 "d1/d2"
+call path_remove_directory 3 1000 5
+mem put 1000 "d1"
+call path_remove_directory 3 1000 2
+call path_remove_directory 3 1000 2
+mem put 1000 "a.txt"
+call path_remove_directory 3 1000 5
+mem put 1000 "new.txt"
+call path_unlink_file 3 1000 7
+call path_unlink_file 3 1000 7
+mem put 1000 "link"
+call path_unlink_file 3 1000 4
+call path_filestat_get 3 1 1000 4 3000
+mem put 1000 "../zz"
+call path_create_directory 3 1000 5
+mem put 1000 "zz"
+call path_create_directory 4 1000 2
+call path_unlink_file 4 1000 2
+
+# rename, link, symlink, readlink
+mem put 1000 "a.txt"
+mem put 1100 "b.txt"
+call path_rename 3 1000 5 3 1100 5
+call path_rename 3 1000 5 3 1100 5
+mem put 1000 "sub"
+mem put 1100 "sub2"
+call path_rename 3 1000 3 3 1100 4
+mem put 1000 "b.txt"
+mem put 1100 "sub2/b.txt"
+call path_rename 3 1000 5 3 1100 10
+mem put 1100 "../b.txt"
+call path_rename 3 1000 5 3 1100 8
+call path_link 3 1 1000 5 3 1100 3
+mem put 1000 "sub2/b.txt"
+mem put 1100 "hard"
+call path_link 3 1 1000 10 3 1100 4
+call path_filestat_get 3 1 1100 4 3000
+mem dump 3024 8 nlink
+call path_link 3 1 1000 10 3 1100 4
+mem put 1000 "sub2"
+call path_link 3 1 1000 4 3 1100 4
+mem put 1000 "hard"
+mem put 1100 "sym"
+call path_symlink 1000 4 3 1100 3
+call path_symlink 1000 4 3 1100 3
+mem put 1100 "sym"
+call path_readlink 3 1100 3 3400 100 3500
+mem dump 3500 4 readlink_used
+mem dump 3400 4 readlink_data
+call path_readlink 3 1100 3 3400 2 3500
+mem dump 3500 4 readlink_cut
+mem dump 3400 4 readlink_cut_data
+call path_readlink 3 1000 4 3400 100 3500
+mem put 1000 "missing"
+call path_readlink 3 1000 7 3400 100 3500
+mem put 1000 "abslink"
+call path_readlink 3 1000 7 3400 100 3500
+call path_readlink 3 1100 3 3400 100 3500
+mem put 1000 "/abs"
+mem put 1100 "abs"
+call path_symlink 1000 4 3 1100 3
+mem put 1000 "abs"
+call path_open 3 1 1000 3 0 536870911 536870911 0 3100
+call path_symlink 1000 3 4 1100 3
+
+# readdir
+mem put 1000 "."
+call path_open 3 1 1000 1 2 536870911 536870911 0 3100
+mem dump 3100 4 fd_root
+call fd_readdir 5 5000 4096 0 3600
+dirents 5000 3600 all
+call fd_readdir 5 5000 4096 2 3600
+dirents 5000 3600 from2
+call fd_readdir 5 5000 40 0 3600
+dirents 5000 3600 cut40
+call fd_readdir 5 5000 10 0 3600
+mem dump 3600 4 used10
+call fd_readdir 5 5000 4096 999 3600
+mem dump 3600 4 used_far
+call fd_readdir 5 8190 4096 0 3600
+call fd_close 5
+mem put 1000 "b.txt"
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+call fd_readdir 5 5000 4096 0 3600
+call fd_close 5
+
+# the read-only preopen
+mem put 1000 "ro.txt"
+call path_open 4 1 1000 6 0 2 0 0 3100
+call fd_close 5
+call path_open 4 1 1000 6 0 536870911 536870911 0 3100
+call fd_fdstat_get 5 3300
+mem dump 3300 24 fdstat_ro
+call fd_write 5 2000 1 3200
+call fd_close 5
+call path_open 4 1 1000 6 1 2 0 0 3100
+mem put 1000 "new"
+call path_open 4 1 1000 3 1 536870911 536870911 0 3100
+call fd_prestat_get 4 3700
+mem dump 3700 8 prestat_ro
+call fd_fdstat_get 4 3300
+mem dump 3300 24 fdstat_preopen_ro
+
+# times
+mem put 1000 "sub2/b.txt"
+call path_filestat_set_times 3 1 1000 10 5000000000 7000000000 5
+call path_filestat_get 3 1 1000 10 3000
+mem dump 3040 16 times_ns
+call path_filestat_set_times 3 1 1000 10 0 9000000000 4
+call path_filestat_get 3 1 1000 10 3000
+mem dump 3040 16 times_mtim_only
+call path_filestat_set_times 3 1 1000 10 1 1 3
+call path_filestat_set_times 3 1 1000 10 1 1 12
+call path_filestat_set_times 3 1 1000 10 1 1 15
+call path_open 3 1 1000 10 0 536870911 536870911 0 3100
+call fd_filestat_set_times 5 2000000000 3000000000 5
+call fd_filestat_get 5 3000
+mem dump 3040 16 fd_times_ns
+call fd_filestat_set_times 5 1 1 3
+call fd_filestat_set_times 5 1 1 12
+call fd_close 5
+
+# renumber and the end
+call fd_renumber 3 50
+call fd_renumber 3 4
+call fd_prestat_get 3 3700
+call fd_renumber 4 3
+call fd_prestat_get 3 3700
+call fd_prestat_get 4 3700
+call fd_prestat_dir_name 3 3800 3
+mem dump 3800 3 prestat_name
+call fd_close 3
+call fd_close 3

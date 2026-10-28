@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Override version for a build-only manual run"
+        required: false
+        type: string
+        default: ""
 
 run-name: >
   ${{ github.event_name == 'push' && 'Build & Publish PyPI' || 'Build' }}
@@ -18,24 +24,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # setuptools-scm takes the version from the tags
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
 
-      - name: The tag is the version in pyproject.toml
-        if: github.event_name == 'push'
-        run: |
-          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          test "v$version" = "${{ github.ref_name }}" || { echo "tag ${{ github.ref_name }} != version $version"; exit 1; }
-
       - name: Build (the wheel is built from the sdist, so this proves the sdist builds on its own)
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ inputs.version }}
+          # PyPI rejects local version segments (+g<hash>); keep them on build-only runs.
+          SETUPTOOLS_SCM_OVERRIDES_FOR_FUSEDWASI: >-
+            ${{ github.event_name == 'push' && '{local_scheme = "no-local-version"}' || '' }}
         run: uv build --out-dir dist
 
-      - name: Smoke-test the wheel in a clean environment
+      - name: The tag is the version of what was built
+        if: github.event_name == 'push'
+        run: |
+          wheel=$(ls dist/*.whl)
+          version=$(basename "$wheel" | cut -d- -f2)
+          test "v$version" = "${{ github.ref_name }}" || { echo "tag ${{ github.ref_name }} != version $version of $wheel"; exit 1; }
+
+      - name: Smoke-test the wheel in a clean environment (Python, the tables, and a C program against the headers)
         run: |
           uv venv -q /tmp/smoke
           uv pip install -q --python /tmp/smoke dist/*.whl
-          cd /tmp && /tmp/smoke/bin/python -c "import fusedwasi; print('ok', fusedwasi.__file__)"
+          cd /tmp
+          /tmp/smoke/bin/python -c "import fusedwasi, fusedwasi.p1, fusedwasi.p2; from fusedwasi import signatures; print('ok', fusedwasi.__version__, fusedwasi.__file__, len(signatures.load('p2')))"
+          printf '%s\n' '#include <fusedwasi/p1/wasi_p1.h>' '#include <fusedwasi/p2/wasi_p2_cli.h>' 'int main(void) { fusedwasi_p2_state s; fusedwasi_p2_init(&s); int c = fusedwasi_p2_state_closed(&s); fusedwasi_p2_free(&s); return c; }' > smoke.c
+          cc -std=c11 -Wall -Wextra -Werror -O2 -I"$(/tmp/smoke/bin/python -m fusedwasi)" smoke.c -o smoke && ./smoke
 
       - uses: actions/upload-artifact@v7
         with:
@@ -77,8 +94,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # a tag such as v0.1.0a1 is a pre-release on PyPI, so it is one here
+          case "${{ github.ref_name }}" in *a[0-9]*|*b[0-9]*|*rc[0-9]*|*.dev[0-9]*) pre=--prerelease ;; *) pre= ;; esac
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             --title "fusedwasi ${{ github.ref_name }}" \
-            --generate-notes \
+            --generate-notes $pre \
             artifacts/dist/*

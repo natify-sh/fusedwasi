@@ -1,0 +1,88 @@
+name: Neutral users
+
+# Programs that use fusedwasi and have nothing to do with wasm2c, wasmext or wasmhost: they include only the public headers and import only the public Python names
+# (docs/design_model.md, section 11). A change of the public interface that breaks one of them is a change that is reviewed, not worked around.
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore: ["docs/**", "*.md", "LICENSE"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python-wasmtime:
+    name: Python over wasmtime-py, with the official wasi-testsuite of 0.1 (ubuntu, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]  # the lowest the tests are written for, and the one the runner of the testsuite needs (it uses Path.relative_to(walk_up=), 3.12 and later)
+    steps:
+      - uses: actions/checkout@v7
+      # the branch with the compiled tests, at the commit the 72 tests of 0.1 were counted on
+      - uses: actions/checkout@v7
+        with:
+          repository: WebAssembly/wasi-testsuite
+          ref: 9dfd4867f12498bd6411a57739c24b4880668683
+          path: wasi-testsuite
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --group neutral
+      - name: The programs, against Wasmtime's own WASI
+        run: uv run --no-sync pytest tests/neutral -q
+      - name: The official wasi-testsuite (WASI 0.1), with fusedwasi as the WASI of wasmtime-py
+        if: matrix.python == '3.13'
+        working-directory: wasi-testsuite
+        run: |
+          uv run --no-sync --project .. python run-tests --disable-colors --runtime-adapter ../tests/neutral/wasi_testsuite_adapter.py --json-output-location "$RUNNER_TEMP/report.json"
+          uv run --no-sync --project .. python - <<'PY'
+          import json, os
+          results = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "report.json")))["results"]
+          passed = sum(r["passed"] for r in results)
+          failed = sum(r["failed"] + r["xpassed"] for r in results)
+          print(f"{passed} passed, {failed} failed")
+          assert failed == 0 and passed >= 72
+          PY
+
+  c-wasm3:
+    name: C over wasm3 (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # the engine is not in this repository: the tag v0.5.0
+      - uses: actions/checkout@v7
+        with:
+          repository: wasm3/wasm3
+          ref: 6b8bcb1e07bf26ebef09a7211b0a37a446eafd52
+          path: wasm3
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # Python is here to write the glue out of the public table of signatures, to turn the text of the programs into modules, and for the reference run under Wasmtime
+      - run: uv sync --group neutral
+      - name: The driver is built from the public headers and run on the programs
+        run: uv run --no-sync pytest tests/neutral/test_neutral_wasm3.py -q
+        env:
+          WASM3_SRC: ${{ github.workspace }}/wasm3
+
+  python-wasm3:
+    name: Python over pywasm3 (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # pywasm3 0.5.0 has only a source distribution (2021): it is built here, which needs a C compiler and the headers of Python
+      - run: uv sync --group neutral --group neutral-wasm3
+      - name: The programs, against Wasmtime's own WASI
+        run: |
+          uv run --no-sync python -c "import wasm3; print('pywasm3 with wasm3', wasm3.M3_VERSION)"
+          uv run --no-sync pytest tests/neutral/test_neutral_wasm3py.py -q -rs

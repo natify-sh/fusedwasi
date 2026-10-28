@@ -1,0 +1,962 @@
+{
+  "schema": 1,
+  "snapshot": "p1",
+  "api": "wasi_snapshot_preview1",
+  "generator": "tools/make_signatures.py",
+  "source": {
+    "repository": "https://github.com/WebAssembly/WASI",
+    "tag": "v0.2.9",
+    "commit": "34c0258951fbd31b2e7591c5d4cdc5ebc760bcfc",
+    "license": "tools/spec_sources/LICENSE.md",
+    "files": [
+      {"path": "wasi_p1/typenames.witx", "sha256": "980ef8a0f8d345f65d0c7ce07f01981174712ae0c6c44b3c250cbb2b0c752dc5"},
+      {"path": "wasi_p1/wasi_snapshot_preview1.witx", "sha256": "30e31a9b830d3fad998701fc9439a5506af4dbb8f01202854c8af46d436de679"}
+    ]
+  },
+  "count": 46,
+  "functions": [
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "args_get",
+      "official_name": "args_get",
+      "protocol": "ArgsGet",
+      "doc": "Read command-line argument data.",
+      "c_name": "fusedwasi_p1_args_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "args_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "argv", "type": "i32", "role": "pointer", "source_type": "(@witx pointer (@witx pointer u8))"},
+        {"name": "argv_buf", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "args_sizes_get",
+      "official_name": "args_sizes_get",
+      "protocol": "ArgsSizesGet",
+      "doc": "Return command-line argument data sizes.",
+      "c_name": "fusedwasi_p1_args_sizes_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "args_sizes_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "retptr0", "type": "i32", "role": "retptr", "source_type": "size"},
+        {"name": "retptr1", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "environ_get",
+      "official_name": "environ_get",
+      "protocol": "EnvironGet",
+      "doc": "Read environment variable data.",
+      "c_name": "fusedwasi_p1_environ_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "environ_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "environ", "type": "i32", "role": "pointer", "source_type": "(@witx pointer (@witx pointer u8))"},
+        {"name": "environ_buf", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "environ_sizes_get",
+      "official_name": "environ_sizes_get",
+      "protocol": "EnvironSizesGet",
+      "doc": "Return environment variable data sizes.",
+      "c_name": "fusedwasi_p1_environ_sizes_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "environ_sizes_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "retptr0", "type": "i32", "role": "retptr", "source_type": "size"},
+        {"name": "retptr1", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "clock_res_get",
+      "official_name": "clock_res_get",
+      "protocol": "ClockResGet",
+      "doc": "Return the resolution of a clock.",
+      "c_name": "fusedwasi_p1_clock_res_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "clock_res_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "id", "type": "i32", "role": "value", "source_type": "clockid"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "timestamp"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "clock_time_get",
+      "official_name": "clock_time_get",
+      "protocol": "ClockTimeGet",
+      "doc": "Return the time value of a clock.",
+      "c_name": "fusedwasi_p1_clock_time_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "clock_time_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "id", "type": "i32", "role": "value", "source_type": "clockid"},
+        {"name": "precision", "type": "i64", "role": "value", "source_type": "timestamp"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "timestamp"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_advise",
+      "official_name": "fd_advise",
+      "protocol": "FdAdvise",
+      "doc": "Provide file advisory information on a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_advise",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_advise",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "offset", "type": "i64", "role": "value", "source_type": "filesize"},
+        {"name": "len", "type": "i64", "role": "value", "source_type": "filesize"},
+        {"name": "advice", "type": "i32", "role": "value", "source_type": "advice"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_allocate",
+      "official_name": "fd_allocate",
+      "protocol": "FdAllocate",
+      "doc": "Force the allocation of space in a file.",
+      "c_name": "fusedwasi_p1_fd_allocate",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_allocate",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "offset", "type": "i64", "role": "value", "source_type": "filesize"},
+        {"name": "len", "type": "i64", "role": "value", "source_type": "filesize"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_close",
+      "official_name": "fd_close",
+      "protocol": "FdClose",
+      "doc": "Close a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_close",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_close",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_datasync",
+      "official_name": "fd_datasync",
+      "protocol": "FdDatasync",
+      "doc": "Synchronize the data of a file to disk.",
+      "c_name": "fusedwasi_p1_fd_datasync",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_datasync",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_fdstat_get",
+      "official_name": "fd_fdstat_get",
+      "protocol": "FdFdstatGet",
+      "doc": "Get the attributes of a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_fdstat_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_fdstat_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "fdstat"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_fdstat_set_flags",
+      "official_name": "fd_fdstat_set_flags",
+      "protocol": "FdFdstatSetFlags",
+      "doc": "Adjust the flags associated with a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_fdstat_set_flags",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_fdstat_set_flags",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "flags", "type": "i32", "role": "value", "source_type": "fdflags"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_fdstat_set_rights",
+      "official_name": "fd_fdstat_set_rights",
+      "protocol": "FdFdstatSetRights",
+      "doc": "Adjust the rights associated with a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_fdstat_set_rights",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_fdstat_set_rights",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "fs_rights_base", "type": "i64", "role": "value", "source_type": "rights"},
+        {"name": "fs_rights_inheriting", "type": "i64", "role": "value", "source_type": "rights"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_filestat_get",
+      "official_name": "fd_filestat_get",
+      "protocol": "FdFilestatGet",
+      "doc": "Return the attributes of an open file.",
+      "c_name": "fusedwasi_p1_fd_filestat_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_filestat_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "filestat"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_filestat_set_size",
+      "official_name": "fd_filestat_set_size",
+      "protocol": "FdFilestatSetSize",
+      "doc": "Adjust the size of an open file.",
+      "c_name": "fusedwasi_p1_fd_filestat_set_size",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_filestat_set_size",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "size", "type": "i64", "role": "value", "source_type": "filesize"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_filestat_set_times",
+      "official_name": "fd_filestat_set_times",
+      "protocol": "FdFilestatSetTimes",
+      "doc": "Adjust the timestamps of an open file or directory.",
+      "c_name": "fusedwasi_p1_fd_filestat_set_times",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_filestat_set_times",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "atim", "type": "i64", "role": "value", "source_type": "timestamp"},
+        {"name": "mtim", "type": "i64", "role": "value", "source_type": "timestamp"},
+        {"name": "fst_flags", "type": "i32", "role": "value", "source_type": "fstflags"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_pread",
+      "official_name": "fd_pread",
+      "protocol": "FdPread",
+      "doc": "Read from a file descriptor, without using and updating the file descriptor's offset.",
+      "c_name": "fusedwasi_p1_fd_pread",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_pread",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "iovs", "type": "i32", "role": "pointer", "source_type": "iovec_array"},
+        {"name": "iovs_len", "type": "i32", "role": "length", "source_type": "iovec_array"},
+        {"name": "offset", "type": "i64", "role": "value", "source_type": "filesize"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_prestat_get",
+      "official_name": "fd_prestat_get",
+      "protocol": "FdPrestatGet",
+      "doc": "Return a description of the given preopened file descriptor.",
+      "c_name": "fusedwasi_p1_fd_prestat_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_prestat_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "prestat"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_prestat_dir_name",
+      "official_name": "fd_prestat_dir_name",
+      "protocol": "FdPrestatDirName",
+      "doc": "Return a description of the given preopened file descriptor.",
+      "c_name": "fusedwasi_p1_fd_prestat_dir_name",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_prestat_dir_name",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_pwrite",
+      "official_name": "fd_pwrite",
+      "protocol": "FdPwrite",
+      "doc": "Write to a file descriptor, without using and updating the file descriptor's offset.",
+      "c_name": "fusedwasi_p1_fd_pwrite",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_pwrite",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "iovs", "type": "i32", "role": "pointer", "source_type": "ciovec_array"},
+        {"name": "iovs_len", "type": "i32", "role": "length", "source_type": "ciovec_array"},
+        {"name": "offset", "type": "i64", "role": "value", "source_type": "filesize"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_read",
+      "official_name": "fd_read",
+      "protocol": "FdRead",
+      "doc": "Read from a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_read",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_read",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "iovs", "type": "i32", "role": "pointer", "source_type": "iovec_array"},
+        {"name": "iovs_len", "type": "i32", "role": "length", "source_type": "iovec_array"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_readdir",
+      "official_name": "fd_readdir",
+      "protocol": "FdReaddir",
+      "doc": "Read directory entries from a directory.",
+      "c_name": "fusedwasi_p1_fd_readdir",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_readdir",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "buf", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"},
+        {"name": "buf_len", "type": "i32", "role": "length", "source_type": "size"},
+        {"name": "cookie", "type": "i64", "role": "value", "source_type": "dircookie"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_renumber",
+      "official_name": "fd_renumber",
+      "protocol": "FdRenumber",
+      "doc": "Atomically replace a file descriptor by renumbering another file descriptor.",
+      "c_name": "fusedwasi_p1_fd_renumber",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_renumber",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "to", "type": "i32", "role": "handle", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_seek",
+      "official_name": "fd_seek",
+      "protocol": "FdSeek",
+      "doc": "Move the offset of a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_seek",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_seek",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "offset", "type": "i64", "role": "value", "source_type": "filedelta"},
+        {"name": "whence", "type": "i32", "role": "value", "source_type": "whence"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "filesize"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_sync",
+      "official_name": "fd_sync",
+      "protocol": "FdSync",
+      "doc": "Synchronize the data and metadata of a file to disk.",
+      "c_name": "fusedwasi_p1_fd_sync",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_sync",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_tell",
+      "official_name": "fd_tell",
+      "protocol": "FdTell",
+      "doc": "Return the current offset of a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_tell",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_tell",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "filesize"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "fd_write",
+      "official_name": "fd_write",
+      "protocol": "FdWrite",
+      "doc": "Write to a file descriptor.",
+      "c_name": "fusedwasi_p1_fd_write",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "fd_write",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "iovs", "type": "i32", "role": "pointer", "source_type": "ciovec_array"},
+        {"name": "iovs_len", "type": "i32", "role": "length", "source_type": "ciovec_array"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_create_directory",
+      "official_name": "path_create_directory",
+      "protocol": "PathCreateDirectory",
+      "doc": "Create a directory.",
+      "c_name": "fusedwasi_p1_path_create_directory",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_create_directory",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_filestat_get",
+      "official_name": "path_filestat_get",
+      "protocol": "PathFilestatGet",
+      "doc": "Return the attributes of a file or directory.",
+      "c_name": "fusedwasi_p1_path_filestat_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_filestat_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "flags", "type": "i32", "role": "value", "source_type": "lookupflags"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "filestat"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_filestat_set_times",
+      "official_name": "path_filestat_set_times",
+      "protocol": "PathFilestatSetTimes",
+      "doc": "Adjust the timestamps of a file or directory.",
+      "c_name": "fusedwasi_p1_path_filestat_set_times",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_filestat_set_times",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "flags", "type": "i32", "role": "value", "source_type": "lookupflags"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "atim", "type": "i64", "role": "value", "source_type": "timestamp"},
+        {"name": "mtim", "type": "i64", "role": "value", "source_type": "timestamp"},
+        {"name": "fst_flags", "type": "i32", "role": "value", "source_type": "fstflags"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_link",
+      "official_name": "path_link",
+      "protocol": "PathLink",
+      "doc": "Create a hard link.",
+      "c_name": "fusedwasi_p1_path_link",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_link",
+      "takes_comp": false,
+      "params": [
+        {"name": "old_fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "old_flags", "type": "i32", "role": "value", "source_type": "lookupflags"},
+        {"name": "old_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "old_path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "new_fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "new_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "new_path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_open",
+      "official_name": "path_open",
+      "protocol": "PathOpen",
+      "doc": "Open a file or directory.",
+      "c_name": "fusedwasi_p1_path_open",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_open",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "dirflags", "type": "i32", "role": "value", "source_type": "lookupflags"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "oflags", "type": "i32", "role": "value", "source_type": "oflags"},
+        {"name": "fs_rights_base", "type": "i64", "role": "value", "source_type": "rights"},
+        {"name": "fs_rights_inheriting", "type": "i64", "role": "value", "source_type": "rights"},
+        {"name": "fdflags", "type": "i32", "role": "value", "source_type": "fdflags"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_readlink",
+      "official_name": "path_readlink",
+      "protocol": "PathReadlink",
+      "doc": "Read the contents of a symbolic link.",
+      "c_name": "fusedwasi_p1_path_readlink",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_readlink",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "buf", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"},
+        {"name": "buf_len", "type": "i32", "role": "length", "source_type": "size"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_remove_directory",
+      "official_name": "path_remove_directory",
+      "protocol": "PathRemoveDirectory",
+      "doc": "Remove a directory.",
+      "c_name": "fusedwasi_p1_path_remove_directory",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_remove_directory",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_rename",
+      "official_name": "path_rename",
+      "protocol": "PathRename",
+      "doc": "Rename a file or directory.",
+      "c_name": "fusedwasi_p1_path_rename",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_rename",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "old_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "old_path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "new_fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "new_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "new_path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_symlink",
+      "official_name": "path_symlink",
+      "protocol": "PathSymlink",
+      "doc": "Create a symbolic link.",
+      "c_name": "fusedwasi_p1_path_symlink",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_symlink",
+      "takes_comp": false,
+      "params": [
+        {"name": "old_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "old_path_len", "type": "i32", "role": "length", "source_type": "string"},
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "new_path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "new_path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "path_unlink_file",
+      "official_name": "path_unlink_file",
+      "protocol": "PathUnlinkFile",
+      "doc": "Unlink a file.",
+      "c_name": "fusedwasi_p1_path_unlink_file",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "path_unlink_file",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "path", "type": "i32", "role": "pointer", "source_type": "string"},
+        {"name": "path_len", "type": "i32", "role": "length", "source_type": "string"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "poll_oneoff",
+      "official_name": "poll_oneoff",
+      "protocol": "PollOneoff",
+      "doc": "Concurrently poll for the occurrence of a set of events.",
+      "c_name": "fusedwasi_p1_poll_oneoff",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "poll_oneoff",
+      "takes_comp": false,
+      "params": [
+        {"name": "in", "type": "i32", "role": "pointer", "source_type": "(@witx const_pointer subscription)"},
+        {"name": "out", "type": "i32", "role": "pointer", "source_type": "(@witx pointer event)"},
+        {"name": "nsubscriptions", "type": "i32", "role": "length", "source_type": "size"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "proc_exit",
+      "official_name": "proc_exit",
+      "protocol": "ProcExit",
+      "doc": "Terminate the process normally.",
+      "c_name": "fusedwasi_p1_proc_exit",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "proc_exit",
+      "takes_comp": false,
+      "params": [
+        {"name": "rval", "type": "i32", "role": "value", "source_type": "exitcode"}
+      ],
+      "results": []
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "proc_raise",
+      "official_name": "proc_raise",
+      "protocol": "ProcRaise",
+      "doc": "Send a signal to the process of the calling thread.",
+      "c_name": "fusedwasi_p1_proc_raise",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "proc_raise",
+      "takes_comp": false,
+      "params": [
+        {"name": "sig", "type": "i32", "role": "value", "source_type": "signal"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "sched_yield",
+      "official_name": "sched_yield",
+      "protocol": "SchedYield",
+      "doc": "Temporarily yield execution of the calling thread.",
+      "c_name": "fusedwasi_p1_sched_yield",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "sched_yield",
+      "takes_comp": false,
+      "params": [],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "random_get",
+      "official_name": "random_get",
+      "protocol": "RandomGet",
+      "doc": "Write high-quality random data into a buffer.",
+      "c_name": "fusedwasi_p1_random_get",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "random_get",
+      "takes_comp": false,
+      "params": [
+        {"name": "buf", "type": "i32", "role": "pointer", "source_type": "(@witx pointer u8)"},
+        {"name": "buf_len", "type": "i32", "role": "length", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "sock_accept",
+      "official_name": "sock_accept",
+      "protocol": "SockAccept",
+      "doc": "Accept a new incoming connection.",
+      "c_name": "fusedwasi_p1_sock_accept",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "sock_accept",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "flags", "type": "i32", "role": "value", "source_type": "fdflags"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "fd"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "sock_recv",
+      "official_name": "sock_recv",
+      "protocol": "SockRecv",
+      "doc": "Receive a message from a socket.",
+      "c_name": "fusedwasi_p1_sock_recv",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "sock_recv",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "ri_data", "type": "i32", "role": "pointer", "source_type": "iovec_array"},
+        {"name": "ri_data_len", "type": "i32", "role": "length", "source_type": "iovec_array"},
+        {"name": "ri_flags", "type": "i32", "role": "value", "source_type": "riflags"},
+        {"name": "retptr0", "type": "i32", "role": "retptr", "source_type": "size"},
+        {"name": "retptr1", "type": "i32", "role": "retptr", "source_type": "roflags"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "sock_send",
+      "official_name": "sock_send",
+      "protocol": "SockSend",
+      "doc": "Send a message on a socket.",
+      "c_name": "fusedwasi_p1_sock_send",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "sock_send",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "si_data", "type": "i32", "role": "pointer", "source_type": "ciovec_array"},
+        {"name": "si_data_len", "type": "i32", "role": "length", "source_type": "ciovec_array"},
+        {"name": "si_flags", "type": "i32", "role": "value", "source_type": "siflags"},
+        {"name": "retptr", "type": "i32", "role": "retptr", "source_type": "size"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    },
+    {
+      "module": "wasi_snapshot_preview1",
+      "name": "sock_shutdown",
+      "official_name": "sock_shutdown",
+      "protocol": "SockShutdown",
+      "doc": "Shut down socket send and receive channels.",
+      "c_name": "fusedwasi_p1_sock_shutdown",
+      "python_module": "fusedwasi.p1.wasi_p1",
+      "python_name": "sock_shutdown",
+      "takes_comp": false,
+      "params": [
+        {"name": "fd", "type": "i32", "role": "handle", "source_type": "fd"},
+        {"name": "how", "type": "i32", "role": "value", "source_type": "sdflags"}
+      ],
+      "results": [
+        {"name": "errno", "type": "i32", "role": "errno", "source_type": "errno"}
+      ]
+    }
+  ],
+  "unstable": {
+    "module": "wasi_unstable",
+    "count": 45,
+    "differs": [
+      "fd_fdstat_get",
+      "fd_filestat_get",
+      "fd_seek",
+      "path_filestat_get",
+      "poll_oneoff"
+    ],
+    "functions": [
+      {"name": "args_get", "c_name": "fusedwasi_p1_args_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "args_get"},
+      {"name": "args_sizes_get", "c_name": "fusedwasi_p1_args_sizes_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "args_sizes_get"},
+      {"name": "environ_get", "c_name": "fusedwasi_p1_environ_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "environ_get"},
+      {"name": "environ_sizes_get", "c_name": "fusedwasi_p1_environ_sizes_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "environ_sizes_get"},
+      {"name": "clock_res_get", "c_name": "fusedwasi_p1_clock_res_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "clock_res_get"},
+      {"name": "clock_time_get", "c_name": "fusedwasi_p1_clock_time_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "clock_time_get"},
+      {"name": "fd_advise", "c_name": "fusedwasi_p1_fd_advise", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_advise"},
+      {"name": "fd_allocate", "c_name": "fusedwasi_p1_fd_allocate", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_allocate"},
+      {"name": "fd_close", "c_name": "fusedwasi_p1_fd_close", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_close"},
+      {"name": "fd_datasync", "c_name": "fusedwasi_p1_fd_datasync", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_datasync"},
+      {"name": "fd_fdstat_get", "c_name": "fusedwasi_p1_unstable_fd_fdstat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_fdstat_get"},
+      {"name": "fd_fdstat_set_flags", "c_name": "fusedwasi_p1_fd_fdstat_set_flags", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_fdstat_set_flags"},
+      {"name": "fd_fdstat_set_rights", "c_name": "fusedwasi_p1_fd_fdstat_set_rights", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_fdstat_set_rights"},
+      {"name": "fd_filestat_get", "c_name": "fusedwasi_p1_unstable_fd_filestat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_filestat_get"},
+      {"name": "fd_filestat_set_size", "c_name": "fusedwasi_p1_fd_filestat_set_size", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_filestat_set_size"},
+      {"name": "fd_filestat_set_times", "c_name": "fusedwasi_p1_fd_filestat_set_times", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_filestat_set_times"},
+      {"name": "fd_pread", "c_name": "fusedwasi_p1_fd_pread", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_pread"},
+      {"name": "fd_prestat_get", "c_name": "fusedwasi_p1_fd_prestat_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_prestat_get"},
+      {"name": "fd_prestat_dir_name", "c_name": "fusedwasi_p1_fd_prestat_dir_name", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_prestat_dir_name"},
+      {"name": "fd_pwrite", "c_name": "fusedwasi_p1_fd_pwrite", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_pwrite"},
+      {"name": "fd_read", "c_name": "fusedwasi_p1_fd_read", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_read"},
+      {"name": "fd_readdir", "c_name": "fusedwasi_p1_fd_readdir", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_readdir"},
+      {"name": "fd_renumber", "c_name": "fusedwasi_p1_fd_renumber", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_renumber"},
+      {"name": "fd_seek", "c_name": "fusedwasi_p1_unstable_fd_seek", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "fd_seek"},
+      {"name": "fd_sync", "c_name": "fusedwasi_p1_fd_sync", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_sync"},
+      {"name": "fd_tell", "c_name": "fusedwasi_p1_fd_tell", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_tell"},
+      {"name": "fd_write", "c_name": "fusedwasi_p1_fd_write", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "fd_write"},
+      {"name": "path_create_directory", "c_name": "fusedwasi_p1_path_create_directory", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_create_directory"},
+      {"name": "path_filestat_get", "c_name": "fusedwasi_p1_unstable_path_filestat_get", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "path_filestat_get"},
+      {"name": "path_filestat_set_times", "c_name": "fusedwasi_p1_path_filestat_set_times", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_filestat_set_times"},
+      {"name": "path_link", "c_name": "fusedwasi_p1_path_link", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_link"},
+      {"name": "path_open", "c_name": "fusedwasi_p1_path_open", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_open"},
+      {"name": "path_readlink", "c_name": "fusedwasi_p1_path_readlink", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_readlink"},
+      {"name": "path_remove_directory", "c_name": "fusedwasi_p1_path_remove_directory", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_remove_directory"},
+      {"name": "path_rename", "c_name": "fusedwasi_p1_path_rename", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_rename"},
+      {"name": "path_symlink", "c_name": "fusedwasi_p1_path_symlink", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_symlink"},
+      {"name": "path_unlink_file", "c_name": "fusedwasi_p1_path_unlink_file", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "path_unlink_file"},
+      {"name": "poll_oneoff", "c_name": "fusedwasi_p1_unstable_poll_oneoff", "python_module": "fusedwasi.p1.wasi_p1_unstable", "python_name": "poll_oneoff"},
+      {"name": "proc_exit", "c_name": "fusedwasi_p1_proc_exit", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "proc_exit"},
+      {"name": "proc_raise", "c_name": "fusedwasi_p1_proc_raise", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "proc_raise"},
+      {"name": "sched_yield", "c_name": "fusedwasi_p1_sched_yield", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sched_yield"},
+      {"name": "random_get", "c_name": "fusedwasi_p1_random_get", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "random_get"},
+      {"name": "sock_recv", "c_name": "fusedwasi_p1_sock_recv", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_recv"},
+      {"name": "sock_send", "c_name": "fusedwasi_p1_sock_send", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_send"},
+      {"name": "sock_shutdown", "c_name": "fusedwasi_p1_sock_shutdown", "python_module": "fusedwasi.p1.wasi_p1", "python_name": "sock_shutdown"}
+    ]
+  }
+}

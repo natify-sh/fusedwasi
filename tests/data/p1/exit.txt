@@ -1,0 +1,3 @@
+# proc_exit alone: the program ends with its code, and the end of 0.2 holds the same code.
+start 8192
+call proc_exit 7

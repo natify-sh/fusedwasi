@@ -1,0 +1,30 @@
+# WASI 0.1, a file opened for appending: a write goes to the end, and so does a pwrite (the system does it for a descriptor opened that way); with the flag taken off both go where they are told.
+preopen "$TMP" "/data" rw
+hooks on
+start 8192
+mem put 1000 "app.txt"
+mem u32 5000 3100
+mem u32 5004 3
+mem u32 5008 3200
+mem u32 5012 2
+mem put 3100 "abc"
+mem put 3200 "ZZ"
+# create with append flag (fdflags 1), all rights
+call path_open 3 1 1000 7 1 536870911 536870911 1 4000
+call fd_write 4 5000 1 4100
+call fd_tell 4 4200
+mem dump 4200 8 tell_after_write
+call fd_pwrite 4 5008 1 0 4100
+call fd_seek 4 0 0 4200
+mem zero 6000 20
+mem u32 5100 6000
+mem u32 5104 16
+call fd_read 4 5100 1 4300
+mem dump 4300 4 n
+mem dump 6000 8 content
+call fd_fdstat_set_flags 4 0
+call fd_write 4 5000 1 4100
+call fd_pwrite 4 5008 1 0 4100
+call fd_seek 4 0 0 4200
+call fd_read 4 5100 1 4300
+mem dump 6000 12 content2

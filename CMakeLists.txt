@@ -6,8 +6,20 @@ set(FUSEDWASI_VERSION_MINOR 0)
 set(FUSEDWASI_VERSION_PATCH 0)
 set(FUSEDWASI_VERSION "${FUSEDWASI_VERSION_MAJOR}.${FUSEDWASI_VERSION_MINOR}.${FUSEDWASI_VERSION_PATCH}-dev")
 
+# An sdist has no git: its PKG-INFO has the version (a pre-release such as 0.1.0a1 gives 0.1.0).
+if(NOT DEFINED FUSEDWASI_VERSION_OVERRIDE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/PKG-INFO")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/PKG-INFO" _pkg_version REGEX "^Version: ")
+    if(_pkg_version MATCHES "^Version: ([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+        set(FUSEDWASI_VERSION_MAJOR ${CMAKE_MATCH_1})
+        set(FUSEDWASI_VERSION_MINOR ${CMAKE_MATCH_2})
+        set(FUSEDWASI_VERSION_PATCH ${CMAKE_MATCH_3})
+        string(REGEX REPLACE "^Version: " "" FUSEDWASI_VERSION "${_pkg_version}")
+        set(FUSEDWASI_VERSION_OVERRIDE ON)
+    endif()
+endif()
+
 find_package(Git QUIET)
-if(GIT_FOUND)
+if(GIT_FOUND AND NOT FUSEDWASI_VERSION_OVERRIDE)
     execute_process(
         COMMAND ${GIT_EXECUTABLE} describe --tags --always
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -45,7 +57,7 @@ add_library(fusedwasi::headers ALIAS fusedwasi_headers)
 set_target_properties(fusedwasi_headers PROPERTIES EXPORT_NAME headers)
 
 target_include_directories(fusedwasi_headers INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/fusedwasi/include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
     $<INSTALL_INTERFACE:include>)
 
@@ -55,11 +67,21 @@ if(FUSEDWASI_INSTALL)
     include(CMakePackageConfigHelpers)
 
     # Headers
-    install(DIRECTORY include/
+    install(DIRECTORY src/fusedwasi/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/generated/fusedwasi/version.h"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/fusedwasi)
+
+    # Tables of the signatures of the WASI imports and the Protocol stubs (data, as the Python package carries them)
+    install(DIRECTORY src/fusedwasi/signatures/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fusedwasi/signatures
+        FILES_MATCHING PATTERN "*.json" PATTERN "*.pyi"
+        PATTERN "__pycache__" EXCLUDE)
+
+    # The public names, in C and in Python, with a line of purpose each (data: docs/public_api.md is made from it)
+    install(FILES src/fusedwasi/public_api.json
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/fusedwasi)
 
     install(TARGETS fusedwasi_headers
         EXPORT fusedwasi-targets

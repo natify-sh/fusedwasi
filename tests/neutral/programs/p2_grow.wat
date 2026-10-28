@@ -1,0 +1,25 @@
+;; A WASI 0.2 core module whose cabi_realloc gives every allocation a page of its own and grows the memory to do it, so that an engine that moves its memory when it grows moves
+;; it in the middle of a call of fusedwasi. It writes its arguments, one after the other without a separator ("progab" for prog a b), and returns.
+(module
+  (import "wasi:cli/environment@0.2.6" "get-arguments" (func $get_arguments (param i32)))
+  (import "wasi:cli/stdout@0.2.6" "get-stdout" (func $get_stdout (result i32)))
+  (import "wasi:io/streams@0.2.6" "[method]output-stream.blocking-write-and-flush" (func $write_and_flush (param i32 i32 i32 i32)))
+  (memory (export "memory") 1)
+  (func (export "cabi_realloc") (param $old_ptr i32) (param $old_size i32) (param $align i32) (param $new_size i32) (result i32)
+    (local $ptr i32)
+    (if (i32.eqz (local.get $new_size)) (then (return (local.get $align))))
+    (local.set $ptr (i32.mul (memory.size) (i32.const 65536)))
+    (drop (memory.grow (i32.const 1)))
+    (local.get $ptr))
+  (func (export "run")
+    (local $out i32) (local $list i32) (local $count i32) (local $i i32) (local $entry i32)
+    (local.set $out (call $get_stdout))
+    (call $get_arguments (i32.const 64))
+    (local.set $list (i32.load (i32.const 64)))
+    (local.set $count (i32.load (i32.const 68)))
+    (block $done (loop $each
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $entry (i32.add (local.get $list) (i32.shl (local.get $i) (i32.const 3))))
+      (call $write_and_flush (local.get $out) (i32.load (local.get $entry)) (i32.load offset=4 (local.get $entry)) (i32.const 96))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $each)))))

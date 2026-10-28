@@ -1,0 +1,167 @@
+# WASI 0.1, the third stage: poll_oneoff on clocks and on descriptors that are always ready, the sockets that there are none of, and wasi_unstable.
+# A subscription is 48 bytes (56 in wasi_unstable): userdata u64, tag u8 at +8 (0 clock, 1 fd_read, 2 fd_write), then the clock (id u32 at +16, timeout u64 at +24,
+# flags u16 at +40) or the descriptor (u32 at +16). An event is 32 bytes: userdata, error u16 at +8, type u8 at +10, nbytes u64 at +16, flags u16 at +24.
+# The hook of the sleep prints `sleep <ns>`; the clocks are the hooks (1000 + 7 * id).
+preopen "$TMP" "/data" rw
+hooks on
+stdin "input"
+start 16384
+
+# one clock, relative: the program sleeps its time and the event is told
+mem zero 5000 512
+mem u64 5000 4660
+mem u32 5016 1
+mem u64 5024 5000000
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6400 4 nevents
+mem dump 6000 32 clock_event
+
+# two clocks: the shorter one is slept, only it is told
+mem u64 5048 22136
+mem put 5056 "\x00"
+mem u32 5064 1
+mem u64 5072 9000000
+mem zero 6000 256
+call poll_oneoff 5000 6000 2 6400
+mem dump 6400 4 nevents
+mem dump 6000 32 first_event
+
+# absolute: the clock of the hook is 1007, so 500 ns are left
+mem u64 5024 1507
+mem u32 5040 1
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 abs_event
+mem u64 5024 900
+call poll_oneoff 5000 6000 1 6400
+mem dump 6400 4 nevents_due
+
+# the clocks of the process and the thread, and flags that are not
+mem u32 5040 0
+mem u32 5016 2
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 clock2_event
+mem u32 5016 1
+mem u32 5040 2
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 flags_event
+mem u32 5040 0
+
+# the descriptors: a regular file is ready at once, with the bytes to the end
+mem put 1000 "a.txt"
+mem zero 5000 512
+mem u64 5000 1
+mem put 5008 "\x01"
+mem u32 5016 4
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6400 4 nevents
+mem dump 6000 32 file_read_event
+mem put 5008 "\x02"
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 file_write_event
+mem u32 5016 99
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 bad_fd_event
+mem u32 5016 3
+mem put 5008 "\x01"
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 dir_event
+mem u32 5016 0
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 stdin_event
+mem u32 5016 1
+mem put 5008 "\x02"
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 stdout_event
+call fd_close 4
+
+# a file opened without the right to poll
+call path_open 3 1 1000 5 0 2 0 0 3100
+mem u32 5016 4
+mem put 5008 "\x01"
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 no_right_event
+call fd_close 4
+
+# a descriptor that is ready and a clock: there is no sleep
+mem u64 5048 2
+mem put 5056 "\x00"
+mem u32 5064 1
+mem u64 5072 5000000
+mem u32 5016 3
+mem put 5008 "\x01"
+mem zero 6000 256
+call poll_oneoff 5000 6000 2 6400
+mem dump 6400 4 nevents_mixed
+mem dump 6000 64 mixed_events
+
+# the mistakes of the call
+call poll_oneoff 5000 6000 0 6400
+call poll_oneoff 16300 6000 1 6400
+call poll_oneoff 5000 16380 1 6400
+call poll_oneoff 5000 6000 1 16382
+mem put 5008 "\x07"
+call poll_oneoff 5000 6000 1 6400
+
+# the sockets: no descriptor is one
+call sock_recv 0 5000 1 0 6000 6100
+call sock_send 3 5000 1 0 6000
+call sock_shutdown 3 2
+call sock_accept 3 0 6000
+call sock_recv 99 5000 1 0 6000 6100
+call sock_send 99 5000 1 0 6000
+call sock_shutdown 99 2
+call sock_accept 99 0 6000
+
+# wasi_unstable: the order of whence, the filestat of 56 bytes, the subscription of 56 bytes
+mode unstable
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 0 536870911 536870911 0 3100
+call fd_seek 4 -3 1 3208
+mem dump 3208 8 end_minus_3
+call fd_seek 4 2 2 3208
+mem dump 3208 8 set_2
+call fd_seek 4 1 0 3208
+mem dump 3208 8 cur_plus_1
+call fd_seek 4 0 3 3208
+call fd_filestat_get 4 3000
+mem dump 3020 12 legacy_nlink_size
+call path_filestat_get 3 1 1000 5 3000
+mem dump 3016 1 legacy_type
+call fd_close 4
+mem zero 5000 512
+mem u64 5000 7
+mem put 5008 "\x00"
+mem u32 5024 1
+mem u64 5032 4000000
+mem zero 6000 256
+call poll_oneoff 5000 6000 1 6400
+mem dump 6000 32 legacy_clock_event
+
+# wasi_unstable: the rights are of 29 bits (no sock_accept); a seek by 0 bytes from the current position needs the right to tell only; the standard output has one name
+call fd_fdstat_get 3 3300
+mem dump 3308 16 legacy_rights
+mode default
+call fd_fdstat_get 3 3300
+mem dump 3308 16 rights
+mode unstable
+mem put 1000 "a.txt"
+call path_open 3 1 1000 5 0 32 0 0 3100
+call fd_seek 4 0 0 3208
+mem dump 3208 8 tell_by_seek
+call fd_seek 4 1 0 3208
+call fd_seek 4 0 1 3208
+call fd_close 4
+call fd_filestat_get 1 3000
+mem dump 3020 4 stdout_nlink
