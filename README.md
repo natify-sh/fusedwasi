@@ -51,50 +51,31 @@ Two things to know. **meld** is not stable software: `meld 0.64.0` lost a `list<
 ## Using it with an engine
 
 ```mermaid
-flowchart LR
-    src["your program<br/>C, Rust, Go, ..."]
-    src -->|"wasm32-wasip1"| core1["core module<br/>imports wasi_snapshot_preview1"]
-    src -->|"wasm32-wasip2"| comp["component(s)<br/>WASI 0.2"]
-    comp -->|"meld fuse<br/>one or many components"| fused["fused core module<br/>one memory per component<br/>imports wasi:...@0.2.N"]
-    comp -->|"wasm-tools component unbundle<br/>--threshold 0"| unb["core module taken out<br/>same wasi:... imports"]
-
-    core1 --> any{{"a core module whose<br/>imports are WASI functions"}}
-    fused --> any
-    unb --> any
-
-    any --> aot["AOT with wasm2c<br/>the C glue includes the headers,<br/>nothing is needed at run time"]
-    any --> ceng["a C engine<br/>wasm3, ...<br/>the embedder includes the headers"]
-    any --> peng["a Python engine<br/>wasmtime-py, pywasm3, ...<br/>the Python twin"]
-    any --> oop["an engine whose memory is outside<br/>the process: JavaScript, Pyodide<br/>memory is an object with read and write"]
-
-    aot --> fw["fusedwasi<br/>State: files, streams, clocks, random, handles<br/>Guest: memory, trap, realloc, exit<br/>one function for each import"]
-    ceng --> fw
-    peng --> fw
-    oop --> fw
+flowchart TB
+    A["Your program<br/>C, Rust, ..."]
+    A -->|"wasm32-wasip1"| M1["Core module<br/>WASI 0.1 imports"]
+    A -->|"wasm32-wasip2"| C["Component<br/>WASI 0.2"]
+    C -->|"meld fuse<br/>or wasm-tools<br/>component unbundle"| M2["Core module<br/>wasi:* imports"]
+    M1 --> E["Any engine<br/>wasm2c, wasm3,<br/>wasmtime-py, pywasm3, ..."]
+    M2 --> E
+    E --> F["fusedwasi<br/>one function per import"]
 ```
 
 The engine and the library meet in the same few steps, whichever engine it is (a worked one is `tests/neutral/neutral_wasmtime.py`, about 130 lines for wasmtime-py; the C one over wasm3 is `tests/neutral/c_wasm3/neutral_wasm3.c`):
 
 ```mermaid
 sequenceDiagram
-    participant H as host (your code and the engine)
-    participant T as fusedwasi.signatures
-    participant F as fusedwasi (State, Guest, functions)
-    participant M as the module
-
-    H->>F: State(args, env, preopens, ...) once, for as many instances as share a world
-    H->>F: Guest(state, memory, realloc, trap) for each instance
-    loop each import of the module
-        H->>T: find_import(module, name)
-        T-->>H: the row: C symbol, Python function, takes_comp
-        H->>H: bind the import to that function (arguments masked to unsigned)
-    end
-    H->>M: call _start, run or any export
-    M->>H: an import is called, with flat i32 and i64 arguments
-    H->>F: function(guest, [comp,] arguments)
-    F->>H: reads and writes the memory, calls realloc, calls the trap hook
-    F-->>M: the result: an errno, or a value
-    M-->>H: returns, or ends (guest.exited, guest.exit_code)
+    participant H as Host
+    participant F as fusedwasi
+    participant M as Module
+    H->>F: State once, Guest per instance
+    H->>F: find_import for each import
+    F-->>H: the function to bind
+    H->>M: call _start
+    M->>H: import call (i32, i64)
+    H->>F: function(guest, args)
+    F-->>M: errno or value
+    M-->>H: returns or exits
 ```
 
 Pick by what you have:
