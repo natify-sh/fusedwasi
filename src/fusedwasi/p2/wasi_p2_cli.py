@@ -80,13 +80,28 @@ class _FdOutput(OutputStream):
 
 
 class _SysInput(InputStream):
-    """`sys.stdin.buffer` of the moment (blocking: a read waits for at least one byte or the end)."""
+    """`sys.stdin.buffer` of the moment (blocking: a read waits for at least one byte or the end).
+
+    A stdin with no `.buffer` (the console of an app such as Pythonista, the shell StaSh, `io.StringIO`) is read as text and
+    given as UTF-8; the end of its input is the end of the stream, as for a binary one. A read gives no more than was asked.
+    """
+
+    def __init__(self) -> None:
+        self._pending = b""
 
     def read(self, n: int) -> bytes:
-        buffer = getattr(sys.stdin, "buffer", None)
-        if buffer is None:
-            return b""
-        data = buffer.read1(n) if hasattr(buffer, "read1") else buffer.read(n)
+        stdin = sys.stdin
+        buffer = getattr(stdin, "buffer", None)
+        if buffer is not None:
+            data = buffer.read1(n) if hasattr(buffer, "read1") else buffer.read(n)
+        elif stdin is None or n <= 0:
+            data = b""
+        else:
+            if not self._pending:
+                reader = getattr(stdin, "read", None)
+                text = reader(n) if reader is not None else stdin.readline()
+                self._pending = text.encode("utf-8") if isinstance(text, str) else bytes(text or b"")
+            data, self._pending = self._pending[:n], self._pending[n:]
         if not data and n:
             raise StreamClosed
         return data
@@ -107,7 +122,9 @@ class _SysOutput(OutputStream):
     def write(self, data: bytes) -> None:
         target = self._target()
         try:
-            target.flush()
+            flush = getattr(target, "flush", None)  # a stream that replaces stdout may have none
+            if flush is not None:
+                flush()
             buffer = getattr(target, "buffer", None)
             if buffer is not None:
                 buffer.write(data)
@@ -118,7 +135,9 @@ class _SysOutput(OutputStream):
 
     def flush(self) -> None:
         try:
-            self._target().flush()
+            flush = getattr(self._target(), "flush", None)
+            if flush is not None:
+                flush()
         except (OSError, ValueError) as exc:
             raise StreamFailed(str(exc), errno=_errno_of(exc)) from exc
 
