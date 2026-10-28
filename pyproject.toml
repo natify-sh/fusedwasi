@@ -37,7 +37,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
-include-package-data = true  # the headers, the tables and py.typed: whatever git tracks inside the package
+include-package-data = true  # whatever git tracks inside the package (setuptools-scm lists it); the explicit list below does not depend on git
+
+# The headers, the tables and py.typed, named: a build with no git (a copy of the tree, a build by another tool of a checkout) has the same wheel as one with git.
+[tool.setuptools.package-data]
+fusedwasi = ["py.typed", "public_api.json", "include/*.h", "include/fusedwasi/*/*.h", "signatures/*.json", "signatures/*.pyi"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

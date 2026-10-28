@@ -1,8 +1,10 @@
 """The package carries the C headers, so that another project can depend on it and compile against them."""
 
+import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -59,3 +61,31 @@ def test_the_cmake_install_works_and_a_project_finds_the_package(tmp_path: Path)
     # a multi-configuration generator (Visual Studio) puts the program in a directory of the configuration
     exe = next((user / "b").rglob("user.exe" if sys.platform == "win32" else "user"))
     assert subprocess.run([str(exe)], check=False).returncode == 0
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="no uv")
+def test_a_wheel_built_without_git_has_the_headers_and_the_tables(tmp_path: Path) -> None:
+    """A checkout built by another tool (uv of a git dependency on Windows) or a plain copy has no git for setuptools-scm to list the files with: the wheel names them itself."""
+    copy = tmp_path / "copy"
+    shutil.copytree(
+        ROOT,
+        copy,
+        ignore=shutil.ignore_patterns(
+            ".git", ".venv", "build", "dist", "__pycache__", "*.egg-info", ".pytest_cache", ".ruff_cache"
+        ),
+    )
+    env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": "0.0.1"}
+    subprocess.run(
+        ["uv", "build", "--wheel", "-o", str(tmp_path / "dist"), str(copy)], check=True, capture_output=True, env=env
+    )
+    names = zipfile.ZipFile(next((tmp_path / "dist").glob("*.whl"))).namelist()
+    for needed in (
+        "fusedwasi/signatures/wasi_p1.json",
+        "fusedwasi/signatures/wasi_p2.json",
+        "fusedwasi/public_api.json",
+        "fusedwasi/py.typed",
+        "fusedwasi/include/fusedwasi.h",
+        "fusedwasi/include/fusedwasi/p1/wasi_p1_core.h",
+        "fusedwasi/include/fusedwasi/p2/wasi_p2_sockets.h",
+    ):
+        assert needed in names, needed
