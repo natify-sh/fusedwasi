@@ -220,6 +220,29 @@ def test_a_memory_that_grew_before_the_call_is_followed(driver: Path, tmp_path: 
     assert results == [Result(False, 0, None)] and out == b"ok"
 
 
+UNSTABLE = """
+(module
+  (import "wasi_unstable" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_unstable" "fd_fdstat_get" (func $fdstat (param i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 100) "ok")
+  (func (export "_start")
+    (i32.store (i32.const 0) (i32.const 100))
+    (i32.store (i32.const 4) (i32.const 2))
+    (i32.store (i32.const 16) (call $fdstat (i32.const 1) (i32.const 64)))
+    (drop (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (i32.store (i32.const 4) (i32.const 4))
+    (i32.store (i32.const 0) (i32.const 16))
+    (drop (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
+"""
+
+
+def test_a_module_of_the_first_snapshot_is_linked_through_the_table(driver: Path, tmp_path: Path) -> None:
+    """`wasi_unstable` is found by `find_import` like the other modules: its calls, the five that differ included, are bound by the glue."""
+    out, results, _ = run(driver, "p1", [assemble(tmp_path, "unstable", UNSTABLE)])
+    assert results == [Result(False, 0, None)] and out == b"ok" + (0).to_bytes(4, "little")
+
+
 # ---- WASI 0.2 ----------------------------------------------------------------------------------------------------------------
 
 

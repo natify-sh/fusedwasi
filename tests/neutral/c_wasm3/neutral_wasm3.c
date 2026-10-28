@@ -150,11 +150,13 @@ static int neutral_link(IM3Module module, const uint8_t *wasm, size_t size, void
                     snprintf(versionless, sizeof versionless, "%s", mod);
                     char *at = strchr(versionless, '@');
                     if (at) *at = 0;
-                    const neutral_import *table = !strcmp(mod, "wasi_snapshot_preview1") ? neutral_p1_imports : neutral_p2_imports;
-                    size_t count_in_table = !strcmp(mod, "wasi_snapshot_preview1") ? sizeof neutral_p1_imports / sizeof *neutral_p1_imports : sizeof neutral_p2_imports / sizeof *neutral_p2_imports;
+                    const neutral_import *table = neutral_p2_imports;
+                    size_t count_in_table = sizeof neutral_p2_imports / sizeof *neutral_p2_imports;
+                    if (!strcmp(mod, "wasi_snapshot_preview1")) table = neutral_p1_imports, count_in_table = sizeof neutral_p1_imports / sizeof *neutral_p1_imports;
+                    else if (!strcmp(mod, "wasi_unstable")) table = neutral_unstable_imports, count_in_table = sizeof neutral_unstable_imports / sizeof *neutral_unstable_imports;
                     int found = 0;
                     for (size_t k = 0; k < count_in_table; k++) {
-                        const char *wanted = table == neutral_p1_imports ? mod : versionless;
+                        const char *wanted = table == neutral_p2_imports ? versionless : mod;
                         if (!strcmp(table[k].module, wanted) && !strcmp(table[k].name, name)) {
                             M3Result e = m3_LinkRawFunctionEx(module, mod, name, table[k].signature, table[k].function, userdata);
                             if (e) fprintf(stderr, "link %s %s: %s\n", mod, name, e);
