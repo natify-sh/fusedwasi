@@ -37,11 +37,16 @@ def test_every_program_builds_without_a_warning(compiler: str, level: str, tmp_p
     includes = [INCLUDE, INCLUDE / "fusedwasi" / "p1", INCLUDE / "fusedwasi" / "p2", REPO / "tests" / "data"]
     programs = PROGRAMS
 
-    def compile_one(program: Path) -> None:
-        compile_c(
-            program, tmp_path / (program.stem + ".o"), includes, compiler=compiler, level=level, compile_only=True
-        )
+    def compile_one(program: Path) -> str:
+        try:
+            compile_c(
+                program, tmp_path / (program.stem + ".o"), includes, compiler=compiler, level=level, compile_only=True
+            )
+        except AssertionError as failure:
+            return f"{program.name}: {failure}"
+        return ""
 
-    # the compilations are independent, and a few of them take seconds when optimised
+    # the compilations are independent, and a few of them take seconds when optimised; every failure is reported, not the first
     with ThreadPoolExecutor() as pool:
-        list(pool.map(compile_one, programs))
+        failures = [text for text in pool.map(compile_one, programs) if text]
+    assert not failures, "\n\n".join(failures)

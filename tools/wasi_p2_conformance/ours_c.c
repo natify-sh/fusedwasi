@@ -130,7 +130,7 @@ static const char *op(char **t, int nt) {
     for (int k = 0; k < 2; k++)
         if (used[k] >= 0 && (used[k] >= nt || hfind(t[used[k]]) < 0)) return "no-handle";
 #define D(i) hval[hfind(t[i])]
-    uint32_t p, n, q, m;
+    uint32_t p = 0, n = 0, q = 0, m = 0;
     if (!strcmp(o, "preopen")) {
         clear();
         fusedwasi_wasi_filesystem_preopens_get_directories(&G, 0, R);
