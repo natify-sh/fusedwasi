@@ -56,5 +56,6 @@ def test_the_cmake_install_works_and_a_project_finds_the_package(tmp_path: Path)
         capture_output=True,
     )
     subprocess.run(["cmake", "--build", str(user / "b")], check=True, capture_output=True)
-    exe = user / "b" / ("user.exe" if sys.platform == "win32" else "user")
+    # a multi-configuration generator (Visual Studio) puts the program in a directory of the configuration
+    exe = next((user / "b").rglob("user.exe" if sys.platform == "win32" else "user"))
     assert subprocess.run([str(exe)], check=False).returncode == 0

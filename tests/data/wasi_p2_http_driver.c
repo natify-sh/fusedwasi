@@ -5,7 +5,9 @@
 #include "wasi_p2_http.h"
 
 /* the arguments of `fetch` are given by position and the rest is zero */
+#ifdef __GNUC__ /* MSVC has no such warning, and warns about the pragma */
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 static fusedwasi_p2_state world;
     fusedwasi_p2_guest s;
@@ -633,7 +635,7 @@ int main(int argc, char **argv) {
             uint32_t param;
             fusedwasi_p2_http_outparam *o = fusedwasi_p2_http_outparam_new(&world, &param);
             uint64_t *c = cases[i];
-            fusedwasi_wasi_http_types_response_outparam_set(&s, 0, param, 1, c[0], c[1], c[2], c[3], c[4], c[5], c[6]);
+            fusedwasi_wasi_http_types_response_outparam_set(&s, 0, param, 1, (uint32_t)c[0], (uint32_t)c[1], (uint32_t)c[2], (uint32_t)c[3], (uint32_t)c[4], (uint32_t)c[5], (uint32_t)c[6]);
             printf("%u: ", (unsigned)c[0]), describe(&o->error), printf("\n");
             clear();
             if (o->failed) {
