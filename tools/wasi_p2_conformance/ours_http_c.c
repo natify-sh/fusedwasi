@@ -24,7 +24,7 @@
 static fusedwasi_p2_state S;
 static fusedwasi_p2_guest G;
 static uint8_t *mem;
-static uint32_t free_at = 0x80000, inp = 0x1000;
+static uint32_t free_at = 0x80000, in_at = 0x1000;
 
 #define H(fn, ...) fusedwasi_wasi_http_types_##fn(&G, __VA_ARGS__)
 #define HC(fn, ...) fusedwasi_wasi_http_types_##fn(&G, 0, __VA_ARGS__)
@@ -50,9 +50,9 @@ static uint32_t u32(uint32_t off) { uint32_t v; memcpy(&v, mem + off, 4); return
 static void st32(uint32_t off, uint32_t v) { memcpy(mem + off, &v, 4); }
 static void clear(void) { memset(mem + R, 0, 128); }
 static uint32_t put(const void *data, size_t len) {
-    uint32_t ptr = inp;
-    memcpy(mem + inp, data, len);
-    inp = (uint32_t)((inp + len + 8) / 8 * 8);
+    uint32_t ptr = in_at;
+    memcpy(mem + in_at, data, len);
+    in_at = (uint32_t)((in_at + len + 8) / 8 * 8);
     return ptr;
 }
 
