@@ -1,16 +1,49 @@
 [project]
 name = "fusedwasi"
-version = "0.0.0"
-description = "Header-only C host for the WASI Component Model, for core modules fused from components (wasm2c and other C hosts)"
+dynamic = ["version"]  # from the git tag (setuptools-scm): the tag v0.1.0a1 is the version 0.1.0a1
+description = "WASI 0.1 and 0.2 as ready functions for any host, in C (headers) and Python, with the state they need and the table of their signatures"
 readme = "README.md"
 authors = [{ name = "o-murphy", email = "thehelixpg@gmail.com" }]
+license = "MIT"
+license-files = ["LICENSE", "tools/spec_sources/LICENSE.md"]  # the library, and the licence of the WASI specification the signature tables are made from
+keywords = ["wasi", "webassembly", "wasm", "wasm2c", "component-model", "preview1", "preview2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
 requires-python = ">=3.10"
 dependencies = []
 
-[build-system]
-requires = ["uv_build>=0.13.1,<0.14.0"]
-build-backend = "uv_build"
+[project.urls]
+Repository = "https://github.com/natify-sh/fusedwasi"
 
+[build-system]
+requires = ["setuptools>=84", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true  # the headers, the tables and py.typed: whatever git tracks inside the package
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+fallback_version = "0.0.0"  # a copy with neither git nor PKG-INFO
 
 [tool.pytest.ini_options]
 minversion = "9"

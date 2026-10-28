@@ -94,7 +94,7 @@ Every function is `static inline` and nothing is global or thread-local, so a mo
 
 ## The headers come with the Python package
 
-`pip install fusedwasi` (or a dependency on it) gives the headers too: `python -m fusedwasi` prints the directory to put on the include path, `fusedwasi.get_include()` gives it in Python, and the C is then `#include <fusedwasi/p2/wasi_p2_cli.h>`. With CMake: `find_package(fusedwasi)` and the target `fusedwasi::headers`. The headers in the wheel and in the CMake install are the same files (`src/fusedwasi/include/`).
+`pip install fusedwasi` (or a dependency on it) gives the headers too: `python -m fusedwasi` prints the directory to put on the include path, `fusedwasi.get_include()` gives it in Python, and the C is then `#include <fusedwasi/p2/wasi_p2_cli.h>`. With CMake, from a source checkout or the sdist (the wheel carries the headers but not the CMake files): `cmake -S . -B build && cmake --install build`, then `find_package(fusedwasi)` and the target `fusedwasi::headers`. The headers of the wheel and of the CMake install are the same files (`src/fusedwasi/include/`).
 
 ## Who uses it
 
