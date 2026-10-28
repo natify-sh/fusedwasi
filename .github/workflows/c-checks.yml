@@ -71,4 +71,63 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           cl 2>&1 | findstr /i "Version"
-          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py
+          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_package.py
+
+  msvc-wasm3:
+    name: C over wasm3, the engine and the user built by MSVC (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      # the engine is not in this repository: the tag v0.5.0
+      - uses: actions/checkout@v7
+        with:
+          repository: wasm3/wasm3
+          ref: 6b8bcb1e07bf26ebef09a7211b0a37a446eafd52
+          path: wasm3
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      - run: uv sync --group neutral
+      # the user (c_wasm3/neutral_wasm3.c) and the glue are built at /W4 /WX; the programs are compared with Wasmtime's own WASI, as on Linux
+      - name: The driver built with cl, run on the programs
+        shell: cmd
+        env:
+          FUSEDWASI_TEST_CC: cl
+          WASM3_SRC: ${{ github.workspace }}\wasm3
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          uv run --no-sync pytest tests/neutral/test_neutral_wasm3.py -q -rs
+
+  arm64:
+    name: all tests on ARM64 (ubuntu)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      - run: uv sync
+      - run: uv run pytest -q -rs
+
+  i386:
+    name: the C drivers built as 32-bit programs (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - run: uv sync
+      # The tests build their C drivers with `cc`: a `cc` that makes 32-bit programs is put first on PATH (size_t, long, off_t and pointers are 4 bytes, as in a 32-bit host).
+      # Python stays 64-bit; what is compared is the output of the driver with the Python twin.
+      - name: A cc for 32 bits
+        run: |
+          mkdir -p "$RUNNER_TEMP/m32"
+          printf '#!/bin/sh\nexec gcc -m32 "$@"\n' > "$RUNNER_TEMP/m32/cc"
+          chmod +x "$RUNNER_TEMP/m32/cc"
+          echo "$RUNNER_TEMP/m32" >> "$GITHUB_PATH"
+      - run: uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py

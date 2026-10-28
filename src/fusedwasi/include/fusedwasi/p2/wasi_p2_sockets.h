@@ -1049,12 +1049,13 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_udp_incoming_datagram_stream_receive
     int rc = fusedwasi_p2__udp_open(u);
     uint32_t count = 0, capacity = 0;
     fusedwasi_p2__received *got = NULL;
-    uint8_t *buf = (uint8_t *)malloc(65536); /* scratch only: filled and copied out before the call returns */
+    enum { fusedwasi_p2__datagram_max = 65536 };
+    uint8_t *buf = (uint8_t *)malloc(fusedwasi_p2__datagram_max); /* scratch only: filled and copied out before the call returns */
     if (!buf) g->trap(g, "out of memory");
     while (rc == FUSEDWASI_P2__NOK && count < max_results) {
         struct sockaddr_storage ss;
         socklen_t n = sizeof ss;
-        fusedwasi_p2__ssize r = FUSEDWASI_P2__RECVFROM(u->fd, buf, sizeof buf, 0, (struct sockaddr *)&ss, &n);
+        fusedwasi_p2__ssize r = FUSEDWASI_P2__RECVFROM(u->fd, buf, fusedwasi_p2__datagram_max, 0, (struct sockaddr *)&ss, &n);
         if (r < 0) {
             if (fusedwasi_p2__errno() == EAGAIN || fusedwasi_p2__errno() == EWOULDBLOCK) break;
             if (count) break;

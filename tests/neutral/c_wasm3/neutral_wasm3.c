@@ -34,6 +34,19 @@
 
 #include "wasm3.h"
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+/* strdup is a deprecated name for MSVC */
+static char *neutral_copy(const char *text) {
+    size_t n = strlen(text) + 1;
+    char *copy = (char *)malloc(n);
+    if (copy) memcpy(copy, text, n);
+    return copy;
+}
+
 #if defined(__GNUC__)
 #define NEUTRAL_NOINLINE __attribute__((noinline))
 #else
@@ -191,6 +204,9 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY); /* the bytes of the guest are compared as they are */
+#endif
     const char *world = "p1", *entry = NULL;
     const char *args[64], *env_names[64], *env_values[64];
     struct fusedwasi_p2_preopen preopens[8];
@@ -202,12 +218,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--entry") && i + 1 < argc) entry = argv[++i];
         else if (!strcmp(argv[i], "--arg") && i + 1 < argc) args[arg_count++] = argv[++i];
         else if (!strcmp(argv[i], "--env") && i + 1 < argc) {
-            char *pair = strdup(argv[++i]);
+            char *pair = neutral_copy(argv[++i]);
             char *eq = strchr(pair, '=');
             *eq = 0;
             env_names[env_count] = pair, env_values[env_count++] = eq + 1;
         } else if (!strcmp(argv[i], "--dir") && i + 1 < argc) {
-            char *pair = strdup(argv[++i]);
+            char *pair = neutral_copy(argv[++i]);
             char *sep = strstr(pair, "::");
             *sep = 0;
             preopens[preopen_count].path = pair, preopens[preopen_count].name = sep + 2, preopens[preopen_count++].writable = 1;

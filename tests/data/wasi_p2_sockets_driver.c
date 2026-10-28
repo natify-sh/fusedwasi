@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
         clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(&s, 0, bout, 2200, 1, R), show("b sends to its peer", R, 16);
         receive_some("a receives", ain, ports[1], 3000);
         clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(&s, 0, aout, R);
-        put_dgram(0, "back", 1, ports[1]);
+        put_dgram(0, "back and forth", 1, ports[1]);
         clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(&s, 0, aout, 2200, 1, R), show("a sends to b", R, 16);
         receive_some("b receives", bin, ports[0], 3000);
         clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(&s, 0, bout, R);

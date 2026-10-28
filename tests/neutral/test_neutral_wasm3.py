@@ -12,11 +12,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import wasmtime as wt
+from cbuild import CC, MSVC, build, command
 from neutral_reference import ARGS, ENV, program, wasmtime_p1, wasmtime_p2
 
 import fusedwasi
@@ -35,7 +37,6 @@ WASM3_SOURCES = (
     "m3_module",
     "m3_parse",
 )
-CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 
 
 @dataclass
@@ -61,26 +62,22 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     generator.main(str(work / "neutral_glue.h"))
     objects: list[str] = []
     for name in WASM3_SOURCES:  # the engine as it is, with its own warnings
-        subprocess.run(
-            [
-                CC,
-                "-O1",
-                "-w",
-                "-fno-sanitize=all",
-                "-c",
-                f"-I{source}",
-                str(source / f"{name}.c"),
-                "-o",
-                str(work / f"{name}.o"),
-            ],
-            check=True,
-        )
-        objects.append(str(work / f"{name}.o"))
+        if MSVC:
+            obj = work / f"{name}.obj"
+            cmd = [CC, "/nologo", "/O1", "/w", "/c", f"/I{source}", f"/Fo:{obj}", str(source / f"{name}.c")]
+        else:
+            obj = work / f"{name}.o"
+            cmd = [CC, "-O1", "-w", "-fno-sanitize=all", "-c", f"-I{source}", str(source / f"{name}.c"), "-o", str(obj)]
+        build(cmd)
+        objects.append(str(obj))
     # the user, with the warnings on and as errors, optimised (a warning of the headers can appear only when the compiler optimises)
-    flags = ["-std=gnu11", "-O2", "-g", "-Wall", "-Wextra", "-Werror"]
-    paths = [f"-I{source}", f"-I{include}", f"-I{work}"]
-    out = work / "neutral_wasm3"
-    subprocess.run([CC, *flags, *paths, str(HERE / "neutral_wasm3.c"), *objects, "-lm", "-o", str(out)], check=True)
+    out = work / ("neutral_wasm3.exe" if sys.platform == "win32" else "neutral_wasm3")
+    if MSVC:
+        build(command(HERE / "neutral_wasm3.c", out, [source, include, work], level="-O2", extra=objects))
+    else:
+        flags = ["-std=gnu11", "-O2", "-g", "-Wall", "-Wextra", "-Werror"]
+        paths = [f"-I{source}", f"-I{include}", f"-I{work}"]
+        build([CC, *flags, *paths, str(HERE / "neutral_wasm3.c"), *objects, "-lm", "-o", str(out)])
     return out
 
 

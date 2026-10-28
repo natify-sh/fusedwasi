@@ -379,7 +379,7 @@ def python_output(scenario: str) -> str:
             receive_some("a receives", ain, ports[1])
             clear()
             sk.wasi_sockets_udp_outgoing_datagram_stream_check_send(host, 0, aout, R)
-            put_dgram(0, b"back", True, ports[1])
+            put_dgram(0, b"back and forth", True, ports[1])
             clear()
             sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, aout, 2200, 1, R)
             show("a sends to b", R, 16)
@@ -584,7 +584,7 @@ def test_values() -> None:
         "connection-refused"
     )
     assert "a receives 1 datagrams [68656c6c6f from tag 0 port-match 1]" in lines
-    assert "b receives 1 datagrams [6261636b from tag 0 port-match 1]" in lines
+    assert "b receives 1 datagrams [6261636b20616e6420666f727468 from tag 0 port-match 1]" in lines
     assert "b receives from a stranger 0 datagrams" in lines  # a datagram from another address is dropped
     assert "  address:00007f000001" in lines  # the name 127.0.0.1
     assert (
