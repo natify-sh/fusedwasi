@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import wasmtime as wt
 import wasmtime.component as wc
@@ -520,3 +520,151 @@ class FusedP1(FusedBase):
 
     def stdout_text(self) -> bytes:
         return bytes(self.out.data)
+
+
+# ---- the C headers of fusedwasi, over wasm3 (cmp_wasm3.c) --------------------------------------------------------------------
+
+WASM3_SOURCES = [
+    "m3_bind", "m3_code", "m3_compile", "m3_core", "m3_emit", "m3_env", "m3_exec", "m3_function", "m3_info", "m3_module",
+    "m3_parse", "extensions/m3_extensions",
+]  # fmt: skip
+
+
+def build_c_driver(work: Path) -> Path:
+    """Builds cmp_wasm3 (the C host: the public headers of fusedwasi, the glue generated from `fusedwasi.signatures`, wasm3 as the engine) and returns the executable.
+
+    Needs a C compiler and WASM3_SRC, a checkout of https://github.com/wasm3/wasm3 (the tag v0.5.0, as `tests/neutral/test_neutral_wasm3.py`)."""
+    import importlib.util
+    import os
+
+    if "WASM3_SRC" not in os.environ:
+        raise SystemExit("HOST=c needs WASM3_SRC, a checkout of https://github.com/wasm3/wasm3 (tag v0.5.0)")
+    source = Path(os.environ["WASM3_SRC"]) / "source"
+    neutral = HERE.parents[2] / "tests" / "neutral" / "c_wasm3"
+    spec = importlib.util.spec_from_file_location("gen_wasm3_glue", neutral / "gen_wasm3_glue.py")
+    assert spec is not None and spec.loader is not None
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    build = work / "cbuild"
+    build.mkdir()
+    generator.main(str(build / "neutral_glue.h"))
+    cc = os.environ.get("CC", "cc")
+    objects: list[str] = []
+    for name in WASM3_SOURCES:
+        obj = build / (name.replace("/", "_") + ".o")
+        subprocess.run(
+            [cc, "-O1", "-w", "-c", f"-I{source}", str(source / f"{name}.c"), "-o", str(obj)],
+            check=True,
+            capture_output=True,
+        )
+        objects.append(str(obj))
+    include = HERE.parents[2] / "src" / "fusedwasi" / "include"
+    exe = build / "cmp_wasm3"
+    subprocess.run(
+        [
+            cc,
+            "-std=gnu11",
+            "-O1",
+            "-g",
+            "-fsanitize=address,undefined",
+            "-fno-sanitize-recover=undefined",
+            f"-I{source}",
+            f"-I{include}",
+            f"-I{neutral}",
+            f"-I{build}",
+            str(HERE / "cmp_wasm3.c"),
+            *objects,
+            "-lm",
+            "-o",
+            str(exe),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return exe
+
+
+class CHost(Rt):
+    """The C headers of fusedwasi: `cmp_wasm3` in a process of its own, spoken to over a pipe (the protocol is at the top of cmp_wasm3.c)."""
+
+    name = "fusedwasi-c"
+    world = "p1"
+    #: what the sanitizers of the C host wrote to its standard error, over all the instances
+    sanitizer_output: ClassVar[list[str]] = []
+
+    def __init__(
+        self, exe: Path, module: Path, preopens: list[tuple[str, str]], args: list[str], env: list[tuple[str, str]]
+    ) -> None:
+        import os
+
+        cmd = [str(exe), "--world", self.world]
+        for a in args:
+            cmd += ["--arg", a]
+        for k, v in env:
+            cmd += ["--env", f"{k}={v}"]
+        for path, guest in preopens:
+            cmd += ["--dir", f"{path}::{guest}"]
+        cmd.append(str(module))
+        self.proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0", "UBSAN_OPTIONS": "print_stacktrace=1"},
+        )
+        assert self.proc.stdin is not None and self.proc.stdout is not None
+        self.to, self.back = self.proc.stdin, self.proc.stdout
+        self.ops = list(P2_OPS if self.world == "p2" else P1_OPS)
+
+    def _read(self, n: int) -> bytes:
+        data = self.back.read(n)
+        if len(data) != n:
+            self.close()
+            raise RuntimeError("the C host died")
+        return data
+
+    def close(self) -> None:
+        """Ends the process; whatever it wrote to its standard error (a sanitizer's report) is kept in `sanitizer_output`."""
+        assert self.proc.stdin is not None and self.proc.stderr is not None
+        if self.proc.poll() is None:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=30)
+        text = self.proc.stderr.read().decode(errors="replace")
+        if text.strip():
+            CHost.sanitizer_output.append(text)
+
+    def poke(self, addr: int, data: bytes) -> None:
+        self.to.write(b"P" + addr.to_bytes(4, "little") + len(data).to_bytes(4, "little") + data)
+        self.to.flush()
+        assert self._read(1) == b"\0"
+
+    def peek(self, addr: int, n: int) -> bytes:
+        self.to.write(b"K" + addr.to_bytes(4, "little") + n.to_bytes(4, "little"))
+        self.to.flush()
+        assert self._read(1) == b"\0"
+        return self._read(n)
+
+    def run(self, op: str) -> None:
+        self.to.write(b"R" + self.ops.index(op).to_bytes(4, "little"))
+        self.to.flush()
+        status = self._read(1)[0]
+        if status == 1:
+            raise Ended(int.from_bytes(self._read(4), "little"))
+        if status == 2:
+            raise RuntimeError("trap: " + self._read(int.from_bytes(self._read(4), "little")).decode(errors="replace"))
+        assert status == 0
+
+    def stdout_text(self) -> bytes:
+        self.to.write(b"O")
+        self.to.flush()
+        assert self._read(1) == b"\0"
+        return self._read(int.from_bytes(self._read(4), "little"))
+
+
+class CHostP1(CHost):
+    world = "p1"
+
+
+class CHostP2(CHost):
+    world = "p2"

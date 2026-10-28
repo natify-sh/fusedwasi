@@ -3,7 +3,7 @@
 Run on 2026-10-26 (the checklist is dated the same day) from `docs/experiments/wasmtime_compare/`, at fusedwasi `6c5c655` plus the scripts. **Everything in this file was run** unless it says otherwise; a difference that was not seen in a run is not listed.
 
 * Wasmtime: the `wasmtime` package 50.0.1 from pip (a Wasmtime 50 library), Linux x86-64, Python 3.14 in a scratch venv. (The older note in `release_checklist.md` and the `wasmtime_exit` experiment of wasmext name 49.0.0; this run used what pip gave today.)
-* fusedwasi: the Python twin (`fusedwasi.p1.wasi_p1`, `fusedwasi.p2.wasi_p2_*`). **The C side was not run here.** The tests of the repository keep the C and the Python equal, so a result of the Python is taken to stand for the C; that is the repository's claim, not something this comparison measured.
+* fusedwasi: the Python twin (`fusedwasi.p1.wasi_p1`, `fusedwasi.p2.wasi_p2_*`). **The C side was not run in this first run**; it was added on 2026-10-28 (last section), and agrees with the Python on every step.
 * The WIT: `0.2.12`, the files of the `wasip2` crate that was already in the cargo registry of the machine; `wasm-tools` 1.262.0 and `wat2wasm` were installed; no binary was downloaded.
 
 ## How the comparison is made
@@ -71,7 +71,7 @@ Both give the same answer, in WASI 0.2 (error-code) and 0.1 (errno), for: a miss
 * **Terminals, `get-terminal-*`**: not run.
 * **Reading from stdin**: only an empty stdin (both say end of input).
 * **Windows, macOS**: not run (no such machine here). Two codes depend on the system by design: unlinking a directory is `is-directory` in 0.2 and the answer of the system in 0.1 (`wasi_p1_files._UNLINK_OF_DIRECTORY`), which this Linux run cannot show.
-* **The C implementation.** See the top. A C driver for these scenarios does not exist; the harness would need a `ctypes` or a C front-end for every function. The parity of C and Python is the subject of the tests, not of this document.
+* **The C implementation** was not run in the first run (2026-10-26); it is in the run of 2026-10-28 below.
 * `tools/wasi_p2_conformance/` already compares the filesystem (262 operations) and http (23 requests) with a Rust guest; it needs `rustup target add wasm32-wasip2`. **I did not run it**; its README is where D5, D6 and D8 were first written down. `release_checklist.md` section 2 says that 0.2 "has not been compared with Wasmtime": that is out of date for the filesystem and http by that tool, and is now also out of date for cli, clocks, random and the filesystem by this one.
 
 ## What this changed in the library
@@ -125,7 +125,7 @@ python tools/wasi_p2_conformance/runner.py tools/wasi_p2_conformance/script_http
 
 **C and Python gave the same line for each of the 262 and the 23 operations**: the text of the differences against Wasmtime is identical in both (the output of the runner was compared with `diff`), and every other line equals Wasmtime's, so on those the C equals Python too. The http error-codes of the C driver are numbers that the runner turns into names with the table of the Python twin (an assumption of the comparison). `pytest tests/test_wasi_p2_*.py` (with `-o pythonpath=src`): 74 passed, 1 skipped.
 
-Also run, Python twin only: `docs/experiments/wasmtime_compare/run.py` (cli, clocks, random, filesystem as flat core-module calls, and WASI 0.1): **301 of 365 steps agree**, 64 differ (the run of 2026-10-26 said 300 and 65). The 12 differences of WASI 0.2 are exactly D1 to D8 above (cli 2 steps, clocks 3, random 1, filesystem 6), so those verdicts stand. The 52 of WASI 0.1 are the E-rows above; I did not find which step makes the difference of one against the earlier count. **Not run: the C host for cli, clocks, random, io, or for this older experiment** (it binds the imports to the Python functions; there is no C driver for it), so for those packages the C is covered only by the C-against-Python tests of the repository.
+Also run, Python twin only: `docs/experiments/wasmtime_compare/run.py` (cli, clocks, random, filesystem as flat core-module calls, and WASI 0.1): **301 of 365 steps agree**, 64 differ (the run of 2026-10-26 said 300 and 65). The 12 differences of WASI 0.2 are exactly D1 to D8 above (cli 2 steps, clocks 3, random 1, filesystem 6), so those verdicts stand. The 52 of WASI 0.1 are the E-rows above; I did not find which step makes the difference of one against the earlier count. (The C host for the same scenarios was added on 2026-10-28; see the last section.)
 
 ### Every difference of `script_fs.txt` (Wasmtime against fusedwasi; C and Python the same)
 
@@ -198,3 +198,24 @@ A second check, stronger than the counts: the lines of the Python twin and of th
 ### Not run, still not compared
 
 Sockets, terminals, a real stdin, Windows, macOS, MSVC; the C host for cli, clocks, random and io (and for the flat experiment, which binds the Python functions only); streaming of big bodies; the CI of fusedwasi does not run any of this. Only the compilation with `-Wall -Wextra -O1 -c` of `ours_c.c` was seen to give three `-Wmaybe-uninitialized` warnings from `fusedwasi_wasi_filesystem_types_descriptor_read_directory` (GCC 13.3, inlined into the driver's `main`; the function sets the three results on every path that returns OK, so it looks like a false positive; a small file that calls the same function does not warn). Nothing was changed for it; the driver is built without `-Wall`.
+
+## Run of 2026-10-28: the C headers over the same scenarios
+
+`docs/experiments/wasmtime_compare/` now has a C host: `cmp_wasm3.c` is the neutral user of `tests/neutral/c_wasm3/neutral_wasm3.c` (wasm3 runs the module; each import is a function of the public headers `fusedwasi/p1/wasi_p1.h` and `fusedwasi/p2/wasi_p2_*.h`, linked by the glue that `gen_wasm3_glue.py` writes from the public table `fusedwasi.signatures`) with a `main` of its own that speaks the poke / peek / run protocol over a pipe. The harness starts one process for each instance of the guest (`CHostP1`, `CHostP2` in `harness.py`) and the scenarios are the same, unchanged. wasm3 is only the engine that holds the memory; nothing in the library was shaped for it. The guest's standard output goes to a buffer stream of the host, its standard input is empty.
+
+```
+WASM3_SRC=<wasm3 v0.5.0 checkout> HOST=all python docs/experiments/wasmtime_compare/run.py --all   # HOST=python (default), c, or all
+```
+
+Built with `-fsanitize=address,undefined` (`-fno-sanitize-recover=undefined`); the sanitizers reported nothing on any instance. Toolchain: the same Wasmtime 50.0.1, `wasm-tools` 1.262 and the WIT of the `wasip2` crate (0.2.12) as above; wasm3 at `/tmp/claude-0/ext/wasm3`. About 35 seconds for the three hosts. The figure of Wasmtime against a fusedwasi host was 301 in four runs and 300 in one (run while the test suite was using the machine; a timing step, which one was not found); C and Python agreed on all 365 in every run.
+
+| Pair | Steps that agree |
+| --- | ---: |
+| Wasmtime / Python twin | 301 of 365 |
+| Wasmtime / **C headers** | **301 of 365** |
+| Python twin / **C headers** | **365 of 365** |
+
+**C and Python gave the same text for every one of the 365 steps** (cli 16, clocks 10, random 11, filesystem 153, WASI 0.1 175), so there is no parity bug between them in these scenarios, and the 64 differences against Wasmtime are exactly those listed above (D1 to D8, E1 to E12), with the same text for C as for Python (the two lists of differences were compared with `diff`). Nothing in `src/` was changed.
+
+What this does not show: the steps print what a guest sees (codes, sizes, bytes, types), not every field (times are not compared beyond their shape; the random values are not compared). Handles are never printed. Still not run: sockets, http (see `tools/wasi_p2_conformance/`), terminals, a stdin that has data, Windows, macOS; and the C host here is Linux x86-64 with gcc only.
+
