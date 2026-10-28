@@ -31,7 +31,7 @@ static const char *ERRS[] = {
 static fusedwasi_p2_state S;
 static fusedwasi_p2_guest G;
 static uint8_t *mem;
-static uint32_t free_at = 0x80000, inp = 0x1000;
+static uint32_t free_at = 0x80000, in_at = 0x1000;
 
 #define FS(fn, ...) fusedwasi_wasi_filesystem_types_##fn(&G, 0, __VA_ARGS__)
 #define IO(fn, ...) fusedwasi_wasi_io_streams_##fn(&G, 0, __VA_ARGS__)
@@ -69,9 +69,9 @@ static char *textof(const char *tok) {
 static void put(const char *tok, uint32_t *ptr, uint32_t *n) {
     char *t = textof(tok);
     size_t len = strlen(t);
-    *ptr = inp;
-    memcpy(mem + inp, t, len);
-    inp = (uint32_t)((inp + len + 8) / 8 * 8);
+    *ptr = in_at;
+    memcpy(mem + in_at, t, len);
+    in_at = (uint32_t)((in_at + len + 8) / 8 * 8);
     *n = (uint32_t)len;
     free(t);
 }

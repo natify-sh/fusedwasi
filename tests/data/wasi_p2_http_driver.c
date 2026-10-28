@@ -5,7 +5,7 @@
 #include "wasi_p2_http.h"
 
 /* the arguments of `fetch` are given by position and the rest is zero */
-#ifdef __GNUC__ /* MSVC has no such warning, and warns about the pragma */
+#if defined(__GNUC__) || defined(__clang__) /* cl has no such warning, and warns about the pragma */
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 
