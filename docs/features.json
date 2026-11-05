@@ -1,0 +1,684 @@
+{
+  "$comment": "The feature matrix of fusedwasi: modules, their features, and a status for each twin (c, python). true = every function of the feature is there and the documents name no limit; false = not there; [\"partial\", note] = the documents name a limit, and the note names the file that says it. Checked against both twins by tools/check_features.py. See docs/features.md.",
+  "format": "fusedwasi-features",
+  "version": 1,
+  "wasi": "0.2.12",
+  "twins": {
+    "c": {
+      "files": "src/fusedwasi/include/fusedwasi/"
+    },
+    "python": {
+      "files": "src/fusedwasi/"
+    }
+  },
+  "modules": {
+    "wasi:cli": {
+      "title": "Arguments, environment, exit, standard streams, terminals",
+      "files": {
+        "c": "p2/wasi_p2_cli.h",
+        "python": "p2/wasi_p2_cli.py"
+      },
+      "imports": 13,
+      "features": {
+        "environment": {
+          "covers": [
+            "environment"
+          ],
+          "imports": 3,
+          "c": true,
+          "python": true
+        },
+        "exit": {
+          "covers": [
+            "exit"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "stdio": {
+          "covers": [
+            "stdin",
+            "stdout",
+            "stderr"
+          ],
+          "imports": 3,
+          "c": true,
+          "python": true
+        },
+        "terminals": {
+          "covers": [
+            "terminal-input",
+            "terminal-output",
+            "terminal-stdin",
+            "terminal-stdout",
+            "terminal-stderr"
+          ],
+          "imports": 5,
+          "c": true,
+          "python": true
+        }
+      }
+    },
+    "wasi:clocks": {
+      "title": "Wall clock, monotonic clock, time zone",
+      "files": {
+        "c": "p2/wasi_p2_clocks.h",
+        "python": "p2/wasi_p2_clocks.py"
+      },
+      "imports": 8,
+      "features": {
+        "monotonicClock": {
+          "covers": [
+            "monotonic-clock"
+          ],
+          "imports": 4,
+          "c": true,
+          "python": true
+        },
+        "wallClock": {
+          "covers": [
+            "wall-clock"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "timezone": {
+          "covers": [
+            "timezone"
+          ],
+          "imports": 2,
+          "c": false,
+          "python": false,
+          "note": "unstable (feature clocks-timezone) and without a function in both twins: src/fusedwasi/signatures/wasi_p2.json has no c_name and no python_name for them; docs/host_scope.md, 'The size, in numbers', leaves the unstable items out of the 200"
+        }
+      }
+    },
+    "wasi:filesystem": {
+      "title": "Files and directories (descriptors, directory streams) and the preopened directories",
+      "files": {
+        "c": "p2/wasi_p2_filesystem.h",
+        "python": "p2/wasi_p2_filesystem.py"
+      },
+      "imports": 32,
+      "features": {
+        "preopens": {
+          "covers": [
+            "preopens"
+          ],
+          "imports": 1,
+          "c": true,
+          "python": true
+        },
+        "types": {
+          "covers": [
+            "types"
+          ],
+          "imports": 31,
+          "c": true,
+          "python": true
+        }
+      }
+    },
+    "wasi:http": {
+      "title": "Outgoing http requests; the server side is given by the embedder (unstable in the alpha)",
+      "stability": "unstable",
+      "files": {
+        "c": "p2/wasi_p2_http.h",
+        "python": "p2/wasi_p2_http.py"
+      },
+      "imports": 64,
+      "features": {
+        "types": {
+          "covers": [
+            "types"
+          ],
+          "imports": 62,
+          "c": [
+            "partial",
+            "bodies are read whole, at most 256 MiB, and http-error-code is always none: docs/host_scope.md, Known limits ('Bodies of http are whole')"
+          ],
+          "python": [
+            "partial",
+            "bodies are read whole, at most 256 MiB, and http-error-code is always none: docs/host_scope.md, Known limits ('Bodies of http are whole')"
+          ]
+        },
+        "informationalOutboundResponses": {
+          "covers": [
+            "types#[method]response-outparam.send-informational"
+          ],
+          "imports": 1,
+          "c": false,
+          "python": false,
+          "note": "unstable, not done: docs/host_scope.md, the paragraph on http ('Not done: send-informational')"
+        },
+        "outgoingHandler": {
+          "covers": [
+            "outgoing-handler"
+          ],
+          "imports": 1,
+          "c": [
+            "partial",
+            "HTTP/1.1 with one connection for each request, no redirects, no proxies: docs/host_scope.md, Known limits"
+          ],
+          "python": [
+            "partial",
+            "HTTP/1.1 with one connection for each request, no redirects, no proxies: docs/host_scope.md, Known limits"
+          ]
+        },
+        "https": {
+          "symbols": {
+            "c": [
+              "tls",
+              "http_send"
+            ],
+            "python": [
+              "fusedwasi.p2:State(http_send)"
+            ]
+          },
+          "c": [
+            "partial",
+            "https is an internal-error unless the embedder sets state->tls or state->http_send; the library has no TLS code: docs/host_scope.md, Known limits ('https in C needs a TLS hook or http_send'); docs/specs/S0001.md; docs/tls_hook.md"
+          ],
+          "python": true,
+          "note": {
+            "python": "TLS is built in (ssl.create_default_context(), the system store): docs/host_scope.md, Known limits; see tlsHook for what cannot be set"
+          }
+        },
+        "serverSide": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2_http_incoming_request_new",
+              "fusedwasi_p2_http_outparam_new"
+            ],
+            "python": [
+              "fusedwasi.p2.wasi_p2_http:incoming_request_new",
+              "fusedwasi.p2.wasi_p2_http:response_outparam_new"
+            ]
+          },
+          "c": [
+            "partial",
+            "wasi:http/incoming-handler is an export, the embedder makes the request and the outparam; the names are unstable: docs/public_api.md, 'The transport and the server side of wasi:http (unstable in the alpha)'"
+          ],
+          "python": [
+            "partial",
+            "wasi:http/incoming-handler is an export, the embedder makes the request and the outparam; the names are unstable: docs/public_api.md, 'The transport and the server side of wasi:http (unstable in the alpha)'"
+          ]
+        },
+        "streamingBodies": {
+          "c": false,
+          "python": false,
+          "note": "bodies are read whole, no streaming of big bodies: docs/host_scope.md, Known limits ('Bodies of http are whole'); docs/release_checklist.md, section 3"
+        },
+        "http2": {
+          "c": false,
+          "python": false,
+          "note": "HTTP/1.1 only: docs/host_scope.md, Known limits ('No HTTP/2, no redirects, no proxies'); tests/test_known_limits.py"
+        },
+        "redirects": {
+          "c": false,
+          "python": false,
+          "note": "a 3xx answer is the answer, no second request: docs/host_scope.md, Known limits; tests/test_known_limits.py (python and C)"
+        },
+        "proxies": {
+          "c": false,
+          "python": false,
+          "note": "HTTP_PROXY and the like are not read: docs/host_scope.md, Known limits; tests/test_known_limits.py (python and C)"
+        },
+        "tlsHook": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2_tls_ops",
+              "fusedwasi_p2_tls_error",
+              "tls"
+            ],
+            "python": []
+          },
+          "c": true,
+          "python": false,
+          "note": {
+            "c": "state->tls, four functions over any TLS library; the reference hook over Mbed TLS is in tests/tls_mbedtls/: docs/specs/S0001.md; docs/tls_hook.md",
+            "python": "deliberate: TLS is ssl with the system store, no setting and no hook; http_send replaces the whole transport: docs/host_scope.md, Known limits ('The Python twin has TLS and no way to set it'); docs/specs/S0001.md"
+          }
+        }
+      }
+    },
+    "wasi:io": {
+      "title": "Errors, polling, input and output streams",
+      "files": {
+        "c": "p2/wasi_p2_io.h",
+        "python": "p2/wasi_p2_io.py"
+      },
+      "imports": 23,
+      "features": {
+        "error": {
+          "covers": [
+            "error"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "poll": {
+          "covers": [
+            "poll"
+          ],
+          "imports": 4,
+          "c": true,
+          "python": true
+        },
+        "streams": {
+          "covers": [
+            "streams"
+          ],
+          "imports": 17,
+          "c": true,
+          "python": true
+        }
+      }
+    },
+    "wasi:random": {
+      "title": "Secure and insecure random bytes",
+      "files": {
+        "c": "p2/wasi_p2_random.h",
+        "python": "p2/wasi_p2_random.py"
+      },
+      "imports": 5,
+      "features": {
+        "random": {
+          "covers": [
+            "random"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true,
+          "note": "C on Windows is BCryptGenRandom, exercised by the scenario default_source in the CI on Windows, not run by hand: docs/host_scope.md, Known limits ('BCryptGenRandom on Windows'); docs/release_checklist.md, section 3"
+        },
+        "insecure": {
+          "covers": [
+            "insecure"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "insecureSeed": {
+          "covers": [
+            "insecure-seed"
+          ],
+          "imports": 1,
+          "c": true,
+          "python": true
+        }
+      }
+    },
+    "wasi:sockets": {
+      "title": "TCP and UDP sockets, name lookup (unstable in the alpha)",
+      "stability": "unstable",
+      "files": {
+        "c": "p2/wasi_p2_sockets.h",
+        "python": "p2/wasi_p2_sockets.py"
+      },
+      "imports": 59,
+      "features": {
+        "network": {
+          "covers": [
+            "network"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "instanceNetwork": {
+          "covers": [
+            "instance-network"
+          ],
+          "imports": 1,
+          "c": true,
+          "python": true
+        },
+        "ipNameLookup": {
+          "covers": [
+            "ip-name-lookup"
+          ],
+          "imports": 4,
+          "c": true,
+          "python": true
+        },
+        "tcpCreateSocket": {
+          "covers": [
+            "tcp-create-socket"
+          ],
+          "imports": 1,
+          "c": [
+            "partial",
+            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
+          ],
+          "python": [
+            "partial",
+            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
+          ]
+        },
+        "tcp": {
+          "covers": [
+            "tcp"
+          ],
+          "imports": 29,
+          "c": true,
+          "python": true,
+          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback); the options of a listener are given to the accepted socket: docs/host_scope.md, Known limits"
+        },
+        "udpCreateSocket": {
+          "covers": [
+            "udp-create-socket"
+          ],
+          "imports": 1,
+          "c": [
+            "partial",
+            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
+          ],
+          "python": [
+            "partial",
+            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
+          ]
+        },
+        "udp": {
+          "covers": [
+            "udp"
+          ],
+          "imports": 21,
+          "c": true,
+          "python": true,
+          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback): docs/host_scope.md, Known limits"
+        },
+        "ipv6": {
+          "c": [
+            "partial",
+            "the address records are whole and a session over ::1 is tested in both, but a socket of the family IPv6 is made by the system, so a machine with no IPv6 gets not-supported and the tests skip: docs/host_scope.md, Known limits ('IPv6 sockets'); docs/release_checklist.md, section 3"
+          ],
+          "python": [
+            "partial",
+            "the address records are whole and a session over ::1 is tested in both, but a socket of the family IPv6 is made by the system, so a machine with no IPv6 gets not-supported and the tests skip: docs/host_scope.md, Known limits ('IPv6 sockets'); docs/release_checklist.md, section 3"
+          ]
+        },
+        "acceptedSocketProperties": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2__inherit"
+            ],
+            "python": [
+              "fusedwasi.p2.wasi_p2_sockets:_inherit"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "fixed 2026-11-05: accept sets on the new socket what the guest set on the listener: docs/host_scope.md, Known limits; docs/release_checklist.md, section 3"
+        }
+      }
+    },
+    "wasi_snapshot_preview1": {
+      "title": "WASI 0.1, the snapshot (46 calls), over WASI 0.2",
+      "files": {
+        "c": [
+          "p1/wasi_p1.h",
+          "p1/wasi_p1_core.h"
+        ],
+        "python": [
+          "p1/wasi_p1.py",
+          "p1/wasi_p1_core.py"
+        ]
+      },
+      "imports": 46,
+      "features": {
+        "argsEnviron": {
+          "covers": [
+            "args_*",
+            "environ_*"
+          ],
+          "imports": 4,
+          "c": true,
+          "python": true
+        },
+        "clocks": {
+          "covers": [
+            "clock_*"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "fileDescriptors": {
+          "covers": [
+            "fd_*"
+          ],
+          "imports": 21,
+          "c": true,
+          "python": true
+        },
+        "paths": {
+          "covers": [
+            "path_*"
+          ],
+          "imports": 10,
+          "c": true,
+          "python": true
+        },
+        "polling": {
+          "covers": [
+            "poll_oneoff",
+            "sched_yield"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "process": {
+          "covers": [
+            "proc_*"
+          ],
+          "imports": 2,
+          "c": true,
+          "python": true
+        },
+        "random": {
+          "covers": [
+            "random_get"
+          ],
+          "imports": 1,
+          "c": true,
+          "python": true
+        },
+        "sockets": {
+          "covers": [
+            "sock_*"
+          ],
+          "imports": 4,
+          "c": [
+            "partial",
+            "the four calls exist and answer NOTSOCK for a descriptor that exists and BADF for one that does not: docs/host_scope.md, Known limits ('An import with no function')"
+          ],
+          "python": [
+            "partial",
+            "the four calls exist and answer NOTSOCK for a descriptor that exists and BADF for one that does not: docs/host_scope.md, Known limits ('An import with no function')"
+          ]
+        }
+      }
+    },
+    "wasi_unstable": {
+      "title": "WASI 0.1, the first snapshot (preview0): 40 calls shared with the snapshot and 5 of its own",
+      "files": {
+        "c": [
+          "p1/wasi_p1_unstable.h",
+          "p1/wasi_p1_core.h"
+        ],
+        "python": [
+          "p1/wasi_p1_unstable.py",
+          "p1/wasi_p1_core.py"
+        ]
+      },
+      "imports": 45,
+      "features": {
+        "ownCalls": {
+          "covers": [
+            "@differs"
+          ],
+          "imports": 5,
+          "c": true,
+          "python": true,
+          "note": "fd_fdstat_get, fd_filestat_get, fd_seek, path_filestat_get and poll_oneoff differ from the snapshot (the list is `unstable.differs` of src/fusedwasi/signatures/wasi_p1.json)"
+        },
+        "sockets": {
+          "covers": [
+            "sock_*"
+          ],
+          "imports": 3,
+          "c": [
+            "partial",
+            "the calls exist and answer NOTSOCK for a descriptor that exists and BADF for one that does not: docs/host_scope.md, Known limits ('An import with no function')"
+          ],
+          "python": [
+            "partial",
+            "the calls exist and answer NOTSOCK for a descriptor that exists and BADF for one that does not: docs/host_scope.md, Known limits ('An import with no function')"
+          ]
+        },
+        "sharedCalls": {
+          "covers": [
+            "@rest"
+          ],
+          "imports": 37,
+          "c": true,
+          "python": true
+        }
+      }
+    },
+    "host": {
+      "title": "The state and the guest, one for both families (a piece of the library, no imports)",
+      "files": {
+        "c": "p2/wasi_p2_core.h",
+        "python": "p2/wasi_p2_core.py"
+      },
+      "imports": 0,
+      "features": {
+        "stateAndGuest": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2_state",
+              "fusedwasi_p2_guest",
+              "fusedwasi_p2_init",
+              "fusedwasi_p2_free",
+              "fusedwasi_p2_guest_init"
+            ],
+            "python": [
+              "fusedwasi:State",
+              "fusedwasi:Guest",
+              "fusedwasi:Exit",
+              "fusedwasi.p2:State",
+              "fusedwasi.p1:State"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "one State and one Guest serve 0.1 and 0.2: docs/design_model.md, section 12"
+        },
+        "closedState": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2_state_closed"
+            ],
+            "python": [
+              "fusedwasi.p2:State.closed",
+              "fusedwasi.p2:State.close_all"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "a closed state stays closed: docs/design_model.md, section 13"
+        },
+        "memoryBinding": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p2_bind_memory",
+              "fusedwasi_p2_set_memory"
+            ],
+            "python": [
+              "fusedwasi:Guest"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "C binds pointers, Python takes bytearrays or objects with read and write: docs/design_model.md, section 13"
+        },
+        "socketPolicy": {
+          "symbols": {
+            "c": [
+              "socket_addr_check",
+              "allow_ip_name_lookup"
+            ],
+            "python": [
+              "fusedwasi.p2:State(socket_addr_check)",
+              "fusedwasi.p2:State(allow_ip_name_lookup)",
+              "fusedwasi.p2:State(network)"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "nothing is allowed unless the host says so: docs/host_scope.md, the paragraph on sockets"
+        },
+        "httpPolicy": {
+          "symbols": {
+            "c": [
+              "http_check"
+            ],
+            "python": [
+              "fusedwasi.p2:State(http_check)",
+              "fusedwasi.p2:State(http)"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "an outgoing request is refused unless the host allows it: docs/host_scope.md, the paragraph on http"
+        }
+      }
+    },
+    "p1OverP2": {
+      "title": "The layer that puts WASI 0.1 over WASI 0.2 (descriptors of 0.1 are resources of the table of 0.2)",
+      "files": {
+        "c": "p1/wasi_p1_core.h",
+        "python": "p1/wasi_p1_core.py"
+      },
+      "imports": 0,
+      "features": {
+        "openDescriptors": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p1_open_descriptors",
+              "fusedwasi_p1_errno"
+            ],
+            "python": [
+              "fusedwasi.p1:open_descriptors",
+              "fusedwasi.p1:errno_of",
+              "fusedwasi.p1:PreopenError"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "the descriptors are made at the first call or by open_descriptors: docs/host_scope.md, 'Changes of 0.1 that 0.2 forced'"
+        },
+        "unstableCalls": {
+          "symbols": {
+            "c": [
+              "fusedwasi_p1_unstable_fd_seek"
+            ],
+            "python": [
+              "fusedwasi.p1.wasi_p1_unstable:fd_seek"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "the calls of wasi_unstable that differ: docs/public_api.md, the group of 0.1"
+        }
+      }
+    }
+  }
+}
