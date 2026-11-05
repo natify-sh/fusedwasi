@@ -6,7 +6,7 @@ Written by `tools/public_api.py doc` from `src/fusedwasi/public_api.json`; do no
 * **Python**: a private name has a leading underscore (`_check`, `State._slots`). A module lists no other name than the ones below and the functions of its imports.
 * **unstable**: public in the alpha, with no promise: wasi:http and wasi:sockets.
 
-`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 327 public names besides the 247 functions of the imports, 550 private names and 10 private fields.
+`tests/test_public_api.py` fails when a name of the headers is neither here nor marked, when a name here does not exist, when a neutral user (`tests/neutral/`) uses a name that is not here, and when a module of the Python twin has a name with no underscore that is not here. Counts at the last run: C 334 public names besides the 247 functions of the imports, 551 private names and 10 private fields.
 
 ## C
 
@@ -125,7 +125,10 @@ _wasi:http is unstable in the alpha: these names may change before they are used
 | `fusedwasi_p2_http_fields_unref` | drops a reference to a set of fields |
 | `fusedwasi_p2_http_blob_new` | a body of bytes (copied), with one reference |
 | `fusedwasi_p2_http_blob_unref` | drops a reference to a body |
-| `fusedwasi_p2_http_default_send` | the transport of the library (HTTP/1.1 over a socket, `http` only), the default of `state.http_send` |
+| `fusedwasi_p2_http_default_send` | the transport of the library (HTTP/1.1 over a socket; `https` only with `state.tls`), the default of `state.http_send` |
+| `fusedwasi_p2_tls_ops` | the TLS hook: four functions (connect, read, write, close) over a connected descriptor, set as `state.tls`; docs/specs/S0001.md |
+| `fusedwasi_p2_tls_error` | what a TLS hook reports when it fails: a `FUSEDWASI_P2_TLS_*` kind and a text or NULL |
+| `FUSEDWASI_P2_TLS_*` | the kinds of a failure of a TLS hook: certificate, protocol, timeout, terminated, other |
 | `fusedwasi_p2_http_fields_register` | puts a set of fields in the table; the handle, or 0 |
 | `fusedwasi_p2_http_incoming_request_new` | server side: an incoming request in the table, to be given to an exported handler; the handle, or 0 |
 | `fusedwasi_p2_http_outparam_new` | server side: the `response-outparam` for the handler; the host reads the response from it |
@@ -152,6 +155,7 @@ Not public although they match a pattern above: `FUSEDWASI_P2_KIND_P1_FDS`, `FUS
 | `allow_ip_name_lookup` | policy: name resolution allowed |
 | `http_check` | policy hook: may this outgoing request go through; NULL refuses everything |
 | `http_send` | hook: the transport of http (NULL: the library's) |
+| `tls` | hook: the TLS of `https` in the library's transport, a `fusedwasi_p2_tls_ops` (NULL: `https` is `internal-error` unless `http_send` is set) |
 | `std` | the standard streams (NULL: the descriptors of the process) |
 | `terminals` | mask of `FUSEDWASI_P2_TERMINAL_*` |
 | `random_bytes` | hook: the secure source |

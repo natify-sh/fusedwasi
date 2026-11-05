@@ -142,7 +142,7 @@ For 0.1 the same two parts, the same types: a function is `fusedwasi_p1_<name>(&
 | lists and strings it returns | `realloc` of the guest (the `cabi_realloc` of the component) | placing them in the guest's memory |
 | files | the preopened directories (`path`, `name`, `writable`); Python: optionally `filesystem=` | paths confined below the preopen (POSIX and Windows) |
 | sockets | `socket_addr_check`, `allow_ip_name_lookup`; refused by default | TCP, UDP, name lookup (POSIX and Winsock) |
-| http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only, with the system trust store and no setting; in C `https` needs the embedder's `http_send` for now, and a TLS hook is planned, `docs/specs/S0001.md`), the types of `wasi:http` |
+| http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only, with the system trust store and no setting; in C `https` needs the embedder's TLS hook (`state->tls`, four functions over the TLS library it has; `docs/specs/S0001.md`) or `http_send`; the library has no TLS code), the types of `wasi:http` |
 | time, random (state); trap, exit, wait, signal (guest) | a hook, or the system's own | the rest |
 
 **Integers are unsigned**, parameters and results, in C (`uint32_t`, `uint64_t`) and in Python: an offset, a length or a handle is 0 to 2**32 - 1, an `i64` 0 to 2**64 - 1. An engine that hands its values over as signed (the Python bindings of wasmtime and wasm3 do) masks every argument by its width (`x & 0xFFFFFFFF`, `x & 0xFFFFFFFFFFFFFFFF`) and re-signs a result if it wants the range of its own type (`x - 2**32 if x >= 2**31`); the functions do not do it, and a negative offset is outside the memory.
