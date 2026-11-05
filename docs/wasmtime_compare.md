@@ -60,7 +60,7 @@ Both give the same answer, in WASI 0.2 (error-code) and 0.1 (errno), for: a miss
 | E6 | `fd_fdstat_get` of stdout when the host gave a callback for it | filetype `unknown` | `char` | **deliberate** (the C comment: "a stream that goes through a hook has no descriptor to ask and stays a character device") | No. |
 | E7 | `fd_readdir` on stdout | `BADF` | `NOTDIR` | **deliberate** / **open** | No. |
 | E8 | `path_open` of `.`, `sub/..` and a followed link to a directory with **all rights** and no `directory` flag | `ISDIR` (the adapter opens it for writing) | `SUCCESS` | **deliberate**: `FUSEDWASI_P1_R_OF_DIRECTORY` and its comment: "a program that asks for one of them along with the right to write (wasi-libc asks for all the rights there are ...) may mean a directory". **With the rights wasi-libc asks for a directory and `O_DIRECTORY`, all 9 variants agree** (`.`, `sub/..`, a link followed or not, `sub`, `..`, `/`...), apart from the E1 code. | No. |
-| E9 | `path_unlink_file` of `.` | `ISDIR` | `INVAL` | **open**. In 0.2 both say `is-directory` for `.` | No. |
+| E9 | `path_unlink_file` of `.` | `ISDIR` | `INVAL` | **deliberate** (decided by the owner 2026-11-05): 0.1 follows uvwasi here, as `design_model.md` says (the name `.` as the last name: `unlink` and `rmdir` are INVAL); a real directory is `ISDIR` in both. In 0.2 both say `is-directory` for `.`. Pinned in `tests/data/p1/dot.txt` (C and Python) and `tests/test_wasi_p1_core.py`. | No. |
 | E10 | `path_remove_directory` with a trailing slash | `INVAL` (also for an empty directory) | `NOTEMPTY` / `SUCCESS` | **Wasmtime-specific** (same as D7) | No. |
 | E11 | `path_readlink` of a link whose target is absolute (`/etc`) | `PERM` | `PERM` | **fixed 2026-10-26** (the owner decided): 0.1 now refuses it as `readlink-at` of 0.2 does (`not-permitted`), in C and in Python; `path_symlink` with an absolute target was already refused (`NOTCAPABLE`). Pinned in `tests/data/p1/files.txt`. The official wasi-testsuite is run by a user of the library and by `tests/neutral/`; run it with this commit before a release. | The 0.2 text says so for 0.2 only; Wasmtime agrees. |
 | E12 | `path_link` with the follow flag | `INVAL` | `SUCCESS` | **Wasmtime-specific** (same as D8) | The `lookupflags` of `path_link` is in the spec of 0.1. |
@@ -76,7 +76,7 @@ Both give the same answer, in WASI 0.2 (error-code) and 0.1 (errno), for: a miss
 
 ## What this changed in the library
 
-Nothing: every difference found is either Wasmtime's own behaviour or listed as deliberate. **E11** is the one candidate for a change; it needs the owner (it touches the 0.1 behaviour that the wasi-testsuite holds). Nothing was fixed in this task.
+Nothing: every difference found is either Wasmtime's own behaviour or listed as deliberate. **E11** is the one candidate for a change; it needs the owner (it touches the 0.1 behaviour that the wasi-testsuite holds). Nothing was fixed in this task. (Later: **E11** was fixed the same day, see its row; **E9**, left open here, was decided as deliberate on 2026-11-05. The official wasi-testsuite that the row of E11 asks for ran with fusedwasi in the CI on 2026-11-05, job `python-wasmtime` of `neutral.yml`, Python 3.13: passed.)
 
 ## Run it
 

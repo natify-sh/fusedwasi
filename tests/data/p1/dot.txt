@@ -1,0 +1,12 @@
+# WASI 0.1: the name "." as the last name of an unlink or a remove. DELIBERATE difference from Wasmtime (docs/wasmtime_compare.md, E9): fusedwasi says INVAL (28),
+# as uvwasi does, and not ISDIR (31) as Wasmtime does for the unlink. A real directory is ISDIR in both. In 0.2 both say `is-directory` for ".".
+preopen "$TMP" "/data" rw
+start 16384
+
+mem put 1000 "."
+call path_unlink_file 3 1000 1
+call path_remove_directory 3 1000 1
+mem put 1000 "sub/."
+call path_unlink_file 3 1000 5
+mem put 1000 "sub"
+call path_unlink_file 3 1000 3
