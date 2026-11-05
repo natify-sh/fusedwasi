@@ -41,7 +41,7 @@ def main() -> int:
         except OSError as e:
             print(path, e)
     # a skip is read from the report: the allowed reasons are what an app or this system lacks (a compiler: the C twin is run by the other jobs; the ctypes route of Windows; an IPv6 loopback)
-    os.environ.setdefault("FUSEDWASI_ALLOWED_SKIPS", "no C compiler|no cmake|the ctypes route is the Windows branch|no IPv6 loopback")
+    os.environ.setdefault("FUSEDWASI_ALLOWED_SKIPS", "C compiler|no cmake|the ctypes route is the Windows branch|no IPv6 loopback|refuses a hard link")
     rc = pytest.main(["-q", "-rs", "-p", "no:cacheprovider", *FILES])
     print("pytest exit code:", int(rc), flush=True)
     return int(rc)
