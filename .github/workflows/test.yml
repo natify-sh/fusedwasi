@@ -38,6 +38,25 @@ jobs:
       - name: What does this system copy in accept()
         run: uv run python tools/probe_accept_inheritance.py
 
+  pypy:
+    # The Python twin on PyPy (docs/specs/S0009.md). PyPy 8.0 or newer passes everything, on Python 3.12 and on Python 3.11 (uv gives PyPy 3.11.17, which is PyPy 8.0.1). PyPy before 8.0 (7.3.x) refuses os.link(follow_symlinks=False): the four tests that make a hard link
+    # that way are an expected failure there (tests/conftest.py prints the message and advises PyPy 8.0 or newer; no job here has a PyPy that old now, so that path is only run by hand), so the run is green and says so. Linux only: it is the interpreter that is under test.
+    name: pytest on PyPy (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["pypy3.12", "pypy3.11"]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      - run: uv run python -c "import sys; print(sys.version)"
+      - run: uv run pytest -q -rsx
+
   android:
     # The Python twin in an Android app process: CPython's own testbed app (the python.org Android package; the recipe of waboros and of CPython's CI) on a Gradle-managed emulator,
     # x86_64 with KVM, Android 15. An app has no C compiler, so the tests that build the C drivers skip and only the Python twin runs here (tools/android_check.py). arm64: no job,
@@ -59,7 +78,7 @@ jobs:
           java -version && python3 --version && echo "ANDROID_HOME=$ANDROID_HOME"
       - name: stage the site-packages of the app (pytest, fusedwasi) and its working directory (tests, tools)
         run: |
-          python3 -m pip install --quiet --target stage/site-packages pytest  # pure Python wheels
+          python3 -m pip install --quiet --target stage/site-packages pytest 'h11>=0.16,<1'  # pure Python wheels (h11 is the dependency of the Python twin)
           cp -r src/fusedwasi stage/site-packages/
           mkdir -p stage/cwd
           cp -r tools stage/cwd/

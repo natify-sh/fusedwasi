@@ -137,11 +137,11 @@
           "imports": 62,
           "c": [
             "partial",
-            "bodies are read whole, at most 256 MiB, and http-error-code is always none: docs/host_scope.md, Known limits ('Bodies of http are whole')"
+            "bodies are read whole, at most 256 MiB, and http-error-code is always none: docs/host_scope.md, Known limits ('Bodies of http: the C twin reads the answer and sends the request whole')"
           ],
           "python": [
             "partial",
-            "bodies are read whole, at most 256 MiB, and http-error-code is always none: docs/host_scope.md, Known limits ('Bodies of http are whole')"
+            "a request is sent whole unless the answer is asked for before its body is finished (then it goes out as the body is written); the answer is read as it comes and the total is at most 256 MiB: docs/host_scope.md, Known limits ('Bodies of http: the C twin reads the answer and sends the request whole'); docs/specs/S0013.md"
           ]
         },
         "informationalOutboundResponses": {
@@ -217,8 +217,23 @@
         },
         "streamingBodies": {
           "c": false,
-          "python": false,
-          "note": "bodies are read whole, no streaming of big bodies: docs/host_scope.md, Known limits ('Bodies of http are whole'); docs/release_checklist.md, section 3"
+          "python": [
+            "partial",
+            "the answer is read as it comes, and a request goes out as its body is written when the answer is asked for first: docs/host_scope.md, Known limits ('Bodies of http: the C twin reads the answer and sends the request whole'); docs/specs/S0013.md"
+          ],
+          "note": {
+            "c": "deliberate for now: the C twin reads the answer whole, and an answer that breaks after its head fails at `get`: docs/host_scope.md, Known limits ('Bodies of http: the C twin reads the answer and sends the request whole'); docs/specs/S0013.md"
+          },
+          "tests": {
+            "c": [
+              "tests/test_wasi_p2_http.py::test_c_and_python_agree"
+            ],
+            "python": [
+              "tests/test_wasi_p2_http.py::test_the_head_comes_before_the_body_and_a_read_never_waits",
+              "tests/test_wasi_p2_http.py::test_a_stall_between_bytes_fails_after_the_bytes_that_came",
+              "tests/test_wasi_p2_http.py::test_the_answer_may_come_before_the_body_is_finished"
+            ]
+          }
         },
         "http2": {
           "c": false,
@@ -779,7 +794,7 @@
       "wasi:http/tlsHook",
       "wasi:http/https"
     ],
-    "Bodies of http are whole": [
+    "Bodies of http: the C twin reads the answer and sends the request whole": [
       "wasi:http/streamingBodies",
       "wasi:http/types"
     ],
@@ -791,11 +806,14 @@
     "The reference TLS hook is not checked against a server of TLS 1.1 on Windows": [
       "wasi:http/tlsHook"
     ],
-    "The Python twin is run on CPython; PyPy and Pyodide are not supported": {
-      "not a feature": "which interpreters the CI runs is a property of the CI and of the Python twin as a whole, not of one import (docs/specs/S0009.md, S0010.md)"
+    "The Python twin is run on CPython and on PyPy 8; Pyodide is not supported": {
+      "not a feature": "which interpreters the CI runs is a property of the CI and of the Python twin as a whole, not of one import (docs/specs/S0009.md, S0010.md, S0011.md)"
+    },
+    "The C twin on Android is not tested in this repository": {
+      "not a feature": "where the C twin is run is a property of the CI, not of one import (docs/specs/S0010.md, section 7)"
     },
     "A hard link is what the system lets it be": {
-      "not a feature": "a difference of the systems under the filesystem (Android SELinux, PyPy, Pyodide) that the host answers with the error of the system; the feature `wasi:filesystem/types` is the one that has link-at (docs/specs/S0009.md)"
+      "not a feature": "a difference of the systems under the filesystem (Android SELinux, PyPy, Pyodide) that both twins answer with the error code that stands for the error of the system (a Python with no `os.link` answers `unsupported`); the feature `wasi:filesystem/types` is the one that has link-at (docs/specs/S0009.md)"
     },
     "BCryptGenRandom on Windows": [
       "wasi:random/random"

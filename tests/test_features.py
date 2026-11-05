@@ -225,7 +225,8 @@ def test_ipv6_is_true_for_both_twins_and_stands_on_the_checks_of_addresses() -> 
 
 
 def test_a_difference_of_the_twins_is_explained_on_both_sides(tmp_path: Path) -> None:
-    """The twins are held at parity: where the two statuses differ (today `https` and `tlsHook`, both deliberate), each side names the file that says why."""
+    """The twins are held at parity: where the two statuses differ (today `https` and `tlsHook`, both deliberate, and `streamingBodies`, which the C twin has not got yet, S0013), each side
+    names the file that says why."""
     doc = load()
     differing = [
         (module, name)
@@ -233,7 +234,7 @@ def test_a_difference_of_the_twins_is_explained_on_both_sides(tmp_path: Path) ->
         for name, f in body["features"].items()
         if (f["c"] is True, f["c"] is False) != (f["python"] is True, f["python"] is False)
     ]
-    assert differing == [("wasi:http", "https"), ("wasi:http", "tlsHook")]
+    assert differing == [("wasi:http", "https"), ("wasi:http", "streamingBodies"), ("wasi:http", "tlsHook")]
     broken = copy.deepcopy(doc)
     broken["modules"]["wasi:http"]["features"]["tlsHook"]["note"] = {
         "c": "four functions over any TLS library",
@@ -264,7 +265,7 @@ def test_every_limit_of_host_scope_is_in_the_matrix() -> None:
 def test_a_new_limit_in_host_scope_must_come_to_the_matrix(tmp_path: Path) -> None:
     scope = tmp_path / "host_scope.md"
     text = (ROOT / "docs" / "host_scope.md").read_text(encoding="utf-8")
-    marker = "* **Bodies of http are whole.**"
+    marker = "* **Bodies of http: the C twin reads the answer and sends the request whole.**"
     assert marker in text
     scope.write_text(
         text.replace(marker, "* **A limit that nobody wrote in the matrix.** Something.\n" + marker), encoding="utf-8"
@@ -281,22 +282,27 @@ def test_a_limit_that_the_document_dropped_is_stale_in_the_matrix(tmp_path: Path
     scope = tmp_path / "host_scope.md"
     text = (ROOT / "docs" / "host_scope.md").read_text(encoding="utf-8")
     scope.write_text(
-        text.replace("* **Bodies of http are whole.**", "* The body of the bullet that lost its title."),
+        text.replace(
+            "* **Bodies of http: the C twin reads the answer and sends the request whole.**",
+            "* The body of the bullet that lost its title.",
+        ),
         encoding="utf-8",
     )
     result = run("--scope", str(scope))
     assert result.returncode == 1
     assert (
-        "`limits` has 'Bodies of http are whole', which is no limit of host_scope.md (Known limits) any more"
+        "`limits` has 'Bodies of http: the C twin reads the answer and sends the request whole', which is no limit of host_scope.md (Known limits) any more"
         in result.stderr
     )
 
 
 def test_the_limits_of_the_matrix_must_name_real_features(tmp_path: Path) -> None:
     doc = copy.deepcopy(load())
-    doc["limits"]["Bodies of http are whole"] = ["wasi:http/no_such_feature"]
+    doc["limits"]["Bodies of http: the C twin reads the answer and sends the request whole"] = [
+        "wasi:http/no_such_feature"
+    ]
     assert (
-        "limit 'Bodies of http are whole' names the feature wasi:http/no_such_feature, which is not in the matrix"
+        "limit 'Bodies of http: the C twin reads the answer and sends the request whole' names the feature wasi:http/no_such_feature, which is not in the matrix"
         in rejected(tmp_path, doc)
     )
     doc = copy.deepcopy(load())

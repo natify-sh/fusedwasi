@@ -46,15 +46,16 @@ Module `wasi:<package>`: a feature `types` is the interface `wasi:<package>/type
 
 | Feature | Twin | Source |
 | --- | --- | --- |
-| `wasi:http` `types` | both | `docs/host_scope.md`, Known limits, "Bodies of http are whole" (256 MiB, `http-error-code` always `none`) |
+| `wasi:http` `types` | both | `docs/host_scope.md`, Known limits, "Bodies of http: the C twin reads the answer and sends the request whole" (256 MiB; in C `http-error-code` is always `none`) |
 | `wasi:http` `outgoingHandler` | both | same file, "No HTTP/2, no redirects, no proxies" |
+| `streamingBodies` | C (Python: partial) | same file, "Bodies of http: the C twin reads the answer and sends the request whole"; `docs/specs/S0013.md` |
 | `https` | C | same file, "`https` in C needs a TLS hook or `http_send`"; `docs/specs/S0001.md`; `docs/tls_hook.md` (Python has TLS: `true`) |
 | `serverSide` | both | `docs/public_api.md`, "The transport and the server side of wasi:http (unstable in the alpha)" |
 | `wasi_snapshot_preview1` and `wasi_unstable` `sockets` | both | same file, "An import with no function" (the four calls answer `NOTSOCK` or `BADF`) |
 
 `false` with a note: `tlsHook` in Python is **deliberate** (`docs/host_scope.md`, "The Python twin has TLS and no way to set it"; `docs/specs/S0001.md` 3.3) and `tlsHook` in C is `true` (`state->tls`); `streamingBodies`, `http2`, `redirects`, `proxies` are the limits of the same bullets; `timezone` and `informationalOutboundResponses` are unstable items without a function.
 
-**The twins are held at parity:** where the statuses of the two twins differ, the checker requires that **each side** names a file of the repository that says why (today `https` and `tlsHook`, both deliberate: `docs/host_scope.md`, Known limits; `docs/specs/S0001.md`). A third difference that nobody wrote down is an error **[run: `tests/test_features.py`]**.
+**The twins are held at parity:** where the statuses of the two twins differ, the checker requires that **each side** names a file of the repository that says why (today `https` and `tlsHook`, both deliberate: `docs/host_scope.md`, Known limits; `docs/specs/S0001.md`; and `streamingBodies`, which the C twin has not got yet: `docs/specs/S0013.md`). A third difference that nobody wrote down is an error **[run: `tests/test_features.py`]**. Since 2026-11-05 a new behaviour of the transport of `wasi:http` may be Python first ([S0013](specs/S0013.md)); it is then another difference of this kind, written down the same way.
 
 **The rule for `partial`:** it is a gap of the library, or a claim that nobody has checked. A behaviour that the system or the specification defines is not one: a socket of the family IPv6 on a machine with no IPv6 is `not-supported`, which is the answer that the WIT gives for it, so `tcpCreateSocket`, `udpCreateSocket` and `ipv6` are `true` (the checks of addresses are run in both twins on any machine, `tests/test_wasi_p2_address_checks.py`, and a whole session over `::1` is compared where there is IPv6). A `partial` says its own note: the note of the feature does not stand in for it.
 
