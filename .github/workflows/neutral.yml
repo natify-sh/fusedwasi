@@ -9,6 +9,11 @@ on:
     paths-ignore: ["docs/**", "*.md", "LICENSE"]
   pull_request:
 
+# a newer push to the same ref cancels the run in progress (as in the other natify-sh repositories)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
