@@ -28,3 +28,6 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pyright
       - run: uv run pytest -q -rs
+      # a measurement and not a test: what this system copies from a listener to the socket that accept() makes (docs/host_scope.md, Known limits); the answer is in the log
+      - name: What does this system copy in accept()
+        run: uv run python tools/probe_accept_inheritance.py
