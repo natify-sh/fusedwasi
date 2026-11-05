@@ -153,3 +153,10 @@ def test_without_a_hook_https_is_the_internal_error_of_today(driver: Path, idle_
     assert got["result"].startswith(f"error tag={tag('internal-error')} message=https needs a TLS hook")
     assert "http_send" in got["result"]
     assert got["calls"].startswith("calls connect=0 ")
+
+
+def test_the_document_shows_the_hook_as_it_is() -> None:
+    """`docs/tls_hook.md` carries the reference hook in full; it is the file that the CI builds and runs, so the document cannot say something that was not tested."""
+    root = Path(__file__).parent.parent
+    hook = (root / "tests" / "tls_mbedtls" / "fusedwasi_mbedtls_hook.h").read_text()
+    assert "```c\n" + hook + "```" in (root / "docs" / "tls_hook.md").read_text()
