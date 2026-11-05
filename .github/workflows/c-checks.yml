@@ -73,6 +73,28 @@ jobs:
           cl 2>&1 | findstr /i "Version"
           uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_package.py
 
+  msvc-run-arm64:
+    name: tests with the C drivers built by MSVC (windows ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # wasmtime-py is for the neutral users and the comparison with Wasmtime; none of the files below uses it, and there may be no wheel of it for Windows on ARM64.
+      - run: uv sync --no-install-package wasmtime
+      # The same files as msvc-run, with the ARM64 compiler of vcvarsarm64.bat (`cl` for ARM64) and the same reasons allowed for a skip.
+      - name: Every C program and the Python twin of each, built with cl for ARM64 and run
+        shell: cmd
+        env:
+          FUSEDWASI_TEST_CC: cl
+          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers|no IPv6 loopback'
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsarm64.bat"
+          cl 2>&1 | findstr /i "Version"
+          uv run --no-sync pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_package.py
+
   msvc-wasm3:
     name: C over wasm3, the engine and the user built by MSVC (windows)
     runs-on: windows-latest
