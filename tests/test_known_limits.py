@@ -5,6 +5,7 @@ Nothing here is a feature; each test says what the host does where it does not d
 
 import importlib
 import inspect
+import os
 import re
 import socket
 import subprocess
@@ -368,3 +369,82 @@ int main(void) {
     rc, tag, message = out.split(" ", 2)
     assert rc != "0" and int(tag) == H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))
     assert "http_send" in message
+
+
+# ---- the same three limits of http, in C ---------------------------------------------------------------------------------------------------
+
+C_FETCH = """#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "wasi_p2_http.h"
+/* usage: fetch <port> <path>...: one request for each path, in this order, through the default transport; prints "<status> <location or -> <body>" for each */
+int main(int argc, char **argv) {
+    char authority[64];
+    snprintf(authority, sizeof authority, "127.0.0.1:%s", argv[1]);
+    fusedwasi_p2_state s;
+    fusedwasi_p2_init(&s);
+    for (int i = 2; i < argc; i++) {
+        fusedwasi_p2_http_request req;
+        fusedwasi_p2_http_response out;
+        fusedwasi_p2_http_error err;
+        memset(&req, 0, sizeof req), memset(&out, 0, sizeof out), memset(&err, 0, sizeof err);
+        fusedwasi_p2_http_fields *none = fusedwasi_p2_http_fields_new(0); /* the transport reads the headers: they are given, empty */
+        req.method = "GET", req.scheme = "http", req.authority = authority, req.path = argv[i], req.headers = none;
+        int rc = fusedwasi_p2_http_default_send(&s, &req, &out, &err);
+        fusedwasi_p2_http_fields_unref(none);
+        if (rc != 0) {
+            printf("error %u\\n", (unsigned)err.tag);
+            fusedwasi_p2_http_error_free(&err);
+            continue;
+        }
+        const char *location = "-";
+        for (uint32_t k = 0; out.headers && k < out.headers->count; k++)
+            if (strcmp(out.headers->e[k].name, "location") == 0) location = (const char *)out.headers->e[k].value;
+        printf("%u %.*s %.*s\\n", (unsigned)out.status, location[0] == '-' ? 1 : 7, location, (int)(out.body ? out.body->len : 0), out.body ? (const char *)out.body->data : "");
+        fusedwasi_p2_http_fields_unref(out.headers);
+        if (out.body) fusedwasi_p2_http_blob_unref(out.body);
+    }
+    return 0;
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def c_fetch(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    if CC is None:
+        pytest.skip("no C compiler")
+    where = tmp_path_factory.mktemp("c_fetch")
+    source = where / "fetch.c"
+    source.write_text(C_FETCH)
+    binary = where / ("fetch.exe" if sys.platform == "win32" else "fetch")
+    compile_c(source, binary, [C_P2])
+    return binary
+
+
+def c_get(binary: Path, port: int, *paths: str, env: dict[str, str] | None = None) -> list[str]:
+    run = subprocess.run([str(binary), str(port), *paths], capture_output=True, text=True, check=True, env=env)
+    return run.stdout.splitlines()
+
+
+def test_http_a_redirect_is_not_followed_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    port, lines = server
+    assert c_get(c_fetch, port, "/redirect") == ["302 /target "]
+    assert lines == ["GET /redirect HTTP/1.1"]  # one request: the guest sees the 302 and decides
+
+
+def test_http_is_http_1_1_with_one_connection_for_each_request_in_c(
+    c_fetch: Path, server: tuple[int, list[str]]
+) -> None:
+    port, lines = server
+    assert c_get(c_fetch, port, "/a", "/b") == ["200 - ok", "200 - ok"]
+    assert lines == ["GET /a HTTP/1.1", "GET /b HTTP/1.1"]  # no HTTP/2, no reuse (`Connection: close`)
+
+
+def test_http_proxy_variables_are_not_read_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    port, lines = server
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("no_proxy", "http_proxy", "all_proxy")}
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        env[name] = "http://127.0.0.1:9"
+    assert c_get(c_fetch, port, "/p", env=env) == ["200 - ok"] and lines == [
+        "GET /p HTTP/1.1"
+    ]  # straight to the server
