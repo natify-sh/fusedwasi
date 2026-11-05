@@ -1566,7 +1566,7 @@ FUSEDWASI_P2_FN uint8_t *fusedwasi_p2__http_build_request(const fusedwasi_p2_htt
 #define FUSEDWASI_P2__PUTS(t) FUSEDWASI_P2__PUT((t), strlen(t))
     FUSEDWASI_P2__PUTS(req->method), FUSEDWASI_P2__PUTS(" "), FUSEDWASI_P2__PUTS(req->path), FUSEDWASI_P2__PUTS(" HTTP/1.1\r\nHost: "), FUSEDWASI_P2__PUTS(req->authority), FUSEDWASI_P2__PUTS("\r\n");
     int has_length = 0;
-    for (uint32_t i = 0; i < req->headers->count; i++) {
+    for (uint32_t i = 0; req->headers && i < req->headers->count; i++) { /* NULL: no headers */
         FUSEDWASI_P2__PUTS(req->headers->e[i].name), FUSEDWASI_P2__PUTS(": "), FUSEDWASI_P2__PUT(req->headers->e[i].value, req->headers->e[i].len), FUSEDWASI_P2__PUTS("\r\n");
         if (strcmp(req->headers->e[i].name, "content-length") == 0) has_length = 1;
     }

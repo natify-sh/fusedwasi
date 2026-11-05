@@ -388,10 +388,8 @@ int main(int argc, char **argv) {
         fusedwasi_p2_http_response out;
         fusedwasi_p2_http_error err;
         memset(&req, 0, sizeof req), memset(&out, 0, sizeof out), memset(&err, 0, sizeof err);
-        fusedwasi_p2_http_fields *none = fusedwasi_p2_http_fields_new(0); /* the transport reads the headers: they are given, empty */
-        req.method = "GET", req.scheme = "http", req.authority = authority, req.path = argv[i], req.headers = none;
+        req.method = "GET", req.scheme = "http", req.authority = authority, req.path = argv[i]; /* req.headers is NULL: no headers */
         int rc = fusedwasi_p2_http_default_send(&s, &req, &out, &err);
-        fusedwasi_p2_http_fields_unref(none);
         if (rc != 0) {
             printf("error %u\\n", (unsigned)err.tag);
             fusedwasi_p2_http_error_free(&err);
