@@ -1,4 +1,4 @@
-"""What the packages of the Python twin export: each family its own names with `__all__`, the top level only what belongs to no family."""
+"""What the packages of the Python twin export: each family its own names with `__all__`, the top level what belongs to no family and the classes both share."""
 
 import importlib
 import inspect
@@ -26,9 +26,11 @@ def test_all_is_complete_importable_and_without_duplicates(package: ModuleType) 
     assert public == set(names)
 
 
-def test_the_top_level_has_no_name_of_a_family() -> None:
-    assert sorted(fusedwasi.__all__) == ["__version__", "get_include", "get_signatures_path"]
-    for name in ("State", "Guest", "Exit", "Trap"):
+def test_the_top_level_has_the_shared_classes_and_no_other_name_of_a_family() -> None:
+    assert sorted(fusedwasi.__all__) == ["Exit", "Guest", "State", "__version__", "get_include", "get_signatures_path"]
+    for name in FAMILY_CLASSES:
+        assert getattr(fusedwasi, name) is getattr(p1, name) is getattr(p2, name)
+    for name in ("Trap", "Pollable", "WasiError"):
         assert not hasattr(fusedwasi, name)
     assert isinstance(fusedwasi.__version__, str)
 

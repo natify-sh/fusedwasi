@@ -243,10 +243,13 @@ Not public although they match a pattern above: `FUSEDWASI_P2_KIND_P1_FDS`, `FUS
 
 ### `fusedwasi`
 
-the top level: what belongs to no family.
+the top level: what belongs to no family, and the classes both families share.
 
 | Name | Purpose |
 | --- | --- |
+| `State` | the world (the same class as `fusedwasi.p1.State` and `fusedwasi.p2.State`) |
+| `Guest` | the caller (the same class as `fusedwasi.p1.Guest` and `fusedwasi.p2.Guest`) |
+| `Exit` | raised when the program ends (the same class as `fusedwasi.p1.Exit` and `fusedwasi.p2.Exit`) |
 | `__version__` | the version of the distribution |
 | `get_include` | the directory with the C headers |
 | `get_signatures_path` | the directory with the tables of signatures |

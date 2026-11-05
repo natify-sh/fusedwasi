@@ -1,8 +1,8 @@
 """A host of WASI 0.1 (`wasi_snapshot_preview1`) in Python: flat functions on a `Guest` over a `State`, the twin of `include/fusedwasi/p1/*.h`.
 
 The names a user needs are here: `State`, `Guest`, `Exit`, `WasiError`, `PreopenError`, `errno_of` and the constants of the specification (`E_*` errno, `FT_*` file types, `O_*` open flags,
-`FD_*` descriptor flags, `R_*` rights, `T_*` time flags). The functions are in `fusedwasi.p1.wasi_p1` (and `wasi_p1_unstable`), one for each import. `fusedwasi.p2` has the same names for WASI
-0.2 (`State`, `Guest`, `Exit`), which are other classes: a program that uses both writes `fusedwasi.p1.State` and `fusedwasi.p2.State`.
+`FD_*` descriptor flags, `R_*` rights, `T_*` time flags). The functions are in `fusedwasi.p1.wasi_p1` (and `wasi_p1_unstable`), one for each import. `State`, `Guest` and `Exit` are the same classes as those of `fusedwasi.p2` and
+of the top level (`fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State`): a host of 0.1 can write `from fusedwasi import State, Guest, Exit`.
 
 Alpha, and not whole yet: the calls of `wasi_p1` that exist are those that the tests compare with the C (see the list in that file).
 """
