@@ -761,5 +761,38 @@
         }
       }
     }
+  },
+  "limits": {
+    "IPv6 sockets": [
+      "wasi:sockets/ipv6",
+      "wasi:sockets/tcpCreateSocket",
+      "wasi:sockets/udpCreateSocket"
+    ],
+    "The properties of a listener are copied to the sockets it accepts": [
+      "wasi:sockets/acceptedSocketProperties"
+    ],
+    "https in C needs a TLS hook or http_send": [
+      "wasi:http/https",
+      "wasi:http/tlsHook"
+    ],
+    "The Python twin has TLS and no way to set it": [
+      "wasi:http/tlsHook",
+      "wasi:http/https"
+    ],
+    "Bodies of http are whole": [
+      "wasi:http/streamingBodies",
+      "wasi:http/types"
+    ],
+    "No HTTP/2, no redirects, no proxies": [
+      "wasi:http/http2",
+      "wasi:http/redirects",
+      "wasi:http/proxies"
+    ],
+    "BCryptGenRandom on Windows": [
+      "wasi:random/random"
+    ],
+    "An import with no function: not the library's to decide": {
+      "not a feature": "the library has a function for every import it knows, in both twins (tests/test_known_limits.py, test_the_c_and_the_python_have_a_function_for_the_same_imports; the checker's own list of unlisted functions); what an import that it does not know answers is the choice of whoever links the imports: docs/host_scope.md, Known limits"
+    }
   }
 }

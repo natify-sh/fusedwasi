@@ -243,3 +243,65 @@ def test_a_difference_of_the_twins_is_explained_on_both_sides(tmp_path: Path) ->
         "wasi:http/tlsHook: the twins differ (c true, python false), and the c side names no file that says why"
         in rejected(tmp_path, broken)
     )
+
+
+# ---- every limit of host_scope.md is in the matrix --------------------------------------------------------------------------------------
+
+
+def test_every_limit_of_host_scope_is_in_the_matrix() -> None:
+    """The matrix was made by reading "Known limits"; the checker now proves that nothing is left out: the keys of `limits` are the titles of the bullets, no more and no fewer."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_features", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    titles = module.known_limits(ROOT / "docs" / "host_scope.md")
+    assert len(titles) >= 8
+    assert list(load()["limits"]) == titles
+
+
+def test_a_new_limit_in_host_scope_must_come_to_the_matrix(tmp_path: Path) -> None:
+    scope = tmp_path / "host_scope.md"
+    text = (ROOT / "docs" / "host_scope.md").read_text(encoding="utf-8")
+    marker = "* **Bodies of http are whole.**"
+    assert marker in text
+    scope.write_text(
+        text.replace(marker, "* **A limit that nobody wrote in the matrix.** Something.\n" + marker), encoding="utf-8"
+    )
+    result = run("--scope", str(scope))
+    assert result.returncode == 1
+    assert (
+        "the limit 'A limit that nobody wrote in the matrix' of host_scope.md (Known limits) is not in `limits` of the matrix"
+        in result.stderr
+    )
+
+
+def test_a_limit_that_the_document_dropped_is_stale_in_the_matrix(tmp_path: Path) -> None:
+    scope = tmp_path / "host_scope.md"
+    text = (ROOT / "docs" / "host_scope.md").read_text(encoding="utf-8")
+    scope.write_text(
+        text.replace("* **Bodies of http are whole.**", "* The body of the bullet that lost its title."),
+        encoding="utf-8",
+    )
+    result = run("--scope", str(scope))
+    assert result.returncode == 1
+    assert (
+        "`limits` has 'Bodies of http are whole', which is no limit of host_scope.md (Known limits) any more"
+        in result.stderr
+    )
+
+
+def test_the_limits_of_the_matrix_must_name_real_features(tmp_path: Path) -> None:
+    doc = copy.deepcopy(load())
+    doc["limits"]["Bodies of http are whole"] = ["wasi:http/no_such_feature"]
+    assert (
+        "limit 'Bodies of http are whole' names the feature wasi:http/no_such_feature, which is not in the matrix"
+        in rejected(tmp_path, doc)
+    )
+    doc = copy.deepcopy(load())
+    doc["limits"]["BCryptGenRandom on Windows"] = {"not a feature": "no source here"}
+    assert "must say why and name a file of the repository" in rejected(tmp_path, doc)
+    doc = copy.deepcopy(load())
+    del doc["limits"]
+    assert "`limits` is missing" in rejected(tmp_path, doc)

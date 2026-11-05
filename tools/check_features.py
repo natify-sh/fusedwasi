@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "src" / "fusedwasi"
 C_ROOT = PACKAGE / "include" / "fusedwasi"
 DEFAULT_DOC = ROOT / "docs" / "features.json"
+HOST_SCOPE = ROOT / "docs" / "host_scope.md"
 TWINS = ("c", "python")
 FORMAT = "fusedwasi-features"
 SOURCE = re.compile(r"\b((?:docs|src|tests|tools)/[\w./-]*\w)")  # a path of the repository in a note
@@ -274,6 +275,49 @@ def check_note(label: str, text: str, errors: list[str]) -> None:
 TEST_PATH = re.compile(r"\btests/[\w./-]+")
 
 
+def normalize_title(title: str) -> str:
+    """The title of a limit as the matrix names it: without links, parentheses, backticks and the full stop at the end."""
+    title = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", title)
+    title = re.sub(r"\s*\([^)]*\)", "", title)
+    return re.sub(r"\s+", " ", title.replace("`", "")).strip().rstrip(".;: ")
+
+
+def known_limits(scope: Path) -> list[str]:
+    """The titles of the bullets of "Known limits" in `docs/host_scope.md`, normalized."""
+    text = scope.read_text(encoding="utf-8")
+    start = text.index("## Known limits")
+    end = text.find("\n## ", start + 5)
+    section = text[start : end if end > 0 else len(text)]
+    return [normalize_title(t) for t in re.findall(r"^\* \*\*(.+?)\*\*", section, flags=re.MULTILINE)]
+
+
+def check_limits(doc: dict[str, Any], scope: Path, errors: list[str]) -> None:
+    """Every limit that `host_scope.md` lists is in the matrix: `limits` maps its title to the features that stand for it, or says why it is not a feature. The keys are the titles of the
+    document, no more and no fewer, and every feature that is named exists."""
+    limits: Any = doc.get("limits")
+    if not isinstance(limits, dict):
+        errors.append("`limits` is missing: an object from the title of each limit of host_scope.md (Known limits) to the features that stand for it")
+        return
+    features = {f"{m}/{f}" for m, body in doc.get("modules", {}).items() for f in body.get("features", {})}
+    titles = known_limits(scope)
+    for title in titles:
+        if title not in limits:
+            errors.append(f"the limit '{title}' of {scope.name} (Known limits) is not in `limits` of the matrix")
+    for key, value in limits.items():  # pyright: ignore[reportUnknownVariableType]
+        if key not in titles:
+            errors.append(f"`limits` has '{key}', which is no limit of {scope.name} (Known limits) any more")
+        elif isinstance(value, dict):
+            reason = value.get("not a feature", "")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            if not isinstance(reason, str) or not SOURCE.search(reason):
+                errors.append(f"limit '{key}': 'not a feature' must say why and name a file of the repository")
+        elif isinstance(value, list) and value and all(isinstance(v, str) for v in value):  # pyright: ignore[reportUnknownVariableType]
+            for ref in value:  # pyright: ignore[reportUnknownVariableType]
+                if ref not in features:
+                    errors.append(f"limit '{key}' names the feature {ref}, which is not in the matrix")
+        else:
+            errors.append(f"limit '{key}': a list of 'module/feature' or {{\"not a feature\": reason}}")
+
+
 def test_exists(identifier: str) -> bool:
     """`tests/file.py::test_name` (a parameter in brackets is not part of the name): the file is there and defines the test."""
     path, _, name = identifier.partition("::")
@@ -319,7 +363,7 @@ def check_difference(label: str, feature: dict[str, Any], errors: list[str]) -> 
             errors.append(f"{label}: the twins differ (c {kinds['c']}, python {kinds['python']}), and the {twin} side names no file that says why")
 
 
-def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
+def compute(doc: dict[str, Any], errors: list[str], scope: Path = HOST_SCOPE) -> dict[str, Any]:
     """Run the checks of the structure and the functions; return the computed matrix (module -> feature -> twin -> counts)."""
     p2, p1 = load_signatures()
     cnames = c_functions()
@@ -416,6 +460,7 @@ def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
             computed[mname][fname] = row
     if total_p2 != len(p2):
         errors.append(f"the modules of 0.2 have {total_p2} imports, the tables have {len(p2)}")
+    check_limits(doc, scope, errors)
     unlisted = unlisted_functions(p2, cnames)
     if unlisted:
         errors.append(f"functions of the twins that no table lists: {', '.join(unlisted)}")
@@ -458,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--doc", type=Path, default=DEFAULT_DOC, help="the file to check (default docs/features.json)")
     parser.add_argument("--json", action="store_true", help="print the computed matrix as JSON")
     parser.add_argument("--list", action="store_true", help="print the modules and the features as a table")
+    parser.add_argument("--scope", type=Path, default=HOST_SCOPE, help="the host_scope.md whose Known limits must be in the matrix (the tests use a copy)")
     args = parser.parse_args(argv)
     sys.path.insert(0, str(ROOT / "src"))
     try:
@@ -469,7 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.doc}: the top level must be an object", file=sys.stderr)
         return 1
     errors: list[str] = []
-    computed = compute(doc, errors)  # pyright: ignore[reportUnknownArgumentType]
+    computed = compute(doc, errors, args.scope)  # pyright: ignore[reportUnknownArgumentType]
     if args.list:
         print(table(doc))  # pyright: ignore[reportUnknownArgumentType]
     if args.json:
