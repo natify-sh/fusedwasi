@@ -1,19 +1,24 @@
 /* A TLS hook (`fusedwasi_p2_tls_ops`, docs/specs/S0001.md) over Mbed TLS 3.6: the reference of the tests, and the example of docs/tls_hook.md.
-   An embedder copies it and changes what is marked EMBEDDER. POSIX only for now (poll, fcntl); a Windows version is another file with the same four functions.
+   An embedder copies it and changes what is marked EMBEDDER. It builds on POSIX (Linux, macOS) and on Windows: the calls of the system that differ (waiting, the mode of the descriptor,
+   the errors, the clock) are in one block, `ref_tls_*` below, with a branch for Windows.
 
    The contract that the hook keeps (docs/tls_hook.md, section 2): the chain and the host name are verified (required), TLS 1.2 or later, a failure is reported as one of the kinds,
    each session is its own (no state is shared between sessions), and the waiting is the hook's. */
 #ifndef FUSEDWASI_MBEDTLS_HOOK_H
 #define FUSEDWASI_MBEDTLS_HOOK_H
 
+#include "wasi_p2_http.h" /* first: it brings the sockets of the system (on Windows winsock2.h, before windows.h) */
+
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#endif
 
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/entropy.h"
@@ -22,7 +27,6 @@
 #include "mbedtls/ssl.h"
 #include "mbedtls/x509_crt.h"
 #include "psa/crypto.h"
-#include "wasi_p2_http.h"
 
 /* EMBEDDER: what the hook needs from the host. `state->user` points to one of these. The trust anchors are the embedder's: a PEM bundle, from a file, from the system, or pinned. */
 typedef struct {
@@ -38,45 +42,121 @@ typedef struct {
     mbedtls_ctr_drbg_context drbg;
 } ref_tls_session;
 
+#ifdef _WIN32
+#define REF_TLS_THREAD_LOCAL __declspec(thread)
+#else
+#define REF_TLS_THREAD_LOCAL _Thread_local
+#endif
+
 /* the text of a failure; the library copies it at once, so one buffer for each thread is enough */
-static _Thread_local char ref_tls_message[200];
+static REF_TLS_THREAD_LOCAL char ref_tls_message[200];
+
+/* ---- the calls of the system that differ between POSIX and Windows ---- */
 
 static long long ref_tls_now_ms(void) {
+#ifdef _WIN32
+    return (long long)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
 }
+
+/* the descriptor that the library gives is an `int` (on Windows a SOCKET that fits in it) */
+static int ref_tls_set_nonblocking(int fd) {
+#ifdef _WIN32
+    u_long on = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &on);
+#else
+    return fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+#endif
+}
+
+static int ref_tls_poll(int fd, short events, int ms) {
+#ifdef _WIN32
+    WSAPOLLFD p;
+    p.fd = (SOCKET)fd, p.events = events, p.revents = 0;
+    return WSAPoll(&p, 1, ms);
+#else
+    struct pollfd p = {fd, events, 0};
+    return poll(&p, 1, ms);
+#endif
+}
+
+static int ref_tls_error_is_interrupt(void) {
+#ifdef _WIN32
+    return WSAGetLastError() == WSAEINTR;
+#else
+    return errno == EINTR;
+#endif
+}
+
+static int ref_tls_error_is_again(void) { /* a non-blocking call that has to wait */
+#ifdef _WIN32
+    int e = WSAGetLastError();
+    return e == WSAEWOULDBLOCK || e == WSAEINTR;
+#else
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+#endif
+}
+
+static int ref_tls_error_is_reset(void) {
+#ifdef _WIN32
+    int e = WSAGetLastError();
+    return e == WSAECONNRESET || e == WSAECONNABORTED;
+#else
+    return errno == ECONNRESET || errno == EPIPE;
+#endif
+}
+
+static int ref_tls_send_bytes(int fd, const unsigned char *buf, size_t n) {
+#ifdef _WIN32
+    return send((SOCKET)fd, (const char *)buf, (int)n, 0);
+#else
+    int flags = 0;
+#ifdef MSG_NOSIGNAL
+    flags = MSG_NOSIGNAL; /* a write to a closed connection is an error and not a signal */
+#endif
+    return (int)send(fd, buf, n, flags);
+#endif
+}
+
+static int ref_tls_recv_bytes(int fd, unsigned char *buf, size_t n) {
+#ifdef _WIN32
+    return recv((SOCKET)fd, (char *)buf, (int)n, 0);
+#else
+    return (int)recv(fd, buf, n, 0);
+#endif
+}
+
+/* ---- the hook ---- */
 
 /* waits for the descriptor until `deadline`: 1 ready, 0 the time is over, -1 failure */
 static int ref_tls_wait(int fd, short events, long long deadline) {
     for (;;) {
         long long left = deadline - ref_tls_now_ms();
         if (left <= 0) return 0;
-        struct pollfd p = {fd, events, 0};
-        int r = poll(&p, 1, left > 2000000000 ? 2000000000 : (int)left);
-        if (r < 0 && errno == EINTR) continue;
+        int r = ref_tls_poll(fd, events, left > 2000000000 ? 2000000000 : (int)left);
+        if (r < 0 && ref_tls_error_is_interrupt()) continue;
         return r;
     }
 }
 
-/* the two callbacks that give Mbed TLS the socket (non-blocking: EAGAIN is "want read" or "want write") */
+/* the two callbacks that give Mbed TLS the socket (non-blocking: "again" is "want read" or "want write") */
 static int ref_tls_send(void *ctx, const unsigned char *buf, size_t n) {
-    int flags = 0;
-#ifdef MSG_NOSIGNAL
-    flags = MSG_NOSIGNAL;
-#endif
-    ssize_t r = send(((ref_tls_session *)ctx)->fd, buf, n, flags);
-    if (r >= 0) return (int)r;
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return MBEDTLS_ERR_SSL_WANT_WRITE;
-    if (errno == EPIPE || errno == ECONNRESET) return MBEDTLS_ERR_NET_CONN_RESET;
+    int r = ref_tls_send_bytes(((ref_tls_session *)ctx)->fd, buf, n);
+    if (r >= 0) return r;
+    if (ref_tls_error_is_again()) return MBEDTLS_ERR_SSL_WANT_WRITE;
+    if (ref_tls_error_is_reset()) return MBEDTLS_ERR_NET_CONN_RESET;
     return MBEDTLS_ERR_NET_SEND_FAILED;
 }
 
 static int ref_tls_recv(void *ctx, unsigned char *buf, size_t n) {
-    ssize_t r = recv(((ref_tls_session *)ctx)->fd, buf, n, 0);
-    if (r >= 0) return (int)r;
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return MBEDTLS_ERR_SSL_WANT_READ;
-    if (errno == ECONNRESET) return MBEDTLS_ERR_NET_CONN_RESET;
+    int r = ref_tls_recv_bytes(((ref_tls_session *)ctx)->fd, buf, n);
+    if (r >= 0) return r;
+    if (ref_tls_error_is_again()) return MBEDTLS_ERR_SSL_WANT_READ;
+    if (ref_tls_error_is_reset()) return MBEDTLS_ERR_NET_CONN_RESET;
     return MBEDTLS_ERR_NET_RECV_FAILED;
 }
 
@@ -152,7 +232,13 @@ static void *ref_tls_connect(fusedwasi_p2_state *s, int fd, const char *host, in
         ref_tls_free(t);
         return NULL;
     }
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK); /* the hook does its own waiting */
+#ifdef SO_NOSIGPIPE /* macOS has no MSG_NOSIGNAL: the socket itself must not raise a signal on a write to a closed connection */
+    {
+        int one = 1;
+        (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const void *)&one, sizeof one);
+    }
+#endif
+    ref_tls_set_nonblocking(fd); /* the hook does its own waiting */
     mbedtls_ssl_set_bio(&t->ssl, t, ref_tls_send, ref_tls_recv, NULL);
     long long deadline = ref_tls_now_ms() + timeout_ms;
     for (;;) {
