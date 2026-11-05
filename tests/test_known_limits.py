@@ -389,9 +389,14 @@ int main(int argc, char **argv) {
         fusedwasi_p2_http_error err;
         memset(&req, 0, sizeof req), memset(&out, 0, sizeof out), memset(&err, 0, sizeof err);
         req.method = "GET", req.scheme = "http", req.authority = authority, req.path = argv[i]; /* req.headers is NULL: no headers */
+        /* a path "!name" leaves that field NULL: the transport answers an error instead of crashing */
+        if (strcmp(argv[i], "!method") == 0) req.method = NULL;
+        if (strcmp(argv[i], "!scheme") == 0) req.scheme = NULL;
+        if (strcmp(argv[i], "!authority") == 0) req.authority = NULL;
+        if (strcmp(argv[i], "!path") == 0) req.path = NULL;
         int rc = fusedwasi_p2_http_default_send(&s, &req, &out, &err);
         if (rc != 0) {
-            printf("error %u\\n", (unsigned)err.tag);
+            printf("error %u %s\\n", (unsigned)err.tag, err.str[0] ? err.str[0] : "-");
             fusedwasi_p2_http_error_free(&err);
             continue;
         }
@@ -446,3 +451,17 @@ def test_http_proxy_variables_are_not_read_in_c(c_fetch: Path, server: tuple[int
     assert c_get(c_fetch, port, "/p", env=env) == ["200 - ok"] and lines == [
         "GET /p HTTP/1.1"
     ]  # straight to the server
+
+
+def test_http_a_request_with_a_missing_field_is_an_error_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    """The method, the scheme, the authority and the path of a request must be there; a NULL is answered with an error, and nothing is sent. (`headers` NULL is no headers.)"""
+    port, lines = server
+    uri_invalid = H._CASES.index(next(c for c in H._CASES if c[0] == "HTTP-request-URI-invalid"))
+    internal = H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))
+    assert c_get(c_fetch, port, "!method", "!scheme", "!authority", "!path") == [
+        f"error {internal} the request has no method",
+        f"error {internal} the request has no scheme",
+        f"error {uri_invalid} -",
+        f"error {uri_invalid} -",
+    ]
+    assert lines == []  # no connection was made

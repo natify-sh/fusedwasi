@@ -1602,6 +1602,10 @@ FUSEDWASI_P2_FN uint8_t *fusedwasi_p2__http_build_request(const fusedwasi_p2_htt
 /* The transport of the host: a connection for each request, `Connection: close`; plain http only. */
 FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, const fusedwasi_p2_http_request *req, fusedwasi_p2_http_response *out, fusedwasi_p2_http_error *err) {
     (void)state;
+    /* what a request must have: a NULL is an error of the embedder that is answered, not a crash (`headers` NULL is no headers) */
+    if (!req->method) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "the request has no method");
+    if (!req->scheme) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "the request has no scheme");
+    if (!req->authority || !req->path) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
     int https = strcmp(req->scheme, "https") == 0;
     if (https) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "https needs a transport of the embedder (`http_send` of the state): this host has no TLS");
     char *host = NULL;
