@@ -9,6 +9,7 @@ that fails, is a failure and not a skip. `FUSEDWASI_TEST_MBEDTLS_SRC` names an u
 """
 
 import os
+import shlex
 import shutil
 import socket
 import ssl
@@ -42,6 +43,33 @@ def run(cmd: list[str], *, cwd: Path | None = None, timeout: float | None = None
     return done
 
 
+def find_openssl() -> str:
+    """An OpenSSL 3 `openssl` command. The one on the PATH when it is OpenSSL 3; otherwise the usual places (Homebrew on macOS, Git for Windows, where the PATH has none or has LibreSSL).
+    `FUSEDWASI_TEST_OPENSSL` names one by hand."""
+    candidates = [os.environ.get("FUSEDWASI_TEST_OPENSSL"), shutil.which("openssl")]
+    candidates += [
+        "/opt/homebrew/opt/openssl@3/bin/openssl",
+        "/usr/local/opt/openssl@3/bin/openssl",
+        r"C:\Program Files\Git\usr\bin\openssl.exe",
+        r"C:\Program Files\Git\mingw64\bin\openssl.exe",
+        r"C:\Program Files\OpenSSL-Win64\bin\openssl.exe",
+    ]
+    seen: list[str] = []
+    for candidate in candidates:
+        if not candidate or not Path(candidate).is_file():
+            continue
+        version = subprocess.run([candidate, "version"], check=False, capture_output=True, text=True).stdout.strip()
+        seen.append(f"{candidate}: {version}")
+        if version.startswith("OpenSSL 3"):
+            return candidate
+    raise AssertionError(
+        "FUSEDWASI_TEST_TLS is set and there is no OpenSSL 3 `openssl` command; seen: " + "; ".join(seen)
+    )
+
+
+OPENSSL_CONFIG = "[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=fusedwasi\n"  # a build of openssl for Windows has no default configuration file
+
+
 @pytest.fixture(scope="module")
 def tls_driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     assert shutil.which("cmake"), "FUSEDWASI_TEST_TLS is set and there is no cmake"
@@ -55,10 +83,13 @@ def tls_driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
         f"-DFUSEDWASI_INCLUDE_DIR={C_P2}",
         "-DCMAKE_BUILD_TYPE=MinSizeRel",
     ]
+    configure += shlex.split(
+        os.environ.get("FUSEDWASI_TEST_CMAKE_ARGS", ""), posix=os.name != "nt"
+    )  # a generator, an architecture, a C flag
     if os.environ.get("FUSEDWASI_TEST_MBEDTLS_SRC"):
         configure.append(f"-DFETCHCONTENT_SOURCE_DIR_MBEDTLS={os.environ['FUSEDWASI_TEST_MBEDTLS_SRC']}")
     run(configure, timeout=600)
-    run(["cmake", "--build", str(build), "--parallel", "--target", "tls_driver"], timeout=900)
+    run(["cmake", "--build", str(build), "--config", "MinSizeRel", "--parallel", "--target", "tls_driver"], timeout=900)
     binary = next(
         p for p in build.rglob("tls_driver*") if p.is_file() and os.access(p, os.X_OK) and p.suffix in ("", ".exe")
     )
@@ -69,8 +100,10 @@ class Pki:
     """A throwaway CA and three server certificates, made with the `openssl` command."""
 
     def __init__(self, where: Path) -> None:
-        assert shutil.which("openssl"), "FUSEDWASI_TEST_TLS is set and there is no openssl"
+        self.openssl = find_openssl()
         self.where = where
+        self.config = where / "openssl.cnf"
+        self.config.write_text(OPENSSL_CONFIG)
         self.ca = self._ca("ca")
         self.rogue = self._ca("rogue")
         self.good = self._leaf("good", self.ca, "DNS:localhost,IP:127.0.0.1")  # the host, by name and by address
@@ -80,12 +113,12 @@ class Pki:
         )  # the right names, a CA that is not trusted
 
     def _openssl(self, *args: str) -> None:
-        run(["openssl", *args], cwd=self.where)
+        run([self.openssl, *args], cwd=self.where)
 
     def _ca(self, name: str) -> tuple[Path, Path]:
         key, cert = self.where / f"{name}.key", self.where / f"{name}.pem"
         self._openssl(
-            "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", str(key), "-out", str(cert),
+            "req", "-config", str(self.config), "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", str(key), "-out", str(cert),
             "-subj", f"/CN=fusedwasi-test-{name}", "-days", "2",
             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         )  # fmt: skip
@@ -103,6 +136,8 @@ class Pki:
         )
         self._openssl(
             "req",
+            "-config",
+            str(self.config),
             "-newkey",
             "ec",
             "-pkeyopt",
@@ -211,7 +246,7 @@ def old_tls_port(pki: Pki) -> Iterator[int]:
     probe.close()
     server = subprocess.Popen(
         [
-            "openssl",
+            pki.openssl,
             "s_server",
             "-accept",
             str(port),
