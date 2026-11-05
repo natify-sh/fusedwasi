@@ -14,3 +14,4 @@ Each spec starts with its **Status**: `draft` (a proposal, nothing decided), `ac
 | [S0006](S0006.md) | `tls_wrap` in the Python twin (a setting of TLS for `wasi:http`) | draft |
 | [S0007](S0007.md) | The error of a path that leaves the preopen in WASI 0.1 (row E1) | draft |
 | [S0008](S0008.md) | The comparison with Wasmtime in the CI | draft |
+| [S0009](S0009.md) | The Python twin on PyPy and on Pyodide (state of 2026-11-05, nothing fixed) | draft |
