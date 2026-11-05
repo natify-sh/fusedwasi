@@ -108,7 +108,7 @@ _wasi:http is unstable in the alpha: these names may change before they are used
 
 | Name | Purpose |
 | --- | --- |
-| `fusedwasi_p2_http_request` | what `state.http_send` is given: method, scheme, authority, path, headers, body, timeouts |
+| `fusedwasi_p2_http_request` | what `state.http_send` is given: method, scheme, authority, path (all four required: a NULL is an error), headers (NULL: none), body, timeouts |
 | `fusedwasi_p2_http_response` | what `state.http_send` gives back: status, headers, body, trailers |
 | `fusedwasi_p2_http_error` | an error-code of wasi:http (a tag from `FUSEDWASI_P2_HTTP_*` and the leaves of its payload) |
 | `fusedwasi_p2_http_fields` | a set of fields (headers, trailers) the transport reads or builds |
