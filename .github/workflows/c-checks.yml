@@ -165,9 +165,9 @@ jobs:
           python-version: "3.13"
       - run: uv sync
       # docs/specs/S0001.md: the hook is built here with the Mbed TLS that CMake fetches (tests/tls_mbedtls/, pinned by URL and SHA-256), with the openssl command making a throwaway CA and
-      # certificates, and the C twin and the Python twin are given the same server. FUSEDWASI_TEST_TLS opts in; a skip in this job is a test that did not run, so any skip fails it.
+      # certificates, and the C twin and the Python twin are given the same server. FUSEDWASI_TEST_TLS opts in; a skip in this job is a test that did not run, so any skip fails it, and a deprecation warning is an error (nothing is silenced).
       - name: The C twin with the hook and the Python twin, on the same TLS server
         env:
           FUSEDWASI_TEST_TLS: "1"
           FUSEDWASI_ALLOWED_SKIPS: 'a reason that is never given, so that every skip is an error'
-        run: uv run --no-sync pytest -q -rs tests/test_tls_reference.py tests/test_tls_hook.py
+        run: uv run --no-sync pytest -q -rs -W error::DeprecationWarning tests/test_tls_reference.py tests/test_tls_hook.py

@@ -2,7 +2,7 @@
 
 For each request the C twin (the library with the reference hook) and the Python twin (the library with its own TLS, `ssl`) are given the same server, and must give the same status and
 body, or the same case of the `error-code`. The server is made here, with Python's `ssl`, and the certificates are made here with the `openssl` command: a throwaway CA, a server
-certificate for `localhost` and `127.0.0.1`, one for a name that is not the host, and one from another CA. No test uses the internet except the fetch of Mbed TLS by CMake.
+certificate for `localhost` and `127.0.0.1`, one for a name that is not the host, and one from another CA. The server of TLS 1.1 is `openssl s_server`, because Python warns (and the warning is not silenced) when a context is given a version that is deprecated. No test uses the internet except the fetch of Mbed TLS by CMake.
 
 It is **opt in**: it fetches Mbed TLS and builds it, so a plain `pytest` skips it. Set `FUSEDWASI_TEST_TLS=1` (the CI job of Ubuntu does); then a missing `cmake` or `openssl`, or a build
 that fails, is a failure and not a skip. `FUSEDWASI_TEST_MBEDTLS_SRC` names an unpacked `mbedtls-3.6.7` to use instead of the download (offline).
@@ -156,15 +156,12 @@ def answer(path: str) -> tuple[bytes, bytes]:
 
 @pytest.fixture
 def tls_server(pki: Pki) -> Iterator[Callable[..., int]]:
-    """`start(cert_and_key, versions=None) -> port`: a TLS server on 127.0.0.1 that serves /x, /big and /close, and never answers /hang."""
+    """`start(cert_and_key) -> port`: a TLS server on 127.0.0.1 that serves /x, /big and /close, and never answers /hang."""
     listeners: list[socket.socket] = []
 
-    def start(certificate: tuple[Path, Path], versions: tuple[ssl.TLSVersion, ssl.TLSVersion] | None = None) -> int:
+    def start(certificate: tuple[Path, Path]) -> int:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(str(certificate[0]), str(certificate[1]))
-        if versions:
-            context.minimum_version, context.maximum_version = versions
-            context.set_ciphers("ALL:@SECLEVEL=0")
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen(8)
@@ -202,6 +199,57 @@ def tls_server(pki: Pki) -> Iterator[Callable[..., int]]:
     yield start
     for listener in listeners:
         listener.close()
+
+
+@pytest.fixture
+def old_tls_port(pki: Pki) -> Iterator[int]:
+    """A server that speaks TLS 1.1 and nothing newer: `openssl s_server`, and not Python's `ssl`. Python warns when a context is given TLS 1.0 or 1.1 (they are deprecated there), and the
+    server of another implementation is the better witness anyway. Where this `openssl` cannot serve TLS 1.1 the test is skipped (and the job of the CI that must run it fails on the skip)."""
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = int(probe.getsockname()[1])
+    probe.close()
+    server = subprocess.Popen(
+        [
+            "openssl",
+            "s_server",
+            "-accept",
+            str(port),
+            "-cert",
+            str(pki.good[0]),
+            "-key",
+            str(pki.good[1]),
+            "-tls1_1",
+            "-cipher",
+            "ALL:@SECLEVEL=0",
+            "-quiet",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(100):  # up to 5 s for the listener to be there
+            if server.poll() is not None:
+                pytest.skip(
+                    f"this openssl cannot serve TLS 1.1: {(server.stderr.read() if server.stderr else '').strip()[:200]}"
+                )
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            pytest.skip("openssl s_server did not start")
+        yield port
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+        if server.stdin:
+            server.stdin.close()
+        if server.stderr:
+            server.stderr.close()
 
 
 @pytest.fixture
@@ -340,13 +388,9 @@ def test_a_server_that_speaks_plain_http_is_a_protocol_error_in_both(
 
 
 def test_a_server_of_an_old_version_of_tls_is_a_protocol_error_in_both(
-    tls_driver: Path, pki: Pki, tls_server: Callable[..., int], monkeypatch: pytest.MonkeyPatch
+    tls_driver: Path, pki: Pki, old_tls_port: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    try:
-        port = tls_server(pki.good, (ssl.TLSVersion.TLSv1, ssl.TLSVersion.TLSv1_1))
-    except (ssl.SSLError, ValueError) as refusal:
-        pytest.skip(f"this Python and OpenSSL cannot make a server of TLS 1.1: {refusal}")
-    c, py = both(tls_driver, monkeypatch, f"localhost:{port}", "/x", pki.ca[0])
+    c, py = both(tls_driver, monkeypatch, f"localhost:{old_tls_port}", "/x", pki.ca[0])
     assert c == py == ("error", tag("TLS-protocol-error"))
 
 
