@@ -99,7 +99,7 @@ def _has_ipv6_loopback() -> bool:
 
 def test_ipv6_loopback_session() -> None:
     """A whole session over `::1`, in Python: bind, listen, connect, accept, data both ways, and a datagram each way between two UDP sockets. It is skipped where the machine
-    has no IPv6 loopback (the checks of addresses and the family of a new socket are tested above on every machine). The C twin has no such test: it is not run over IPv6. Written on a machine with no IPv6, so it has not been run to the end by its author; the first CI run on a machine with IPv6 is its first real run."""
+    has no IPv6 loopback (the checks of addresses and the family of a new socket are tested above on every machine). The C twin has no such test: it is not run over IPv6."""
     if not _has_ipv6_loopback():
         pytest.skip("no IPv6 loopback on this machine")
 
