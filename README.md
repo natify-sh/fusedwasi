@@ -127,8 +127,11 @@ fusedwasi_p2_free(&state);           /* after the guests are done with it; the s
 ```
 
 ```python
-from fusedwasi import Guest, State  # one class each for WASI 0.1 and 0.2: fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State
-from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers; what belongs to one family (Trap, the functions) stays in its package
+# one class each for WASI 0.1 and 0.2: fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State
+from fusedwasi import Guest, State
+
+# the module names follow the C headers; what belongs to one family (Trap, the functions) stays in its package
+from fusedwasi.p2 import wasi_p2_cli as cli
 
 state = State(args=["prog"])  # the world: files, sockets, the clocks
 guest = Guest(
