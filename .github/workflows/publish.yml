@@ -15,6 +15,11 @@ on:
 run-name: >
   ${{ github.event_name == 'push' && 'Build & Publish PyPI' || 'Build' }}
 
+# one release per ref at a time; a running publish is never cancelled half-way (as in the other natify-sh repositories)
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
