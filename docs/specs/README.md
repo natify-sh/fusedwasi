@@ -6,4 +6,5 @@ Each spec starts with its **Status**: `draft` (a proposal, nothing decided), `ac
 
 | Spec | Title | Status |
 | --- | --- | --- |
-| [S0001](S0001.md) | Optional TLS for the C transport of `wasi:http`, over Mbed TLS | draft |
+| [S0001](S0001.md) | A TLS hook for the transport of `wasi:http`, in C and in Python | draft |
+| [S0002](S0002.md) | A ready TLS backend for the C transport of `wasi:http`, over Mbed TLS | draft, deferred |
