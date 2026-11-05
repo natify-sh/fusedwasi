@@ -1,6 +1,6 @@
 # A TLS hook for `https` in C
 
-Status: written with step 3 of [S0001](specs/S0001.md). Facts are marked **[read]** (read in the code or the source), **[run]** (run by a test of the repository, in the CI) or **[not checked]**.
+Status: written with steps 3 and 4 of [S0001](specs/S0001.md); the reference hook of section 3 is built and run in the CI (job `tls-reference`, 2026-11-05). Facts are marked **[read]** (read in the code or the source), **[run]** (run by a test of the repository, in the CI) or **[not checked]**.
 
 ## 1. What it is
 
