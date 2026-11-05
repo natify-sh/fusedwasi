@@ -2,8 +2,8 @@
 
 The names a user needs are here: `State`, `Guest`, `Exit` (the end of the program), `Trap`, `Pollable`, `flat_view` (any writable buffer as flat bytes), the constants of the policy of sockets and
 of the terminals (`USE_*`, `use_name`, `TERMINAL_*`), the kinds of handles (`KIND_*`) and, from `wasi_p2_io`, the streams a host gives (`InputStream`, `OutputStream`, `MemoryInput`,
-`BufferOutput`) and their exceptions (`StreamClosed`, `StreamFailed`). The functions are in `fusedwasi.p2.wasi_p2_<package>`, one for each import. `fusedwasi.p1` has `State`, `Guest` and
-`Exit` of its own for WASI 0.1: other classes, so a program that uses both writes `fusedwasi.p1.State` and `fusedwasi.p2.State`.
+`BufferOutput`) and their exceptions (`StreamClosed`, `StreamFailed`). The functions are in `fusedwasi.p2.wasi_p2_<package>`, one for each import. `State`, `Guest` and `Exit` are the same classes as those of
+`fusedwasi.p1` and of the top level (`fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State`).
 
 Alpha: nothing here is promised yet. The C headers are in `include/fusedwasi/p2/` (the twins of these files).
 """
