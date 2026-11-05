@@ -1,5 +1,5 @@
 # WASI 0.1: the name "." as the last name of an unlink or a remove. DELIBERATE difference from Wasmtime (docs/wasmtime_compare.md, E9): fusedwasi says INVAL (28),
-# as uvwasi does, and not ISDIR (31) as Wasmtime does for the unlink. A real directory is ISDIR in both. In 0.2 both say `is-directory` for ".".
+# as uvwasi does, and not ISDIR (31) as Wasmtime does for the unlink. A real directory is the system's answer in 0.1 (ISDIR on Linux, PERM on macOS). In 0.2 both say `is-directory` for ".".
 preopen "$TMP" "/data" rw
 start 16384
 

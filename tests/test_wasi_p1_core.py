@@ -148,12 +148,14 @@ def test_what_the_second_stage_gives(tmp_path: Path) -> None:
 
 def test_dot_as_the_last_name_of_an_unlink_or_a_remove_is_inval(tmp_path: Path) -> None:
     """DELIBERATE (docs/wasmtime_compare.md, E9): `path_unlink_file` and `path_remove_directory` of `.` (and of `sub/.`) are INVAL in 0.1, as uvwasi has them; Wasmtime says ISDIR
-    for the unlink. A real directory is ISDIR for the unlink (the system's answer, so only where the system says so). In 0.2 both hosts say `is-directory` for `.`."""
+    for the unlink. A real directory is the system's answer for the unlink in 0.1 (ISDIR on Linux, PERM on macOS; not checked on Windows). In 0.2 both hosts say `is-directory` for `.`."""
     make_tree(tmp_path / "py")  # has the directory `sub`
     lines = run(DATA / "p1" / "dot.txt", str(tmp_path / "py"))
     assert lines[:3] == ["path_unlink_file 28", "path_remove_directory 28", "path_unlink_file 28"]  # 28 is INVAL
-    if sys.platform != "win32":
+    if sys.platform.startswith("linux"):
         assert lines[3] == "path_unlink_file 31"  # 31 is ISDIR
+    elif sys.platform == "darwin":
+        assert lines[3] == "path_unlink_file 63"  # 63 is PERM: macOS says EPERM for the unlink of a directory
 
 
 _NATIVE_POLL = """
