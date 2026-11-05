@@ -8,3 +8,9 @@ Each spec starts with its **Status**: `draft` (a proposal, nothing decided), `ac
 | --- | --- | --- |
 | [S0001](S0001.md) | A TLS hook for the C transport of `wasi:http` (Python keeps `ssl`) | accepted |
 | [S0002](S0002.md) | A ready TLS backend for the C transport of `wasi:http`, over Mbed TLS | draft, deferred |
+| [S0003](S0003.md) | Streaming of `wasi:http` bodies (the answer is read whole today) | draft |
+| [S0004](S0004.md) | Redirects and proxies for `wasi:http` | draft |
+| [S0005](S0005.md) | HTTP/2 for `wasi:http` | draft |
+| [S0006](S0006.md) | `tls_wrap` in the Python twin (a setting of TLS for `wasi:http`) | draft |
+| [S0007](S0007.md) | The error of a path that leaves the preopen in WASI 0.1 (row E1) | draft |
+| [S0008](S0008.md) | The comparison with Wasmtime in the CI | draft |
