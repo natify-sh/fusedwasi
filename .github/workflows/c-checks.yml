@@ -67,7 +67,7 @@ jobs:
         shell: cmd
         env:
           FUSEDWASI_TEST_CC: cl
-          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers'
+          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers|no IPv6 loopback'
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           cl 2>&1 | findstr /i "Version"

@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
+from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import wasi_p2_sockets as sk
+from fusedwasi.p2.wasi_p2_core import _store_u32 as store_u32  # pyright: ignore[reportPrivateUsage]
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
@@ -83,6 +86,178 @@ def test_ipv6_sockets_follow_the_system() -> None:
         assert sk.wasi_sockets_tcp_tcp_socket_address_family(host, int.from_bytes(memory[104:108], "little")) == 1
     else:
         assert memory[100] == 1 and sk._NETWORK_ERRORS[memory[104]] == "not-supported"
+
+
+def _has_ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+def test_ipv6_loopback_session() -> None:
+    """A whole session over `::1`, in Python: bind, listen, connect, accept, data both ways, and a datagram each way between two UDP sockets. It is skipped where the machine
+    has no IPv6 loopback (the checks of addresses and the family of a new socket are tested above on every machine). The C twin has no such test: it is not run over IPv6. Written on a machine with no IPv6, so it has not been run to the end by its author; the first CI run on a machine with IPv6 is its first real run."""
+    if not _has_ipv6_loopback():
+        pytest.skip("no IPv6 loopback on this machine")
+
+    memory = bytearray(4096)
+    next_free = [3000]
+
+    def bump(comp: int, old_ptr: int, old_size: int, align: int, new_size: int) -> int:
+        ptr = (next_free[0] + align - 1) // align * align
+        next_free[0] = ptr + new_size
+        return ptr
+
+    host = guest_of([memory], realloc=bump, socket_addr_check=lambda ip, port, use: True)
+    r = 100
+
+    def loop(port: int) -> tuple[int, ...]:  # tag, port, eight 16-bit numbers of ::1, flow, scope
+        return (1, port, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0)
+
+    def u16(off: int) -> int:
+        return int.from_bytes(memory[off : off + 2], "little")
+
+    def u32(off: int) -> int:
+        return int.from_bytes(memory[off : off + 4], "little")
+
+    def clear() -> None:
+        memory[r : r + 64] = bytes(64)
+
+    def ok() -> None:
+        assert memory[r] == 0, f"result is an error: {bytes(memory[r : r + 8]).hex()}"
+
+    def tcp(name: str, *args: int) -> None:
+        clear()
+        getattr(sk, "wasi_sockets_tcp_tcp_socket_" + name)(host, 0, *args, r)
+
+    def udp(name: str, *args: int) -> None:
+        clear()
+        getattr(sk, "wasi_sockets_udp_udp_socket_" + name)(host, 0, *args, r)
+
+    def settle(call: str, h: int) -> None:
+        for _ in range(3000):
+            tcp(call, h)
+            if not (memory[r] == 1 and memory[r + 4] == sk._CODE["would-block"]):  # pyright: ignore[reportPrivateUsage]
+                return
+            time.sleep(0.001)
+
+    def local_port(call: str, h: int) -> int:
+        (tcp if call == "tcp" else udp)("local_address", h)
+        ok()
+        assert memory[r + 4] == 1  # an IPv6 address
+        assert [u16(r + 16 + 2 * i) for i in range(8)] == [0, 0, 0, 0, 0, 0, 0, 1]  # ::1
+        return u16(r + 8)
+
+    def read_some(h: int) -> bytes:
+        for _ in range(3000):
+            clear()
+            io.wasi_io_streams_input_stream_read(host, 0, h, 100, r)
+            if memory[r] == 1 or u32(r + 8) > 0:
+                break
+            time.sleep(0.001)
+        ok()
+        return bytes(memory[u32(r + 4) : u32(r + 4) + u32(r + 8)])
+
+    def write_all(h: int, data: bytes) -> None:
+        memory[2000 : 2000 + len(data)] = data
+        clear()
+        io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, h, 2000, len(data), r)
+        ok()
+
+    net = sk.wasi_sockets_instance_network_instance_network(host)
+
+    # TCP
+    clear()
+    sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, r)
+    ok()
+    srv = u32(r + 4)
+    tcp("start_bind", srv, net, *loop(0))
+    ok()
+    tcp("finish_bind", srv)
+    ok()
+    tcp("start_listen", srv)
+    ok()
+    tcp("finish_listen", srv)
+    ok()
+    port = local_port("tcp", srv)
+    assert port != 0
+
+    clear()
+    sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, r)
+    ok()
+    cli = u32(r + 4)
+    tcp("start_connect", cli, net, *loop(port))
+    ok()
+    settle("finish_connect", cli)
+    ok()
+    cin, cout = u32(r + 4), u32(r + 8)
+    settle("accept", srv)
+    ok()
+    conn, sin, sout = u32(r + 4), u32(r + 8), u32(r + 12)
+    assert sk.wasi_sockets_tcp_tcp_socket_address_family(host, conn) == 1
+    write_all(cout, b"ping6")
+    assert read_some(sin) == b"ping6"
+    write_all(sout, b"pong6")
+    assert read_some(cin) == b"pong6"
+    tcp("remote_address", cli)
+    ok()
+    assert memory[r + 4] == 1 and u16(r + 8) == port
+
+    # UDP
+    ids: list[int] = []
+    for _ in range(2):
+        clear()
+        sk.wasi_sockets_udp_create_socket_create_udp_socket(host, 0, 1, r)
+        ok()
+        ids.append(u32(r + 4))
+    ports: list[int] = []
+    for h in ids:
+        udp("start_bind", h, net, *loop(0))
+        ok()
+        udp("finish_bind", h)
+        ok()
+        ports.append(local_port("udp", h))
+    streams: list[tuple[int, int]] = []
+    for h in ids:
+        udp("stream", h, 0, *([0] * 12))  # no remote address: the tag and eleven numbers are ignored
+        ok()
+        streams.append((u32(r + 4), u32(r + 8)))
+
+    def send(out: int, data: bytes, port_to: int) -> None:
+        base = 2200
+        memory[2000 : 2000 + len(data)] = data
+        memory[base : base + 44] = bytes(44)
+        store_u32(host, 0, base, 2000)
+        store_u32(host, 0, base + 4, len(data))
+        memory[base + 8] = 1  # has a remote address
+        sk._write_addr(host, 0, base + 12, (1, port_to, (0, 0, 0, 0, 0, 0, 0, 1), 0, 0))  # pyright: ignore[reportPrivateUsage]
+        clear()
+        sk.wasi_sockets_udp_outgoing_datagram_stream_check_send(host, 0, out, r)
+        ok()
+        clear()
+        sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, out, base, 1, r)
+        ok()
+        assert u32(r + 8) == 1  # one datagram sent
+
+    def receive(inp: int) -> tuple[bytes, int, int]:
+        for _ in range(3000):
+            clear()
+            sk.wasi_sockets_udp_incoming_datagram_stream_receive(host, 0, inp, 10, r)
+            if memory[r] == 1 or u32(r + 8) > 0:
+                break
+            time.sleep(0.001)
+        ok()
+        assert u32(r + 8) == 1
+        d = u32(r + 4)
+        return bytes(memory[u32(d) : u32(d) + u32(d + 4)]), memory[d + 8], u16(d + 12)
+
+    send(streams[0][1], b"v6 hello", ports[1])
+    assert receive(streams[1][0]) == (b"v6 hello", 1, ports[0])
+    send(streams[1][1], b"v6 back", ports[0])
+    assert receive(streams[0][0]) == (b"v6 back", 1, ports[1])
 
 
 # ---- http ----------------------------------------------------------------------------------------------------------------------

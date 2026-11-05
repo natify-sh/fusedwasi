@@ -22,7 +22,7 @@ Written down 2026-10-26 as "Known limits" in `host_scope.md`, with tests in `tes
 | Gap | Where | Status in the alpha | Tested |
 | --- | --- | --- | --- |
 | `utime` without following a link on Python <= 3.12, Windows | `p2/wasi_p2_filesystem.py` | **fixed** (the Python touches the link itself on Windows before 3.13) | `tests/test_wasi_p2_filesystem.py` (for the Windows runners; not run on Windows by hand) |
-| IPv6 sockets | `wasi_p2_sockets` | **unstable in the alpha** | the checks of addresses, `test_ipv6_sockets_follow_the_system` (`test_wasi_p2_sockets.py`, `test_known_limits.py`); a whole session over `::1` is not tested |
+| IPv6 sockets | `wasi_p2_sockets` | **unstable in the alpha** | the checks of addresses, `test_ipv6_sockets_follow_the_system` (`test_wasi_p2_sockets.py`, `test_known_limits.py`); a whole session over `::1` is tested in Python only (`test_ipv6_loopback_session`, skipped without IPv6 loopback); the C is not run over IPv6 |
 | Listener properties are not copied to accepted sockets | sockets | **unstable in the alpha**; the system decides | not tested (the result is the system's) |
 | `https` in C | `wasi_p2_http.h` | **deferred**: `internal-error` unless the embedder gives `http_send`; the optional TLS backend is not in the alpha | `test_http_the_c_has_no_tls` (`test_known_limits.py`) |
 | Streaming of http bodies, HTTP/2, redirects, proxies | http | **unstable in the alpha**: whole body, at most 256 MiB, HTTP/1.1 | `test_known_limits.py` (the limit, the redirect, the proxy variables, one connection each) |
