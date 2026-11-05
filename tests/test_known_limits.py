@@ -24,6 +24,7 @@ from guests import guest_of
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import wasi_p2_sockets as sk
+from fusedwasi.p2.wasi_p2_core import State
 from fusedwasi.p2.wasi_p2_core import _store_u32 as store_u32  # pyright: ignore[reportPrivateUsage]
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
@@ -529,3 +530,27 @@ def test_an_accepted_socket_is_given_what_the_listener_was_given() -> None:
     odd.inherit.update(ka=1, hop=64)
     sk._inherit(odd, cast(Any, Refuses()))  # no exception
     odd.sock.close()
+
+
+def test_python_tls_is_ssl_with_the_system_store_and_has_no_setting(
+    server: tuple[int, list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELIBERATE (S0001, 3.3): the Python twin has TLS and no way to set it. An `https` request is wrapped with `ssl.create_default_context()` (the system trust store), called with
+    no arguments, and neither the state nor the host has a setting for the trust anchors or for the TLS (a TLS hook is the C twin's: `state->tls`). An embedder that needs another
+    policy replaces the transport with `http_send`. When this test fails, the limit changed: change `host_scope.md` and S0001 with it, on purpose."""
+    import ssl
+
+    port, _ = server
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def create(*args: object, **kwargs: object) -> ssl.SSLContext:
+        calls.append((args, kwargs))
+        raise ssl.SSLError("the test stops here")
+
+    monkeypatch.setattr(ssl, "create_default_context", create)
+    with pytest.raises(H.ErrorCode) as caught:
+        H.default_send(H.HttpRequest("GET", "https", f"127.0.0.1:{port}", "/", []))
+    assert caught.value.name == "TLS-protocol-error"  # an `ssl.SSLError` that is not a failed check of a certificate
+    assert calls == [((), {})]  # the system store, and nothing the embedder chose
+    for name in ("tls", "tls_wrap", "tls_ca_file", "tls_ca_pem", "ssl_context"):
+        assert not hasattr(State(), name), name
