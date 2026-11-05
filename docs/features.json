@@ -170,8 +170,8 @@
         "https": {
           "symbols": {
             "c": [
-              "tls",
-              "http_send"
+              "fusedwasi_p2_state.tls",
+              "fusedwasi_p2_state.http_send"
             ],
             "python": [
               "fusedwasi.p2:State(http_send)"
@@ -184,6 +184,15 @@
           "python": true,
           "note": {
             "python": "TLS is built in (ssl.create_default_context(), the system store): docs/host_scope.md, Known limits; see tlsHook for what cannot be set"
+          },
+          "tests": {
+            "c": [
+              "tests/test_known_limits.py::test_http_the_c_has_no_tls",
+              "tests/test_tls_hook.py::test_without_a_hook_https_is_the_internal_error_of_today"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_python_tls_is_ssl_with_the_system_store_and_has_no_setting"
+            ]
           }
         },
         "serverSide": {
@@ -214,24 +223,48 @@
         "http2": {
           "c": false,
           "python": false,
-          "note": "HTTP/1.1 only: docs/host_scope.md, Known limits ('No HTTP/2, no redirects, no proxies'); tests/test_known_limits.py"
+          "note": "HTTP/1.1 only: docs/host_scope.md, Known limits ('No HTTP/2, no redirects, no proxies'); tests/test_known_limits.py",
+          "tests": {
+            "c": [
+              "tests/test_known_limits.py::test_http_is_http_1_1_with_one_connection_for_each_request_in_c"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_http_is_http_1_1_with_one_connection_for_each_request"
+            ]
+          }
         },
         "redirects": {
           "c": false,
           "python": false,
-          "note": "a 3xx answer is the answer, no second request: docs/host_scope.md, Known limits; tests/test_known_limits.py (python and C)"
+          "note": "a 3xx answer is the answer, no second request: docs/host_scope.md, Known limits; tests/test_known_limits.py",
+          "tests": {
+            "c": [
+              "tests/test_known_limits.py::test_http_a_redirect_is_not_followed_in_c"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_http_a_redirect_is_not_followed"
+            ]
+          }
         },
         "proxies": {
           "c": false,
           "python": false,
-          "note": "HTTP_PROXY and the like are not read: docs/host_scope.md, Known limits; tests/test_known_limits.py (python and C)"
+          "note": "HTTP_PROXY and the like are not read: docs/host_scope.md, Known limits; tests/test_known_limits.py",
+          "tests": {
+            "c": [
+              "tests/test_known_limits.py::test_http_proxy_variables_are_not_read_in_c"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_http_proxy_variables_are_not_read"
+            ]
+          }
         },
         "tlsHook": {
           "symbols": {
             "c": [
               "fusedwasi_p2_tls_ops",
               "fusedwasi_p2_tls_error",
-              "tls"
+              "fusedwasi_p2_state.tls"
             ],
             "python": []
           },
@@ -240,6 +273,15 @@
           "note": {
             "c": "state->tls, four functions over any TLS library; the reference hook over Mbed TLS is in tests/tls_mbedtls/: docs/specs/S0001.md; docs/tls_hook.md",
             "python": "deliberate: TLS is ssl with the system store, no setting and no hook; http_send replaces the whole transport: docs/host_scope.md, Known limits ('The Python twin has TLS and no way to set it'); docs/specs/S0001.md"
+          },
+          "tests": {
+            "c": [
+              "tests/test_tls_hook.py::test_what_the_hook_reports_is_the_error_code",
+              "tests/test_tls_reference.py::test_a_request_over_tls_gives_the_same_answer"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_python_tls_is_ssl_with_the_system_store_and_has_no_setting"
+            ]
           }
         }
       }
@@ -351,14 +393,17 @@
             "tcp-create-socket"
           ],
           "imports": 1,
-          "c": [
-            "partial",
-            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
-          ],
-          "python": [
-            "partial",
-            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
-          ]
+          "c": true,
+          "python": true,
+          "note": "a socket of the family IPv6 is made by the system: where there is no IPv6 the answer is `not-supported`, which is the answer that the WIT gives for it and not a gap of the library; the address checks are tested in both: docs/host_scope.md, Known limits ('IPv6 sockets')",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_address_checks.py::test_the_c_twin_gives_the_same_lines"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_ipv6_sockets_follow_the_system"
+            ]
+          }
         },
         "tcp": {
           "covers": [
@@ -367,21 +412,29 @@
           "imports": 29,
           "c": true,
           "python": true,
-          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback); the options of a listener are given to the accepted socket: docs/host_scope.md, Known limits"
+          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback); the options of a listener are given to the accepted socket: docs/host_scope.md, Known limits",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_sockets.py::test_c_and_python_agree"
+            ]
+          }
         },
         "udpCreateSocket": {
           "covers": [
             "udp-create-socket"
           ],
           "imports": 1,
-          "c": [
-            "partial",
-            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
-          ],
-          "python": [
-            "partial",
-            "a socket of the family IPv6 is made by the system: not-supported where there is no IPv6: docs/host_scope.md, Known limits ('IPv6 sockets')"
-          ]
+          "c": true,
+          "python": true,
+          "note": "a socket of the family IPv6 is made by the system: where there is no IPv6 the answer is `not-supported`, which is the answer that the WIT gives for it and not a gap of the library; the address checks are tested in both: docs/host_scope.md, Known limits ('IPv6 sockets')",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_address_checks.py::test_the_c_twin_gives_the_same_lines"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_ipv6_sockets_follow_the_system"
+            ]
+          }
         },
         "udp": {
           "covers": [
@@ -390,17 +443,36 @@
           "imports": 21,
           "c": true,
           "python": true,
-          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback): docs/host_scope.md, Known limits"
+          "note": "IPv6 sessions are tested in both (scenario ipv6 of tests/test_wasi_p2_sockets.py, skipped without an IPv6 loopback): docs/host_scope.md, Known limits",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_sockets.py::test_c_and_python_agree"
+            ]
+          }
         },
         "ipv6": {
-          "c": [
-            "partial",
-            "the address records are whole and a session over ::1 is tested in both, but a socket of the family IPv6 is made by the system, so a machine with no IPv6 gets not-supported and the tests skip: docs/host_scope.md, Known limits ('IPv6 sockets'); docs/release_checklist.md, section 3"
-          ],
-          "python": [
-            "partial",
-            "the address records are whole and a session over ::1 is tested in both, but a socket of the family IPv6 is made by the system, so a machine with no IPv6 gets not-supported and the tests skip: docs/host_scope.md, Known limits ('IPv6 sockets'); docs/release_checklist.md, section 3"
-          ]
+          "symbols": {
+            "c": [
+              "fusedwasi_p2__check_bind",
+              "fusedwasi_p2__check_connect"
+            ],
+            "python": [
+              "fusedwasi.p2.wasi_p2_sockets:_check_bind",
+              "fusedwasi.p2.wasi_p2_sockets:_check_connect"
+            ]
+          },
+          "c": true,
+          "python": true,
+          "note": "the address records are whole, the checks of the addresses are run in both on any machine, and a whole session over ::1 (TCP and UDP) is compared between the twins where there is IPv6 (the test skips without it): docs/host_scope.md, Known limits ('IPv6 sockets'); docs/release_checklist.md, section 3",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_address_checks.py::test_the_c_twin_gives_the_same_lines",
+              "tests/test_wasi_p2_sockets.py::test_c_and_python_agree"
+            ],
+            "python": [
+              "tests/test_known_limits.py::test_ipv6_loopback_session"
+            ]
+          }
         },
         "acceptedSocketProperties": {
           "symbols": {
@@ -413,7 +485,16 @@
           },
           "c": true,
           "python": true,
-          "note": "fixed 2026-11-05: accept sets on the new socket what the guest set on the listener: docs/host_scope.md, Known limits; docs/release_checklist.md, section 3"
+          "note": "fixed 2026-11-05: accept sets on the new socket what the guest set on the listener: docs/host_scope.md, Known limits; docs/release_checklist.md, section 3",
+          "tests": {
+            "both": [
+              "tests/test_wasi_p2_sockets.py::test_c_and_python_agree"
+            ],
+            "python": [
+              "tests/test_wasi_p2_sockets.py::test_values",
+              "tests/test_known_limits.py::test_an_accepted_socket_is_given_what_the_listener_was_given"
+            ]
+          }
         }
       }
     },
@@ -612,8 +693,8 @@
         "socketPolicy": {
           "symbols": {
             "c": [
-              "socket_addr_check",
-              "allow_ip_name_lookup"
+              "fusedwasi_p2_state.socket_addr_check",
+              "fusedwasi_p2_state.allow_ip_name_lookup"
             ],
             "python": [
               "fusedwasi.p2:State(socket_addr_check)",
@@ -628,7 +709,7 @@
         "httpPolicy": {
           "symbols": {
             "c": [
-              "http_check"
+              "fusedwasi_p2_state.http_check"
             ],
             "python": [
               "fusedwasi.p2:State(http_check)",

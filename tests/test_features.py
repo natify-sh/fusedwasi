@@ -150,3 +150,75 @@ def test_the_format_id_and_the_version_are_checked(tmp_path: Path) -> None:
     doc["version"] = "1"
     err = rejected(tmp_path, doc)
     assert "format must be" in err and "version must be a whole number" in err
+
+
+# ---- the symbols of a field, and the tests of a feature (2026-11-05) -----------------------------------------------------------------------
+
+
+def feature(doc: dict[str, Any], module: str, name: str) -> dict[str, Any]:
+    return doc["modules"][module]["features"][name]  # pyright: ignore[reportAny]
+
+
+def test_a_field_of_the_state_is_checked_in_the_struct_not_as_a_word(tmp_path: Path) -> None:
+    """`Struct.field`: the field must be in that struct. A bare word such as `tls` would pass for any identifier of any header, so it is refused."""
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "tlsHook")["symbols"]["c"] = ["fusedwasi_p2_tls_ops", "tls"]
+    assert "tls (a bare word: write Struct.field" in rejected(tmp_path, doc)
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "tlsHook")["symbols"]["c"] = ["fusedwasi_p2_state.no_such_field"]
+    assert "fusedwasi_p2_state.no_such_field" in rejected(tmp_path, doc)
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "tlsHook")["symbols"]["c"] = ["fusedwasi_p2_no_such_struct.tls"]
+    assert "fusedwasi_p2_no_such_struct.tls" in rejected(tmp_path, doc)
+
+
+def test_a_note_that_names_a_test_file_needs_the_list_of_tests(tmp_path: Path) -> None:
+    doc = copy.deepcopy(load())
+    del feature(doc, "wasi:http", "redirects")["tests"]
+    assert (
+        "wasi:http/redirects: the note names tests/test_known_limits.py, so the feature must list its tests"
+        in rejected(tmp_path, doc)
+    )
+
+
+def test_a_test_that_is_not_there_is_rejected(tmp_path: Path) -> None:
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "redirects")["tests"]["c"] = ["tests/test_known_limits.py::test_that_was_renamed"]
+    assert (
+        "tests.c names tests/test_known_limits.py::test_that_was_renamed, which is not a test of the repository"
+        in rejected(tmp_path, doc)
+    )
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "redirects")["tests"]["python"] = ["tests/no_such_file.py::test_x"]
+    assert "tests/no_such_file.py::test_x" in rejected(tmp_path, doc)
+
+
+def test_the_tests_must_cover_both_twins(tmp_path: Path) -> None:
+    """A limit that is pinned for one twin only is a difference of the twins that nobody noticed."""
+    doc = copy.deepcopy(load())
+    del feature(doc, "wasi:http", "redirects")["tests"]["c"]
+    assert "wasi:http/redirects: no test for the c twin" in rejected(tmp_path, doc)
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:sockets", "tcp")["tests"] = {"c": ["tests/test_wasi_p2_sockets.py::test_c_and_python_agree"]}
+    assert "wasi:sockets/tcp: no test for the python twin" in rejected(tmp_path, doc)
+
+
+def test_the_tests_of_a_feature_have_the_right_shape(tmp_path: Path) -> None:
+    doc = copy.deepcopy(load())
+    feature(doc, "wasi:http", "redirects")["tests"] = [
+        "tests/test_known_limits.py::test_http_a_redirect_is_not_followed"
+    ]
+    assert "`tests` is an object with the keys c, python and both" in rejected(tmp_path, doc)
+
+
+def test_ipv6_is_true_for_both_twins_and_stands_on_the_checks_of_addresses() -> None:
+    """The rule of `docs/features.md`: `partial` is a gap of the library or a claim that nobody checked. A socket of the family IPv6 on a machine with no IPv6 is `not-supported` (the answer of the WIT)."""
+    doc = load()
+    ipv6 = feature(doc, "wasi:sockets", "ipv6")
+    assert ipv6["c"] is True and ipv6["python"] is True
+    assert (
+        "fusedwasi_p2__check_connect" in ipv6["symbols"]["c"]
+        and "fusedwasi.p2.wasi_p2_sockets:_check_connect" in ipv6["symbols"]["python"]
+    )
+    for name in ("tcpCreateSocket", "udpCreateSocket"):
+        assert feature(doc, "wasi:sockets", name)["c"] is True and feature(doc, "wasi:sockets", name)["python"] is True

@@ -61,6 +61,69 @@ def c_words() -> set[str]:
     return words
 
 
+def _strip_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.DOTALL)
+
+
+def _struct_bodies(text: str) -> list[tuple[str, str]]:
+    """(name, body) for each `struct` that has a body: the tag, and the name of the typedef after the closing brace (both are names of the struct)."""
+    out: list[tuple[str, str]] = []
+    for m in re.finditer(r"\bstruct\s*(\w*)\s*\{", text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            i += 1
+        body = text[m.end() : i - 1]
+        after = re.match(r"\s*(\w+)\s*;", text[i:])
+        for name in (m.group(1), after.group(1) if after else ""):
+            if name:
+                out.append((name, body))
+    return out
+
+
+def _fields_of(body: str) -> set[str]:
+    """The names of the fields of a struct body: a declaration is up to a `;` outside parentheses; a function pointer `(*name)` is a field; otherwise the last word of each declarator."""
+    fields: set[str] = set()
+    depth, start = 0, 0
+    declarations: list[str] = []
+    for i, ch in enumerate(body):
+        depth += {"(": 1, ")": -1, "{": 1, "}": -1}.get(ch, 0)
+        if ch == ";" and depth == 0:
+            declarations.append(body[start:i])
+            start = i + 1
+    for decl in declarations:
+        pointer = re.search(r"\(\s*\*\s*(\w+)\s*\)\s*\(", decl)
+        if pointer:
+            fields.add(pointer.group(1))
+            continue
+        decl = re.sub(r"\{.*\}", " ", decl, flags=re.DOTALL)  # an anonymous struct or union inside
+        for declarator in decl.split(","):
+            words = re.findall(r"\w+", re.sub(r"\[[^\]]*\]", " ", declarator))
+            if words:
+                fields.add(words[-1])
+    return fields
+
+
+def c_struct_fields() -> dict[str, set[str]]:
+    """Struct name -> the names of its fields, from every header (a `Struct.field` symbol is checked against this: a bare word such as `tls` would pass for any identifier)."""
+    structs: dict[str, set[str]] = {}
+    for header in sorted(C_ROOT.rglob("*.h")):
+        text = _strip_comments(header.read_text(encoding="utf-8"))
+        for name, body in _struct_bodies(text):
+            structs.setdefault(name, set()).update(_fields_of(body))
+    return structs
+
+
+def c_symbol_absent(symbol: str, words: set[str], structs: dict[str, set[str]]) -> str | None:
+    """None when the C symbol is there, else what is wrong with it. `Struct.field`: a field of that struct; otherwise a full identifier of the library (`fusedwasi_...`, `FUSEDWASI_...`)."""
+    if "." in symbol:
+        struct, _, field = symbol.partition(".")
+        return None if field in structs.get(struct, set()) else symbol
+    if not symbol.startswith(("fusedwasi_", "FUSEDWASI_")):
+        return f"{symbol} (a bare word: write Struct.field for a field of a struct)"
+    return None if symbol in words else symbol
+
+
 def python_function(module: str | None, name: str | None) -> bool:
     if module is None or name is None:
         return False
@@ -208,11 +271,47 @@ def check_note(label: str, text: str, errors: list[str]) -> None:
             errors.append(f"{label}: the note names {path}, which is not in the repository")
 
 
+TEST_PATH = re.compile(r"\btests/[\w./-]+")
+
+
+def test_exists(identifier: str) -> bool:
+    """`tests/file.py::test_name` (a parameter in brackets is not part of the name): the file is there and defines the test."""
+    path, _, name = identifier.partition("::")
+    name = name.split("[", 1)[0]
+    file = ROOT / path
+    return bool(name) and file.is_file() and re.search(rf"^(?:async )?def {re.escape(name)}\(", file.read_text(encoding="utf-8"), re.MULTILINE) is not None
+
+
+def check_tests(label: str, feature: dict[str, Any], errors: list[str]) -> None:
+    """`tests` names the tests that stand behind a feature: {"c": [...], "python": [...], "both": [...]} of `tests/file.py::test_name`, which must exist. A feature whose note names a file
+    of `tests/` must have them, and each twin must be covered, by its own list or by `both`: a limit that is pinned for one twin only is a difference of the twins that nobody noticed."""
+    tests: Any = feature.get("tests")
+    mentioned = TEST_PATH.findall(json.dumps({k: v for k, v in feature.items() if k not in ("tests", "symbols")}))
+    if tests is None:
+        if mentioned:
+            errors.append(f"{label}: the note names {', '.join(sorted(set(mentioned)))}, so the feature must list its tests (`tests`)")
+        return
+    if not isinstance(tests, dict) or not tests or set(tests) - {"c", "python", "both"}:  # pyright: ignore[reportUnknownArgumentType]
+        errors.append(f"{label}: `tests` is an object with the keys c, python and both, each a list of tests/file.py::test_name")
+        return
+    for key, ids in tests.items():  # pyright: ignore[reportUnknownVariableType]
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):  # pyright: ignore[reportUnknownVariableType]
+            errors.append(f"{label}: tests.{key} must be a list of strings")
+            continue
+        for identifier in ids:  # pyright: ignore[reportUnknownVariableType]
+            if not test_exists(identifier):  # pyright: ignore[reportUnknownArgumentType]
+                errors.append(f"{label}: tests.{key} names {identifier}, which is not a test of the repository")
+    for twin in TWINS:
+        if not tests.get(twin) and not tests.get("both"):
+            errors.append(f"{label}: no test for the {twin} twin (list it under {twin!r}, or the test that runs both under 'both')")
+
+
 def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
     """Run the checks of the structure and the functions; return the computed matrix (module -> feature -> twin -> counts)."""
     p2, p1 = load_signatures()
     cnames = c_functions()
     cwords = c_words()
+    cstructs = c_struct_fields()
     computed: dict[str, Any] = {}
     if doc.get("format") != FORMAT:
         errors.append(f"format must be {FORMAT!r}")
@@ -266,7 +365,7 @@ def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
                 if twin == "c":
                     present = [i["name"] for i in items if i["c"] in cnames]
                     absent = [i["name"] for i in items if i["c"] not in cnames]
-                    sym_absent = [s for s in symbols.get("c", []) if s not in cwords]
+                    sym_absent = [bad for s in symbols.get("c", []) if (bad := c_symbol_absent(s, cwords, cstructs))]
                     sym_all = symbols.get("c", [])
                 else:
                     present = [i["name"] for i in items if python_function(*i["python"])]
@@ -278,7 +377,7 @@ def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
                 row[twin] = {"present": len(present) + len(sym_all) - len(sym_absent), "of": total, "missing": absent}
                 kind, note = status_of(feature[twin])
                 where = f"{label} ({twin})"
-                text = note or note_of(feature, twin)
+                text = note if kind == "partial" else note_of(feature, twin)  # a partial says its own note: the note of the feature must not stand in for it
                 if kind == "bad":
                     errors.append(f"{where}: the status must be true, false or [\"partial\", note], not {feature[twin]!r}")
                     continue
@@ -299,6 +398,7 @@ def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
                     for path in SOURCE.findall(text):
                         if not (ROOT / path).exists():
                             errors.append(f"{where}: the note names {path}, which is not in the repository")
+            check_tests(label, feature, errors)
             computed[mname][fname] = row
     if total_p2 != len(p2):
         errors.append(f"the modules of 0.2 have {total_p2} imports, the tables have {len(p2)}")
