@@ -277,6 +277,19 @@ def old_tls_port(pki: Pki) -> Iterator[int]:
                 time.sleep(0.05)
         else:
             pytest.skip("openssl s_server did not start")
+        # A listener is not a server: the `openssl s_server` of Windows has been seen to hold the port and not to answer (the CI of Windows x64 waited 60 s). A client of TLS 1.2 must be
+        # answered at once, with an alert for the version; when it is not, the test cannot say anything about the hook, and it is skipped with a reason that says so.
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+                raw.settimeout(5)
+                context.wrap_socket(raw).close()
+        except (TimeoutError, ssl.SSLError, ConnectionError) as error:
+            if isinstance(error, TimeoutError) or "timed out" in str(error):
+                pytest.skip("openssl s_server did not start answering (it holds the port and says nothing)")
+            # otherwise answered: with an alert, as a server of 1.1 must answer a client that asks for 1.2
         yield port
     finally:
         server.terminate()
