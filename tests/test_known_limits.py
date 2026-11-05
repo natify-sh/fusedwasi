@@ -3,6 +3,7 @@
 Nothing here is a feature; each test says what the host does where it does not do more.
 """
 
+import errno
 import importlib
 import inspect
 import os
@@ -14,7 +15,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from cbuild import CC, compile_c
@@ -487,3 +488,44 @@ def test_http_a_request_with_no_headers_or_a_missing_field_in_python(server: tup
             H.default_send(H.HttpRequest(headers=[], **fields))
         assert (caught.value.name, *caught.value.values) == expected
     assert lines == []  # no connection was made
+
+
+# ---- the properties of a listener, on the sockets it accepts --------------------------------------------------------------------
+
+
+def test_an_accepted_socket_is_given_what_the_listener_was_given() -> None:
+    """The WIT says an accepted socket inherits keep-alive, hop limit and buffer sizes from its listener. Linux copies them in `accept()`; some systems do not, so the host sets them
+    on the new socket itself (`_inherit` here, `fusedwasi_p2__inherit` in the C). The sockets here record the calls, so that the test does not depend on the system."""
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int, int]] = []
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            self.calls.append((level, option, value))
+
+    listener = sk._TcpSock(0)
+    listener.inherit.update(ka=1, hop=64, rcv=65536, snd=32768)
+    recorder = Recorder()
+    sk._inherit(listener, cast(Any, recorder))
+    assert (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) in recorder.calls
+    assert (socket.IPPROTO_IP, socket.IP_TTL, 64) in recorder.calls  # a family 0 (IPv4) listener
+    assert (socket.SOL_SOCKET, socket.SO_RCVBUF, 65536) in recorder.calls
+    assert (socket.SOL_SOCKET, socket.SO_SNDBUF, 32768) in recorder.calls
+    listener.sock.close()
+
+    # what the guest did not set is not touched, and an option that the system refuses leaves the default
+    nothing = Recorder()
+    bare = sk._TcpSock(0)
+    sk._inherit(bare, cast(Any, nothing))
+    assert nothing.calls == []
+    bare.sock.close()
+
+    class Refuses:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            raise OSError(errno.ENOPROTOOPT, "no such option")
+
+    odd = sk._TcpSock(0)
+    odd.inherit.update(ka=1, hop=64)
+    sk._inherit(odd, cast(Any, Refuses()))  # no exception
+    odd.sock.close()

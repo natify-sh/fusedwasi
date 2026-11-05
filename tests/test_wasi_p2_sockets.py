@@ -284,6 +284,28 @@ def python_output(scenario: str) -> str:
             settle("accept", srv)
             show("accept", R, 16)
             conn, sin, sout = u32(R + 4), u32(R + 8), u32(R + 12)
+            # what was set on the listener is on the socket it accepted
+            clear()
+            tcp("keep_alive_enabled", conn, R)
+            show("accepted keep-alive?", R, 2)
+            clear()
+            tcp("keep_alive_idle_time", conn, R)
+            show("accepted idle?", R, 16)
+            clear()
+            tcp("keep_alive_interval", conn, R)
+            show("accepted interval?", R, 16)
+            clear()
+            tcp("keep_alive_count", conn, R)
+            show("accepted count?", R, 8)
+            clear()
+            tcp("hop_limit", conn, R)
+            show("accepted hop-limit?", R, 2)
+            clear()
+            tcp("receive_buffer_size", conn, R)
+            pr(f"accepted receive buffer > 0: {int(u32(R + 8) > 0)}\n")
+            clear()
+            tcp("send_buffer_size", conn, R)
+            pr(f"accepted send buffer > 0: {int(u32(R + 8) > 0)}\n")
             pr(f"listener pollable ready {io.wasi_io_poll_pollable_ready(host, listener_poll)}\n")
             # data both ways
             memory[2000:2004] = b"ping"
@@ -688,6 +710,24 @@ def test_values() -> None:
     assert "b names its peer:00000000000000000100000000000000" in lines  # the same peer is allowed
     assert err("a names no peer", 8) == code("invalid-argument")
     assert "listening 1" in lines and "listener:00" in lines and "  ip:7f000001" in lines
+
+    # what was set on the listener is on the socket it accepted (the WIT says so; some systems do not copy it, and the host does)
+    def accepted(label: str) -> bytes:
+        return bytes.fromhex(next(x for x in lines if x.startswith(f"{label}:")).split(":", 1)[1])
+
+    assert accepted("accepted keep-alive?")[:2] == b"\x00\x01"
+    for label, size, wanted in (
+        ("accepted idle?", 8, 30_000_000_000),
+        ("accepted interval?", 8, 5_000_000_000),
+        ("accepted count?", 4, 3),
+    ):
+        data = accepted(label)
+        if data[0] == 0:
+            assert int.from_bytes(data[size : size + size] if size == 8 else data[4:8], "little") == wanted, label
+        else:
+            assert data[size if size == 8 else 4] == code("not-supported"), label  # a system without the option
+    assert accepted("accepted hop-limit?")[:2] == b"\x00\x40"  # 64
+    assert "accepted receive buffer > 0: 1" in lines and "accepted send buffer > 0: 1" in lines
     assert "  remote port is the listener's: 1" in lines
     assert "listener pollable ready with a connection waiting 1" in lines
     assert "server reads data 70696e67" in lines and "client reads data 706f6e6721" in lines  # "ping", "pong!"

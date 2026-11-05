@@ -196,11 +196,19 @@ FUSEDWASI_P2_FN void fusedwasi_p2__net_fail(fusedwasi_p2_guest *g, uint32_t comp
 
 /* the objects */
 
+/* what the guest set on a listener: the sockets it accepts are given the same (the WIT says they inherit it; some systems do not copy it) */
+typedef struct {
+    int ka_set, ka, idle_set, intvl_set, cnt_set, hop_set, rcv_set, snd_set;
+    uint64_t idle, intvl, rcv, snd;
+    uint32_t cnt, hop;
+} fusedwasi_p2__inherited;
+
 typedef struct {
     int fd, family, state;
     uint32_t backlog;
     int recv_shut, send_shut;
     int refs; /* the handle of the socket and every stream of it */
+    fusedwasi_p2__inherited inh;
 } fusedwasi_p2__tcp;
 
 typedef struct {
@@ -561,6 +569,8 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_finish_listen(fusedwa
     fusedwasi_p2__net_status(g, comp, retptr, rc);
 }
 
+FUSEDWASI_P2_FN void fusedwasi_p2__inherit(const fusedwasi_p2__tcp *from, fusedwasi_p2__tcp *to); /* below, with the helpers of the options */
+
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = FUSEDWASI_P2__NOK, fd = -1;
@@ -579,6 +589,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_accept(fusedwasi_p2_g
     FUSEDWASI_P2__CLOEXEC(fd);
     fusedwasi_p2__tcp *conn = fusedwasi_p2__tcp_make(t->family, fd, FUSEDWASI_P2__SS_CONNECTED);
     if (!conn) g->trap(g, "out of memory");
+    fusedwasi_p2__inherit(t, conn);
     fusedwasi_p2__ok(g, comp, retptr);
     fusedwasi_p2__store_u32(g, comp, retptr + 4, fusedwasi_p2__table_new(g, FUSEDWASI_P2_KIND_TCP_SOCKET, conn, fusedwasi_p2__tcp_destroy));
     fusedwasi_p2__store_u32(g, comp, retptr + 8, fusedwasi_p2__handle_or_trap(g, fusedwasi_p2__sock_stream_new(g->state, conn, 0)));
@@ -680,6 +691,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_enable
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = fusedwasi_p2__tcp_open(t);
     if (rc == FUSEDWASI_P2__NOK) rc = fusedwasi_p2__setopt(t->fd, SOL_SOCKET, SO_KEEPALIVE, value != 0);
+    if (rc == FUSEDWASI_P2__NOK) t->inh.ka_set = 1, t->inh.ka = value != 0;
     fusedwasi_p2__net_status(g, comp, retptr, rc);
 }
 
@@ -692,13 +704,14 @@ FUSEDWASI_P2_FN void fusedwasi_p2__keepalive_get(fusedwasi_p2_guest *g, uint32_t
     fusedwasi_p2__number_result(g, comp, retptr, size == 8 ? 8 : 4, size, rc, (uint64_t)v * factor);
 }
 
-FUSEDWASI_P2_FN void fusedwasi_p2__keepalive_set(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t value, int seconds) {
+FUSEDWASI_P2_FN int fusedwasi_p2__keepalive_set(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr, int name, uint64_t value, int seconds) {
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = fusedwasi_p2__tcp_open(t);
     if (rc == FUSEDWASI_P2__NOK && value == 0) rc = FUSEDWASI_P2_N_INVALID_ARGUMENT;
     if (rc == FUSEDWASI_P2__NOK && name < 0) rc = FUSEDWASI_P2_N_NOT_SUPPORTED;
     if (rc == FUSEDWASI_P2__NOK) rc = fusedwasi_p2__setopt(t->fd, IPPROTO_TCP, name, seconds ? fusedwasi_p2__seconds(value) : (int)(value < 2147483647ULL ? value : 2147483647ULL));
     fusedwasi_p2__net_status(g, comp, retptr, rc);
+    return rc;
 }
 
 #ifdef FUSEDWASI_P2__KEEPIDLE
@@ -721,19 +734,28 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_idle_time(
     fusedwasi_p2__keepalive_get(g, comp, self, retptr, FUSEDWASI_P2__OPT_IDLE, 1000000000ULL, 8);
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_idle_time(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_IDLE, value, 1);
+    if (fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_IDLE, value, 1) == FUSEDWASI_P2__NOK) {
+        fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
+        t->inh.idle_set = 1, t->inh.idle = value;
+    }
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_interval(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2__keepalive_get(g, comp, self, retptr, FUSEDWASI_P2__OPT_INTVL, 1000000000ULL, 8);
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_interval(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint64_t value, uint32_t retptr) {
-    fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_INTVL, value, 1);
+    if (fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_INTVL, value, 1) == FUSEDWASI_P2__NOK) {
+        fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
+        t->inh.intvl_set = 1, t->inh.intvl = value;
+    }
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_keep_alive_count(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
     fusedwasi_p2__keepalive_get(g, comp, self, retptr, FUSEDWASI_P2__OPT_CNT, 1, 4);
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_keep_alive_count(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t value, uint32_t retptr) {
-    fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_CNT, value, 0);
+    if (fusedwasi_p2__keepalive_set(g, comp, self, retptr, FUSEDWASI_P2__OPT_CNT, value, 0) == FUSEDWASI_P2__NOK) {
+        fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
+        t->inh.cnt_set = 1, t->inh.cnt = value;
+    }
 }
 
 FUSEDWASI_P2_FN int fusedwasi_p2__hop_get(int fd, int family, int *v) {
@@ -762,6 +784,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_hop_limit(fusedwa
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = fusedwasi_p2__tcp_open(t);
     if (rc == FUSEDWASI_P2__NOK) rc = fusedwasi_p2__hop_set(t->fd, t->family, value);
+    if (rc == FUSEDWASI_P2__NOK) t->inh.hop_set = 1, t->inh.hop = value;
     fusedwasi_p2__net_status(g, comp, retptr, rc);
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_receive_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -774,6 +797,7 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_receive_buffer_si
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = fusedwasi_p2__tcp_open(t);
     if (rc == FUSEDWASI_P2__NOK) rc = fusedwasi_p2__buffer_set(t->fd, SO_RCVBUF, value);
+    if (rc == FUSEDWASI_P2__NOK) t->inh.rcv_set = 1, t->inh.rcv = value;
     fusedwasi_p2__net_status(g, comp, retptr, rc);
 }
 FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_send_buffer_size(fusedwasi_p2_guest *g, uint32_t comp, uint32_t self, uint32_t retptr) {
@@ -786,7 +810,20 @@ FUSEDWASI_P2_FN void fusedwasi_wasi_sockets_tcp_tcp_socket_set_send_buffer_size(
     fusedwasi_p2__tcp *t = fusedwasi_p2__tcp_get(g, self);
     int rc = fusedwasi_p2__tcp_open(t);
     if (rc == FUSEDWASI_P2__NOK) rc = fusedwasi_p2__buffer_set(t->fd, SO_SNDBUF, value);
+    if (rc == FUSEDWASI_P2__NOK) t->inh.snd_set = 1, t->inh.snd = value;
     fusedwasi_p2__net_status(g, comp, retptr, rc);
+}
+
+/* a socket that was accepted gets what was set on its listener; a system that lacks an option, or refuses it, leaves the default */
+FUSEDWASI_P2_FN void fusedwasi_p2__inherit(const fusedwasi_p2__tcp *from, fusedwasi_p2__tcp *to) {
+    const fusedwasi_p2__inherited *i = &from->inh;
+    if (i->ka_set) (void)fusedwasi_p2__setopt(to->fd, SOL_SOCKET, SO_KEEPALIVE, i->ka);
+    if (i->idle_set) (void)fusedwasi_p2__setopt(to->fd, IPPROTO_TCP, FUSEDWASI_P2__OPT_IDLE, fusedwasi_p2__seconds(i->idle));
+    if (i->intvl_set) (void)fusedwasi_p2__setopt(to->fd, IPPROTO_TCP, FUSEDWASI_P2__OPT_INTVL, fusedwasi_p2__seconds(i->intvl));
+    if (i->cnt_set) (void)fusedwasi_p2__setopt(to->fd, IPPROTO_TCP, FUSEDWASI_P2__OPT_CNT, (int)(i->cnt < 2147483647U ? i->cnt : 2147483647U));
+    if (i->hop_set) (void)fusedwasi_p2__hop_set(to->fd, to->family, i->hop);
+    if (i->rcv_set) (void)fusedwasi_p2__buffer_set(to->fd, SO_RCVBUF, i->rcv);
+    if (i->snd_set) (void)fusedwasi_p2__buffer_set(to->fd, SO_SNDBUF, i->snd);
 }
 
 /* a pollable that asks a socket */

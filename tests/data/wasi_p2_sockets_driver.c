@@ -198,6 +198,14 @@ int main(int argc, char **argv) {
         settle_accept(srv);
         show("accept", R, 16);
         uint32_t conn = u32(R + 4), sin = u32(R + 8), sout = u32(R + 12);
+        /* what was set on the listener is on the socket it accepted */
+        clear(), T(keep_alive_enabled, conn, R), show("accepted keep-alive?", R, 2);
+        clear(), T(keep_alive_idle_time, conn, R), show("accepted idle?", R, 16);
+        clear(), T(keep_alive_interval, conn, R), show("accepted interval?", R, 16);
+        clear(), T(keep_alive_count, conn, R), show("accepted count?", R, 8);
+        clear(), T(hop_limit, conn, R), show("accepted hop-limit?", R, 2);
+        clear(), T(receive_buffer_size, conn, R), printf("accepted receive buffer > 0: %d\n", u32(R + 8) > 0);
+        clear(), T(send_buffer_size, conn, R), printf("accepted send buffer > 0: %d\n", u32(R + 8) > 0);
         printf("listener pollable ready %u\n", fusedwasi_wasi_io_poll_pollable_ready(&s, listener_poll));
         /* data both ways */
         memcpy(memory + 2000, "ping", 4);

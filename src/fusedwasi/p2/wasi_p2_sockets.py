@@ -229,6 +229,9 @@ class _TcpSock:
         self.state = state
         self.backlog = 128
         self.recv_shut = self.send_shut = False
+        self.inherit: dict[
+            str, int
+        ] = {}  # what the guest set (keep-alive, hop limit, buffers): the sockets it accepts are given the same
 
 
 class _UdpSock:
@@ -498,6 +501,7 @@ def wasi_sockets_tcp_tcp_socket_accept(guest: Guest, comp: int, self: int, retpt
             raise _from_oserror(exc) from exc
         conn.setblocking(False)
         new = _TcpSock(t.family, conn, _CONNECTED)
+        _inherit(t, conn)
     except _NetError as exc:
         _fail(guest, comp, retptr, retptr + 4, exc)
         return
@@ -505,6 +509,26 @@ def wasi_sockets_tcp_tcp_socket_accept(guest: Guest, comp: int, self: int, retpt
     _store_u32(guest, comp, retptr + 4, _table_new(guest, KIND_TCP_SOCKET, new))
     _store_u32(guest, comp, retptr + 8, _input_stream_new(guest, _SocketInput(new)))
     _store_u32(guest, comp, retptr + 12, _output_stream_new(guest, _SocketOutput(new)))
+
+
+def _inherit(listener: _TcpSock, conn: socket.socket) -> None:
+    """A socket that was accepted gets what was set on its listener (the WIT says it inherits it; some systems do not copy it). A system that lacks an option, or refuses it, leaves the default."""
+    names = {"idle": ("TCP_KEEPIDLE", "TCP_KEEPALIVE"), "intvl": ("TCP_KEEPINTVL", None), "cnt": ("TCP_KEEPCNT", None)}
+    for key, value in listener.inherit.items():
+        try:
+            if key == "ka":
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, value)
+            elif key in names:
+                level, option = _sockopt(conn, socket.IPPROTO_TCP, *names[key])
+                conn.setsockopt(level, option, min(value, 2**31 - 1) if key == "cnt" else _seconds(value))
+            elif key == "hop":
+                _hop_set(conn, listener.family, value)
+            elif key == "rcv":
+                _buffer_set(conn, socket.SO_RCVBUF, value)
+            elif key == "snd":
+                _buffer_set(conn, socket.SO_SNDBUF, value)
+        except (OSError, _NetError):
+            pass
 
 
 def _address_result(guest: Guest, comp: int, retptr: int, action: Callable[[], _Addr]) -> None:
@@ -603,6 +627,7 @@ def wasi_sockets_tcp_tcp_socket_set_keep_alive_enabled(
     def action() -> None:
         _open(t)
         t.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, int(bool(value)))
+        t.inherit["ka"] = int(bool(value))
 
     _status(guest, comp, retptr, action)
 
@@ -629,6 +654,7 @@ def _set_keepalive(
             raise _NetError("invalid-argument")
         level, option = _sockopt(t.sock, socket.IPPROTO_TCP, name, alt)
         t.sock.setsockopt(level, option, _seconds(value) if seconds else min(value, 2**31 - 1))
+        t.inherit[{"TCP_KEEPIDLE": "idle", "TCP_KEEPINTVL": "intvl", "TCP_KEEPCNT": "cnt"}[name]] = value
 
     _status(guest, comp, retptr, action)
 
@@ -699,7 +725,7 @@ def wasi_sockets_tcp_tcp_socket_hop_limit(guest: Guest, comp: int, self: int, re
 
 def wasi_sockets_tcp_tcp_socket_set_hop_limit(guest: Guest, comp: int, self: int, value: int, retptr: int) -> None:
     t = _tcp(guest, self)
-    _status(guest, comp, retptr, lambda: (_open(t), _hop_set(t.sock, t.family, value)))
+    _status(guest, comp, retptr, lambda: (_open(t), _hop_set(t.sock, t.family, value), t.inherit.update(hop=value)))
 
 
 def wasi_sockets_tcp_tcp_socket_receive_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
@@ -718,7 +744,12 @@ def wasi_sockets_tcp_tcp_socket_set_receive_buffer_size(
     guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
     t = _tcp(guest, self)
-    _status(guest, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_RCVBUF, value)))
+    _status(
+        guest,
+        comp,
+        retptr,
+        lambda: (_open(t), _buffer_set(t.sock, socket.SO_RCVBUF, value), t.inherit.update(rcv=value)),
+    )
 
 
 def wasi_sockets_tcp_tcp_socket_send_buffer_size(guest: Guest, comp: int, self: int, retptr: int) -> None:
@@ -737,7 +768,12 @@ def wasi_sockets_tcp_tcp_socket_set_send_buffer_size(
     guest: Guest, comp: int, self: int, value: int, retptr: int
 ) -> None:
     t = _tcp(guest, self)
-    _status(guest, comp, retptr, lambda: (_open(t), _buffer_set(t.sock, socket.SO_SNDBUF, value)))
+    _status(
+        guest,
+        comp,
+        retptr,
+        lambda: (_open(t), _buffer_set(t.sock, socket.SO_SNDBUF, value), t.inherit.update(snd=value)),
+    )
 
 
 def wasi_sockets_tcp_tcp_socket_subscribe(guest: Guest, self: int) -> int:
