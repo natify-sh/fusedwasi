@@ -71,7 +71,7 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           cl 2>&1 | findstr /i "Version"
-          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_package.py
+          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py tests/test_package.py
 
   msvc-run-arm64:
     name: tests with the C drivers built by MSVC (windows ARM64)
@@ -93,7 +93,7 @@ jobs:
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsarm64.bat"
           cl 2>&1 | findstr /i "Version"
-          uv run --no-sync pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_package.py
+          uv run --no-sync pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py tests/test_package.py
 
   msvc-wasm3:
     name: C over wasm3, the engine and the user built by MSVC (windows)
@@ -152,7 +152,7 @@ jobs:
           printf '#!/bin/sh\nexec gcc -m32 "$@"\n' > "$RUNNER_TEMP/m32/cc"
           chmod +x "$RUNNER_TEMP/m32/cc"
           echo "$RUNNER_TEMP/m32" >> "$GITHUB_PATH"
-      - run: uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py
+      - run: uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py
 
   tls-reference:
     name: the reference TLS hook over Mbed TLS, against a real TLS server (ubuntu)
