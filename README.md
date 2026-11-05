@@ -2,6 +2,13 @@
 
 Header-only C host for the WASI Component Model, for core modules fused from components (wasm2c and other C hosts), with a Python twin.
 
+[![license]][MIT]
+[![pypi]][PyPiUrl]
+[![py-versions]][sources]
+[![Made in Ukraine]][SWUBadge]
+
+[![powered by webassembly]][WebAssembly]
+
 **Alpha.** The first release is a pre-release: `pip install --pre fusedwasi`. **Unstable in the alpha: `wasi:sockets` (58 imports, IPv6 included) and `wasi:http` (63 imports, `https` in C): no promise on their behaviour or their names until a real program uses them** (`docs/host_scope.md`, "Known limits"). Two hosts, each as C headers (and the one of 0.2 with a Python twin):
 
 * **WASI 0.2** (`fusedwasi/p2/`, `fusedwasi.p2`): all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
@@ -162,3 +169,15 @@ Any host that can give a memory and call a function for each import. In C: the g
 Components made of components (the fuse does that), WASI 0.3 and async, an engine, a parser of WIT.
 
 WASI 0.3 is not supported. If it is ever added through `meld fuse`, the support will be **partial**: meld 0.65 does not keep the async part of the canonical ABI (the `[async-lower]` imports are renamed or replaced by meld-private ones, two fused async components leave a dangling import, `--component` refuses async). Full p3 waits until meld keeps the standard async ABI.
+
+
+[sources]: https://github.com/natify-sh/fusedwasi
+[license]: https://img.shields.io/github/license/natify-sh/fusedwasi?style=flat-square
+[MIT]: https://opensource.org/licenses/MIT
+[pypi]: https://img.shields.io/pypi/v/fusedwasi?style=flat-square&logo=pypi
+[PyPiUrl]: https://pypi.org/project/fusedwasi/
+[py-versions]: https://img.shields.io/pypi/pyversions/fusedwasi?style=flat-square
+[Made in Ukraine]: https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7&style=flat-square
+[SWUBadge]: https://stand-with-ukraine.pp.ua
+[WebAssembly]: https://webassembly.org
+[powered by webassembly]: https://img.shields.io/badge/webassembly-%23654FF0?style=flat-square&logo=webassembly&logoColor=white&label=powered%20by
