@@ -1263,8 +1263,42 @@ FUSEDWASI_P2_FN int fusedwasi_p2__http_connect(const char *host, int port, int m
     return -1;
 }
 
+/* The connection under the transport: a descriptor today. Reading and writing go through these functions so that the bytes of a session of TLS can take the place of the bytes of
+   the socket (S0001); for `http` they are the `poll`, `recv` and `send` that were here before, with the same errors. */
 typedef struct {
     int fd;
+} fusedwasi_p2__http_conn;
+
+/* >0 bytes read, 0 the peer closed, -1 failure with `err` set. Waits at most `ms` for the first byte. */
+FUSEDWASI_P2_FN int fusedwasi_p2__http_conn_read(fusedwasi_p2__http_conn *c, uint8_t *buf, size_t n, int ms, fusedwasi_p2_http_error *err) {
+    int w = fusedwasi_p2__http_wait_fd(c->fd, POLLIN, ms);
+    if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_READ_TIMEOUT), -1;
+    if (w < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    fusedwasi_p2__ssize k;
+    do k = FUSEDWASI_P2__RECV(c->fd, buf, n, 0);
+    while (k < 0 && fusedwasi_p2__errno() == EINTR);
+    if (k < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    return (int)k;
+}
+
+/* the number of bytes written (at least 1 for n > 0), or -1 with `err` set. Waits at most `ms` for the descriptor to be writable. */
+FUSEDWASI_P2_FN int fusedwasi_p2__http_conn_write(fusedwasi_p2__http_conn *c, const uint8_t *buf, size_t n, int ms, fusedwasi_p2_http_error *err) {
+    for (;;) {
+        int w = fusedwasi_p2__http_wait_fd(c->fd, POLLOUT, ms);
+        if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT), -1;
+        fusedwasi_p2__ssize k = w < 0 ? -1 : FUSEDWASI_P2__SEND(c->fd, buf, n, 0);
+        if (k < 0 && fusedwasi_p2__errno() == EINTR) continue;
+        if (k < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+        return (int)k;
+    }
+}
+
+FUSEDWASI_P2_FN void fusedwasi_p2__http_conn_close(fusedwasi_p2__http_conn *c) {
+    FUSEDWASI_P2__CLOSE(c->fd);
+}
+
+typedef struct {
+    fusedwasi_p2__http_conn *conn;
     uint8_t *buf;
     size_t len, cap, pos; /* the bytes from pos to len are not used yet */
     int first, first_ms, between_ms;
@@ -1281,13 +1315,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2__http_more(fusedwasi_p2__http_reader *r, fusedw
         r->buf = grown;
         r->cap = cap;
     }
-    int w = fusedwasi_p2__http_wait_fd(r->fd, POLLIN, r->first ? r->first_ms : r->between_ms);
-    if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_READ_TIMEOUT), -1;
-    if (w < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
-    fusedwasi_p2__ssize n;
-    do n = FUSEDWASI_P2__RECV(r->fd, r->buf + r->len, 65536, 0);
-    while (n < 0 && fusedwasi_p2__errno() == EINTR);
-    if (n < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    int n = fusedwasi_p2__http_conn_read(r->conn, r->buf + r->len, 65536, r->first ? r->first_ms : r->between_ms, err);
+    if (n < 0) return -1;
     r->first = 0;
     r->len += (size_t)n;
     return n > 0;
@@ -1614,12 +1643,13 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, co
     int fd = fusedwasi_p2__http_connect(host, port, fusedwasi_p2__http_ms(req, 0), err);
     free(host);
     if (fd < 0) return 1;
+    fusedwasi_p2__http_conn conn = {fd};
     int rc = 1;
     size_t n = 0, sent = 0;
     uint8_t *bytes = fusedwasi_p2__http_build_request(req, &n);
     fusedwasi_p2__http_reader r;
     memset(&r, 0, sizeof r);
-    r.fd = fd;
+    r.conn = &conn;
     r.first = 1;
     r.first_ms = fusedwasi_p2__http_ms(req, 1);
     r.between_ms = fusedwasi_p2__http_ms(req, 2);
@@ -1632,17 +1662,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, co
         goto done;
     }
     while (sent < n) {
-        int w = fusedwasi_p2__http_wait_fd(fd, POLLOUT, r.between_ms);
-        if (w == 0) {
-            fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT);
-            goto done;
-        }
-        fusedwasi_p2__ssize k = w < 0 ? -1 : FUSEDWASI_P2__SEND(fd, bytes + sent, n - sent, 0);
-        if (k < 0 && fusedwasi_p2__errno() == EINTR) continue;
-        if (k < 0) {
-            fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED);
-            goto done;
-        }
+        int k = fusedwasi_p2__http_conn_write(&conn, bytes + sent, n - sent, r.between_ms, err);
+        if (k < 0) goto done;
         sent += (size_t)k;
     }
     headers = fusedwasi_p2_http_fields_new(1);
@@ -1671,7 +1692,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, co
     trailers = NULL;
     rc = 0;
 done:
-    FUSEDWASI_P2__CLOSE(fd);
+    fusedwasi_p2__http_conn_close(&conn);
     free(bytes);
     free(r.buf);
     free(body);
