@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cbuild import CC, compile_c
@@ -464,4 +465,25 @@ def test_http_a_request_with_a_missing_field_is_an_error_in_c(c_fetch: Path, ser
         f"error {uri_invalid} -",
         f"error {uri_invalid} -",
     ]
+    assert lines == []  # no connection was made
+
+
+def test_http_a_request_with_no_headers_or_a_missing_field_in_python(server: tuple[int, list[str]]) -> None:
+    """The twin of the C tests above: `headers` None is no headers, and a missing method, scheme, authority or path is an error and nothing is sent."""
+    port, lines = server
+    none: Any = None
+    ok = H.default_send(H.HttpRequest("GET", "http", f"127.0.0.1:{port}", "/p", none))
+    assert ok.body == b"ok" and lines == ["GET /p HTTP/1.1"]
+    lines.clear()
+    for missing, expected in (
+        ("method", ("internal-error", "the request has no method")),
+        ("scheme", ("internal-error", "the request has no scheme")),
+        ("authority", ("HTTP-request-URI-invalid",)),
+        ("path", ("HTTP-request-URI-invalid",)),
+    ):
+        fields: dict[str, Any] = {"method": "GET", "scheme": "http", "authority": f"127.0.0.1:{port}", "path": "/p"}
+        fields[missing] = None
+        with pytest.raises(H.ErrorCode) as caught:
+            H.default_send(H.HttpRequest(headers=[], **fields))
+        assert (caught.value.name, *caught.value.values) == expected
     assert lines == []  # no connection was made

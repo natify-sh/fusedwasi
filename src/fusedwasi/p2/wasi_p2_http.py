@@ -985,8 +985,9 @@ def _build_request(req: HttpRequest) -> bytes:
         f"{req.method} {req.path} HTTP/1.1\r\n".encode("latin-1"),
         b"Host: " + req.authority.encode("latin-1") + b"\r\n",
     ]
-    names = {n for n, _ in req.headers}
-    for n, v in req.headers:
+    headers = req.headers or []  # None: no headers (as NULL is in the C twin)
+    names = {n for n, _ in headers}
+    for n, v in headers:
         out.append(n.encode("latin-1") + b": " + v + b"\r\n")
     if req.trailers is not None:
         out.append(b"transfer-encoding: chunked\r\n")
@@ -1004,6 +1005,13 @@ def _build_request(req: HttpRequest) -> bytes:
 
 def default_send(req: HttpRequest) -> HttpResponse:
     """The transport of the host: a connection for each request, `Connection: close`."""
+    # what a request must have, as in the C twin: a missing field is an error that is answered, not a crash (`headers` None is no headers)
+    if getattr(req, "method", None) is None:
+        raise ErrorCode("internal-error", "the request has no method")
+    if getattr(req, "scheme", None) is None:
+        raise ErrorCode("internal-error", "the request has no scheme")
+    if getattr(req, "authority", None) is None or getattr(req, "path", None) is None:
+        raise ErrorCode("HTTP-request-URI-invalid")
     https = req.scheme == "https"
     parsed = _split_authority(req.authority, 443 if https else 80)
     if parsed is None:
