@@ -114,8 +114,8 @@ def test_ipv6_loopback_session() -> None:
     host = guest_of([memory], realloc=bump, socket_addr_check=lambda ip, port, use: True)
     r = 100
 
-    def loop(port: int) -> tuple[int, ...]:  # tag, port, eight 16-bit numbers of ::1, flow, scope
-        return (1, port, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0)
+    def loop(port: int) -> tuple[int, ...]:  # the flat form: tag, port, flow, the eight 16-bit numbers of ::1, scope
+        return (1, port, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
 
     def u16(off: int) -> int:
         return int.from_bytes(memory[off : off + 2], "little")
