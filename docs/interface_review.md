@@ -6,7 +6,7 @@ Written 2026-10-26 on the branch `wasi-p2`, at `3736d20`. Nothing in the library
 
 **How a fact is known.** **[read]** means I read the code at the place given. **[unverified]** means I did not run or could not see it. Nothing here was run against a real C compiler or engine except what is said.
 
-**Users read.** `py-wasmext` (branch `dev`, 84e0cf2): `src/wasmext/_gen.py`, `_shared.py`, `_exe.py`, `_natify.py`, `c/wasi_python.h`, `c/wasi2_python.h`, `tools/make_wasi_p2_table.py`, `_wasi_p2_table.py`. `py-wasmhost` (branch `fusedwasi-p1`, af6224a): `src/wasmhost/wasi/preview1.py` is the only file that imports `fusedwasi`.
+**Users read.** (The paths in this paragraph, and `make_wasi_p2_table.py` below, are paths in the repositories of these users, not in this one.) `py-wasmext` (branch `dev`, 84e0cf2): `src/wasmext/_gen.py`, `_shared.py`, `_exe.py`, `_natify.py`, `c/wasi_python.h`, `c/wasi2_python.h`, `tools/make_wasi_p2_table.py`, `_wasi_p2_table.py`. `py-wasmhost` (branch `fusedwasi-p1`, af6224a): `src/wasmhost/wasi/preview1.py` is the only file that imports `fusedwasi`.
 
 **The list in `release_checklist.md` section 1 is not exact** (see 1.4): the name scheme of the per-import functions it gives is wrong; `FUSEDWASI_P1_WRITE` is not used by `wasmext`; `fusedwasi_p2_preopen` is a `struct` tag, not a typedef; and the users also depend on several things it does not list.
 
