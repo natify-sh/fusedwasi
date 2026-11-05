@@ -2,7 +2,7 @@
  * export of a component, not an import.
  *
  * An outgoing request is refused (`HTTP-request-denied`) unless `g->http_check` says yes. The transport of the host is a small HTTP/1.1 client over a socket (`Connection: close`);
- * plain `http` only (BSD sockets, or Winsock on Windows): `https` is `internal-error` unless the caller sets `state->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
+ * plain `http` only (BSD sockets, or Winsock on Windows): `https` is `internal-error` unless the caller sets `state->tls` (a TLS hook: the library keeps the connection and the HTTP, the hook does the TLS over the socket) or `state->http_send` (the transport is then the caller's, with TLS if it likes). The answer is read
  * whole before the guest sees it, and a request is sent when the guest first asks for the answer. Objects that are shared (fields, bodies, responses, the answer to a future) are
  * counted; the embedder of a server side (`fusedwasi_p2_http_incoming_request_new`, `fusedwasi_p2_http_outparam_new`) holds references of its own and releases them.
  *
@@ -10,9 +10,9 @@
  *   fusedwasi_p2_http_request, fusedwasi_p2_http_response, fusedwasi_p2_http_error, fusedwasi_p2_http_fields, fusedwasi_p2_http_blob,
  *   fusedwasi_p2_http_error_init, fusedwasi_p2_http_error_free, fusedwasi_p2_http_error_set_str, fusedwasi_p2_http_error_set_num,
  *   fusedwasi_p2_http_fail, fusedwasi_p2_http_fail_str, fusedwasi_p2_http_fail_num, fusedwasi_p2_http_fields_new, fusedwasi_p2_http_fields_add,
- *   fusedwasi_p2_http_fields_unref, fusedwasi_p2_http_blob_new, fusedwasi_p2_http_blob_unref, fusedwasi_p2_http_default_send,
- *   fusedwasi_p2_http_fields_register, fusedwasi_p2_http_incoming_request_new, fusedwasi_p2_http_outparam_new, fusedwasi_p2_http_outparam,
- *   FUSEDWASI_P2_HTTP_*.
+ *   fusedwasi_p2_http_fields_unref, fusedwasi_p2_http_blob_new, fusedwasi_p2_http_blob_unref, fusedwasi_p2_http_default_send, fusedwasi_p2_tls_ops,
+ *   fusedwasi_p2_tls_error, FUSEDWASI_P2_TLS_*, fusedwasi_p2_http_fields_register, fusedwasi_p2_http_incoming_request_new,
+ *   fusedwasi_p2_http_outparam_new, fusedwasi_p2_http_outparam, FUSEDWASI_P2_HTTP_*.
  * Every other name in this file is private: a double underscore after the prefix (`fusedwasi_p2__x`, `FUSEDWASI_P2__X`), and a private field ends with two underscores (`x__`). */
 #ifndef FUSEDWASI_P2__HTTP_H
 #define FUSEDWASI_P2__HTTP_H
@@ -1263,8 +1263,96 @@ FUSEDWASI_P2_FN int fusedwasi_p2__http_connect(const char *host, int port, int m
     return -1;
 }
 
+/* The TLS hook (docs/specs/S0001.md). A table of four functions that the embedder writes over the TLS library it has, set as `state->tls`. The library keeps the socket, the HTTP/1.1,
+   the timeouts of each phase, the limits and the errors; the hook does the TLS over a descriptor that is connected and in blocking mode (the hook may change the mode for its session; the
+   library closes the descriptor after `close`).
+   The hook MUST verify the certificate chain and the host name, offer TLS 1.2 or later, and report a failure as one of the kinds below. The library cannot check that it does. */
+enum { FUSEDWASI_P2_TLS_CERTIFICATE = 1, FUSEDWASI_P2_TLS_PROTOCOL, FUSEDWASI_P2_TLS_TIMEOUT, FUSEDWASI_P2_TLS_TERMINATED, FUSEDWASI_P2_TLS_OTHER };
+
+typedef struct fusedwasi_p2_tls_error {
+    int kind;            /* FUSEDWASI_P2_TLS_*; 0 or an unknown value is taken as _OTHER */
+    const char *message; /* NULL or a text; the library copies it where the error-code has a place for one (internal-error) */
+} fusedwasi_p2_tls_error;
+
+typedef struct fusedwasi_p2_tls_ops {
+    /* `fd` is connected. Handshake, verify, within `timeout_ms`. `host` is the authority of the request without the port (an IP address as text). Returns a session, or NULL with `err` set. */
+    void *(*connect)(struct fusedwasi_p2_state *state, int fd, const char *host, int timeout_ms, fusedwasi_p2_tls_error *err);
+    /* >0: bytes read (at most `n`); 0: the peer closed the session in order; <0: failure, `err` set. Waits at most `timeout_ms`; a timeout is `FUSEDWASI_P2_TLS_TIMEOUT`.
+       The hook does the waiting: a TLS library may hold bytes that it has decrypted, so polling the descriptor is not enough. */
+    int (*read)(void *session, uint8_t *buf, size_t n, int timeout_ms, fusedwasi_p2_tls_error *err);
+    /* >0: bytes written (at most `n`); <0: failure, `err` set. Waits at most `timeout_ms`. 0 is a failure of the hook and is answered as one. */
+    int (*write)(void *session, const uint8_t *buf, size_t n, int timeout_ms, fusedwasi_p2_tls_error *err);
+    /* sends the close notification if it can, and frees the session */
+    void (*close)(void *session);
+} fusedwasi_p2_tls_ops;
+
+/* what a hook reported, as the error-code of wasi:http; `phase` says what a TIMEOUT is: 0 the connect, 1 a read, 2 a write. Answers 1, as the other helpers that fail do. */
+FUSEDWASI_P2_FN int fusedwasi_p2__tls_fail(fusedwasi_p2_http_error *err, const fusedwasi_p2_tls_error *t, int phase) {
+    switch (t->kind) {
+    case FUSEDWASI_P2_TLS_CERTIFICATE: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_TLS_CERTIFICATE_ERROR);
+    case FUSEDWASI_P2_TLS_PROTOCOL: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_TLS_PROTOCOL_ERROR);
+    case FUSEDWASI_P2_TLS_TIMEOUT:
+        return fusedwasi_p2_http_fail(err, phase == 0 ? FUSEDWASI_P2_HTTP_CONNECTION_TIMEOUT : phase == 1 ? FUSEDWASI_P2_HTTP_CONNECTION_READ_TIMEOUT : FUSEDWASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT);
+    case FUSEDWASI_P2_TLS_TERMINATED: return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED);
+    default: return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, t->message ? t->message : "the TLS hook failed");
+    }
+}
+
+/* The connection under the transport: a descriptor, and the session of the TLS hook for `https`. Reading and writing go through these functions so that the bytes of a session of TLS can take the place of the bytes of
+   the socket (S0001); for `http` they are the `poll`, `recv` and `send` that were here before, with the same errors. */
 typedef struct {
     int fd;
+    const fusedwasi_p2_tls_ops *tls; /* NULL: the bytes of the socket */
+    void *session;
+} fusedwasi_p2__http_conn;
+
+/* >0 bytes read, 0 the peer closed, -1 failure with `err` set. Waits at most `ms` for the first byte. */
+FUSEDWASI_P2_FN int fusedwasi_p2__http_conn_read(fusedwasi_p2__http_conn *c, uint8_t *buf, size_t n, int ms, fusedwasi_p2_http_error *err) {
+    if (c->tls) {
+        fusedwasi_p2_tls_error te;
+        memset(&te, 0, sizeof te);
+        int got = c->tls->read(c->session, buf, n, ms, &te);
+        if (got < 0) return fusedwasi_p2__tls_fail(err, &te, 1), -1;
+        if ((size_t)got > n) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "the TLS hook read more than it was asked for"), -1;
+        return got;
+    }
+    int w = fusedwasi_p2__http_wait_fd(c->fd, POLLIN, ms);
+    if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_READ_TIMEOUT), -1;
+    if (w < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    fusedwasi_p2__ssize k;
+    do k = FUSEDWASI_P2__RECV(c->fd, buf, n, 0);
+    while (k < 0 && fusedwasi_p2__errno() == EINTR);
+    if (k < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    return (int)k;
+}
+
+/* the number of bytes written (at least 1 for n > 0), or -1 with `err` set. Waits at most `ms` for the descriptor to be writable. */
+FUSEDWASI_P2_FN int fusedwasi_p2__http_conn_write(fusedwasi_p2__http_conn *c, const uint8_t *buf, size_t n, int ms, fusedwasi_p2_http_error *err) {
+    if (c->tls) {
+        fusedwasi_p2_tls_error te;
+        memset(&te, 0, sizeof te);
+        int put = c->tls->write(c->session, buf, n, ms, &te);
+        if (put < 0) return fusedwasi_p2__tls_fail(err, &te, 2), -1;
+        if (put == 0 || (size_t)put > n) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, put == 0 ? "the TLS hook wrote nothing" : "the TLS hook wrote more than it was given"), -1;
+        return put;
+    }
+    for (;;) {
+        int w = fusedwasi_p2__http_wait_fd(c->fd, POLLOUT, ms);
+        if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT), -1;
+        fusedwasi_p2__ssize k = w < 0 ? -1 : FUSEDWASI_P2__SEND(c->fd, buf, n, 0);
+        if (k < 0 && fusedwasi_p2__errno() == EINTR) continue;
+        if (k < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+        return (int)k;
+    }
+}
+
+FUSEDWASI_P2_FN void fusedwasi_p2__http_conn_close(fusedwasi_p2__http_conn *c) {
+    if (c->tls && c->session) c->tls->close(c->session);
+    FUSEDWASI_P2__CLOSE(c->fd);
+}
+
+typedef struct {
+    fusedwasi_p2__http_conn *conn;
     uint8_t *buf;
     size_t len, cap, pos; /* the bytes from pos to len are not used yet */
     int first, first_ms, between_ms;
@@ -1281,13 +1369,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2__http_more(fusedwasi_p2__http_reader *r, fusedw
         r->buf = grown;
         r->cap = cap;
     }
-    int w = fusedwasi_p2__http_wait_fd(r->fd, POLLIN, r->first ? r->first_ms : r->between_ms);
-    if (w == 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_READ_TIMEOUT), -1;
-    if (w < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
-    fusedwasi_p2__ssize n;
-    do n = FUSEDWASI_P2__RECV(r->fd, r->buf + r->len, 65536, 0);
-    while (n < 0 && fusedwasi_p2__errno() == EINTR);
-    if (n < 0) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED), -1;
+    int n = fusedwasi_p2__http_conn_read(r->conn, r->buf + r->len, 65536, r->first ? r->first_ms : r->between_ms, err);
+    if (n < 0) return -1;
     r->first = 0;
     r->len += (size_t)n;
     return n > 0;
@@ -1566,7 +1649,7 @@ FUSEDWASI_P2_FN uint8_t *fusedwasi_p2__http_build_request(const fusedwasi_p2_htt
 #define FUSEDWASI_P2__PUTS(t) FUSEDWASI_P2__PUT((t), strlen(t))
     FUSEDWASI_P2__PUTS(req->method), FUSEDWASI_P2__PUTS(" "), FUSEDWASI_P2__PUTS(req->path), FUSEDWASI_P2__PUTS(" HTTP/1.1\r\nHost: "), FUSEDWASI_P2__PUTS(req->authority), FUSEDWASI_P2__PUTS("\r\n");
     int has_length = 0;
-    for (uint32_t i = 0; i < req->headers->count; i++) {
+    for (uint32_t i = 0; req->headers && i < req->headers->count; i++) { /* NULL: no headers */
         FUSEDWASI_P2__PUTS(req->headers->e[i].name), FUSEDWASI_P2__PUTS(": "), FUSEDWASI_P2__PUT(req->headers->e[i].value, req->headers->e[i].len), FUSEDWASI_P2__PUTS("\r\n");
         if (strcmp(req->headers->e[i].name, "content-length") == 0) has_length = 1;
     }
@@ -1601,21 +1684,42 @@ FUSEDWASI_P2_FN uint8_t *fusedwasi_p2__http_build_request(const fusedwasi_p2_htt
 
 /* The transport of the host: a connection for each request, `Connection: close`; plain http only. */
 FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, const fusedwasi_p2_http_request *req, fusedwasi_p2_http_response *out, fusedwasi_p2_http_error *err) {
-    (void)state;
+    /* what a request must have: a NULL is an error of the embedder that is answered, not a crash (`headers` NULL is no headers) */
+    if (!req->method) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "the request has no method");
+    if (!req->scheme) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "the request has no scheme");
+    if (!req->authority || !req->path) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
     int https = strcmp(req->scheme, "https") == 0;
-    if (https) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "https needs a transport of the embedder (`http_send` of the state): this host has no TLS");
+    if (https && !(state && state->tls)) return fusedwasi_p2_http_fail_str(err, FUSEDWASI_P2_HTTP_INTERNAL_ERROR, 0, "https needs a TLS hook (`tls` of the state) or a transport (`http_send` of the state) of the embedder: this host has no TLS");
     char *host = NULL;
     int port = 0;
-    if (!fusedwasi_p2__http_split_authority(req->authority, strlen(req->authority), 80, &host, &port)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
+    if (!fusedwasi_p2__http_split_authority(req->authority, strlen(req->authority), https ? 443 : 80, &host, &port)) return fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_REQUEST_URI_INVALID);
     int fd = fusedwasi_p2__http_connect(host, port, fusedwasi_p2__http_ms(req, 0), err);
+    if (fd < 0) {
+        free(host);
+        return 1;
+    }
+    fusedwasi_p2__http_conn conn;
+    conn.fd = fd;
+    conn.tls = NULL;
+    conn.session = NULL;
+    if (https) {
+        fusedwasi_p2_tls_error te;
+        memset(&te, 0, sizeof te);
+        conn.session = state->tls->connect(state, fd, host, fusedwasi_p2__http_ms(req, 0), &te);
+        if (!conn.session) {
+            free(host);
+            FUSEDWASI_P2__CLOSE(fd);
+            return fusedwasi_p2__tls_fail(err, &te, 0);
+        }
+        conn.tls = state->tls;
+    }
     free(host);
-    if (fd < 0) return 1;
     int rc = 1;
     size_t n = 0, sent = 0;
     uint8_t *bytes = fusedwasi_p2__http_build_request(req, &n);
     fusedwasi_p2__http_reader r;
     memset(&r, 0, sizeof r);
-    r.fd = fd;
+    r.conn = &conn;
     r.first = 1;
     r.first_ms = fusedwasi_p2__http_ms(req, 1);
     r.between_ms = fusedwasi_p2__http_ms(req, 2);
@@ -1628,17 +1732,8 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, co
         goto done;
     }
     while (sent < n) {
-        int w = fusedwasi_p2__http_wait_fd(fd, POLLOUT, r.between_ms);
-        if (w == 0) {
-            fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_WRITE_TIMEOUT);
-            goto done;
-        }
-        fusedwasi_p2__ssize k = w < 0 ? -1 : FUSEDWASI_P2__SEND(fd, bytes + sent, n - sent, 0);
-        if (k < 0 && fusedwasi_p2__errno() == EINTR) continue;
-        if (k < 0) {
-            fusedwasi_p2_http_fail(err, FUSEDWASI_P2_HTTP_CONNECTION_TERMINATED);
-            goto done;
-        }
+        int k = fusedwasi_p2__http_conn_write(&conn, bytes + sent, n - sent, r.between_ms, err);
+        if (k < 0) goto done;
         sent += (size_t)k;
     }
     headers = fusedwasi_p2_http_fields_new(1);
@@ -1667,7 +1762,7 @@ FUSEDWASI_P2_FN int fusedwasi_p2_http_default_send(fusedwasi_p2_state *state, co
     trailers = NULL;
     rc = 0;
 done:
-    FUSEDWASI_P2__CLOSE(fd);
+    fusedwasi_p2__http_conn_close(&conn);
     free(bytes);
     free(r.buf);
     free(body);

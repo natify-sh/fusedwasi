@@ -1,10 +1,16 @@
 name: Tests
 
+# On push only, of every branch: the results show in the pull request of the branch (it is the same commit). There is no `pull_request` trigger on purpose: its path filter reads
+# the whole diff of the pull request, so it would run on a change of the documents too. A pull request from a fork gets no run from this.
 on:
   push:
     branches: ["**"]
     paths-ignore: ["docs/**", "*.md", "LICENSE"]
-  pull_request:
+
+# a newer push to the same ref cancels the run in progress (as in the other natify-sh repositories)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,3 +34,45 @@ jobs:
       - run: uv run ruff format --check
       - run: uv run pyright
       - run: uv run pytest -q -rs
+      # a measurement and not a test: what this system copies from a listener to the socket that accept() makes (docs/host_scope.md, Known limits); the answer is in the log
+      - name: What does this system copy in accept()
+        run: uv run python tools/probe_accept_inheritance.py
+
+  android:
+    # The Python twin in an Android app process: CPython's own testbed app (the python.org Android package; the recipe of waboros and of CPython's CI) on a Gradle-managed emulator,
+    # x86_64 with KVM, Android 15. An app has no C compiler, so the tests that build the C drivers skip and only the Python twin runs here (tools/android_check.py). arm64: no job,
+    # GitHub has no arm64 runner that can run the Android emulator.
+    name: the Python twin in an Android app (emulator, x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # python.org Android package, pinned (sha256 of the downloaded file; python.org lists none)
+      PY_ANDROID: "3.14.10"
+      PKG_SHA256: "6ebda1fc3f28efc5861cad397254e8ce5d81ba4f83a3cb6a0c124c3826a0e14c"
+    steps:
+      - uses: actions/checkout@v7
+      - name: the python.org Android package (it carries android.py, the testbed and libpython)
+        run: |
+          curl -fsSL -o pkg.tar.gz "https://www.python.org/ftp/python/$PY_ANDROID/python-$PY_ANDROID-x86_64-linux-android.tar.gz"
+          echo "$PKG_SHA256  pkg.tar.gz" | sha256sum -c -
+          mkdir pkg && tar -xzf pkg.tar.gz -C pkg
+          java -version && python3 --version && echo "ANDROID_HOME=$ANDROID_HOME"
+      - name: stage the site-packages of the app (pytest, fusedwasi) and its working directory (tests, tools)
+        run: |
+          python3 -m pip install --quiet --target stage/site-packages pytest  # pure Python wheels
+          cp -r src/fusedwasi stage/site-packages/
+          mkdir -p stage/cwd
+          cp -r tools stage/cwd/
+          tar --exclude=__pycache__ --exclude=tls_mbedtls -cf - tests | tar -xf - -C stage/cwd
+      # android.py enables KVM for the emulator itself, installs the SDK packages and the system image through Gradle, boots the emulator, runs the app and returns the exit code of the
+      # Python command. -v adds Gradle and logcat.
+      - name: run in the testbed app on the emulator (Android 15, API 35, x86_64)
+        run: |
+          set -o pipefail
+          python3 pkg/android.py test --managed maxVersion -v --site-packages "$PWD/stage/site-packages" \
+            --cwd "$PWD/stage/cwd" -- -m tools.android_check 2>&1 | tee android.log
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-log
+          path: android.log

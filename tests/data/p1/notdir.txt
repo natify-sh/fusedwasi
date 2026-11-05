@@ -1,0 +1,8 @@
+# WASI 0.1: fd_readdir of a descriptor that is not a directory. DELIBERATE difference from Wasmtime (docs/wasmtime_compare.md, E7): fusedwasi says NOTDIR (54), as the 0.2
+# layer under it does (`read-directory` of a file is `not-directory`); Wasmtime says BADF. A descriptor that does not exist is BADF (8) in both.
+preopen "$TMP" "/data" rw
+start 16384
+
+call fd_readdir 1 5000 4096 0 3600
+call fd_readdir 0 5000 4096 0 3600
+call fd_readdir 99 5000 4096 0 3600

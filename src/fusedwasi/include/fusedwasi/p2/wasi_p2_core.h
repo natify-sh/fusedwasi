@@ -58,6 +58,7 @@ struct fusedwasi_p2_stream;
 struct fusedwasi_p2_http_request;
 struct fusedwasi_p2_http_response;
 struct fusedwasi_p2_http_error;
+struct fusedwasi_p2_tls_ops;
 
 /* the `use` that `socket_addr_check` is asked about; the numbers are part of the interface (the UDP ones come last), and the Python twin has the same ones (`USE_TCP_BIND`, ...) */
 enum { FUSEDWASI_P2_USE_TCP_BIND, FUSEDWASI_P2_USE_TCP_CONNECT, FUSEDWASI_P2_USE_UDP_BIND, FUSEDWASI_P2_USE_UDP_CONNECT, FUSEDWASI_P2_USE_UDP_OUTGOING };
@@ -147,6 +148,9 @@ typedef struct fusedwasi_p2_state {
        `http_send` replaces the transport of wasi_p2_http.h: returns 0 with `out` filled, or nonzero with `err` filled. */
     int (*http_check)(struct fusedwasi_p2_state *state, const char *scheme, const char *authority);
     int (*http_send)(struct fusedwasi_p2_state *state, const struct fusedwasi_p2_http_request *req, struct fusedwasi_p2_http_response *out, struct fusedwasi_p2_http_error *err);
+    /* wasi:http: the TLS for `https` in the transport of the library (a table of four functions, see `fusedwasi_p2_tls_ops` in wasi_p2_http.h). NULL: `https` is `internal-error`
+       unless `http_send` is set. `http_send`, when set, replaces the whole transport and this is not looked at. */
+    const struct fusedwasi_p2_tls_ops *tls;
     /* the standard streams (wasi_p2_io.h): [0] stdin, [1] stdout, [2] stderr; NULL means the descriptors of the process, made when first asked for (`std_default`: private,
        freed with the state). The streams of the caller are not closed when a handle to them is dropped. */
     struct fusedwasi_p2_stream *std[3];

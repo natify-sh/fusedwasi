@@ -1,10 +1,16 @@
 name: C checks
 
+# On push only, of every branch: the results show in the pull request of the branch (it is the same commit). There is no `pull_request` trigger on purpose: its path filter reads
+# the whole diff of the pull request, so it would run on a change of the documents too. A pull request from a fork gets no run from this.
 on:
   push:
     branches: ["**"]
     paths-ignore: ["docs/**", "*.md", "LICENSE"]
-  pull_request:
+
+# a newer push to the same ref cancels the run in progress (as in the other natify-sh repositories)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -67,11 +73,33 @@ jobs:
         shell: cmd
         env:
           FUSEDWASI_TEST_CC: cl
-          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers'
+          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers|no IPv6 loopback'
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           cl 2>&1 | findstr /i "Version"
-          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_package.py
+          uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py tests/test_package.py
+
+  msvc-run-arm64:
+    name: tests with the C drivers built by MSVC (windows ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      # wasmtime-py is for the neutral users and the comparison with Wasmtime; none of the files below uses it, and there may be no wheel of it for Windows on ARM64.
+      - run: uv sync --no-install-package wasmtime
+      # The same files as msvc-run, with the ARM64 compiler of vcvarsarm64.bat (`cl` for ARM64) and the same reasons allowed for a skip.
+      - name: Every C program and the Python twin of each, built with cl for ARM64 and run
+        shell: cmd
+        env:
+          FUSEDWASI_TEST_CC: cl
+          FUSEDWASI_ALLOWED_SKIPS: 'pipe\(\)|FIFO|select\.poll|Windows maps its own error numbers|no IPv6 loopback'
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsarm64.bat"
+          cl 2>&1 | findstr /i "Version"
+          uv run --no-sync pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py tests/test_package.py
 
   msvc-wasm3:
     name: C over wasm3, the engine and the user built by MSVC (windows)
@@ -130,4 +158,37 @@ jobs:
           printf '#!/bin/sh\nexec gcc -m32 "$@"\n' > "$RUNNER_TEMP/m32/cc"
           chmod +x "$RUNNER_TEMP/m32/cc"
           echo "$RUNNER_TEMP/m32" >> "$GITHUB_PATH"
-      - run: uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py
+      - run: uv run pytest -q -rs tests/test_driver_matrix.py tests/test_wasi_p1_headers.py tests/test_wasi_p1_core.py tests/test_wasi_p1_errno.py tests/test_wasi_p1_over_p2.py tests/test_wasi_p2_cli.py tests/test_wasi_p2_clocks.py tests/test_wasi_p2_filesystem.py tests/test_wasi_p2_http.py tests/test_wasi_p2_io.py tests/test_wasi_p2_random.py tests/test_wasi_p2_sockets.py tests/test_parity_surface.py tests/test_known_limits.py tests/test_tls_hook.py tests/test_wasi_p2_address_checks.py
+
+  tls-reference:
+    name: the reference TLS hook over Mbed TLS, against a real TLS server (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: ubuntu, os: ubuntu-latest, cmake_args: "", tests: "tests/test_tls_reference.py tests/test_tls_hook.py", skips: 'a reason that is never given, so that every skip is an error'}
+          - {name: ubuntu 32-bit, os: ubuntu-latest, cmake_args: "-DCMAKE_C_FLAGS=-m32", tests: "tests/test_tls_reference.py tests/test_tls_hook.py", skips: 'a reason that is never given, so that every skip is an error', gcc_multilib: true}
+          # The OpenSSL of macOS and of Windows may not serve TLS 1.1 at all; that test says so when it skips, and only this reason is allowed.
+          - {name: macos, os: macos-latest, cmake_args: "", tests: "tests/test_tls_reference.py tests/test_tls_hook.py", skips: 'cannot serve TLS 1.1|did not start'}
+          - {name: windows x64, os: windows-latest, cmake_args: "-A x64", tests: "tests/test_tls_reference.py", skips: 'cannot serve TLS 1.1|did not start'}
+          - {name: windows arm64, os: windows-11-arm, cmake_args: "-A ARM64", tests: "tests/test_tls_reference.py", skips: 'cannot serve TLS 1.1|did not start'}
+    steps:
+      - uses: actions/checkout@v7
+      - name: 32-bit toolchain
+        if: matrix.gcc_multilib
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          python-version: "3.13"
+      - run: uv sync
+      # docs/specs/S0001.md: the hook is built here with the Mbed TLS that CMake fetches (tests/tls_mbedtls/, pinned by URL and SHA-256), with the openssl command making a throwaway CA and
+      # certificates, and the C twin and the Python twin are given the same server. FUSEDWASI_TEST_TLS opts in; a skip in this job is a test that did not run, so a skip fails it unless its reason is in the list of the matrix,
+      # and a deprecation warning is an error (nothing is silenced).
+      - name: The C twin with the hook and the Python twin, on the same TLS server
+        env:
+          FUSEDWASI_TEST_TLS: "1"
+          FUSEDWASI_TEST_CMAKE_ARGS: ${{ matrix.cmake_args }}
+          FUSEDWASI_ALLOWED_SKIPS: ${{ matrix.skips }}
+        run: uv run --no-sync pytest -q -rs -W error::DeprecationWarning ${{ matrix.tests }}

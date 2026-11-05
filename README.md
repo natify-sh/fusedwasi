@@ -2,12 +2,23 @@
 
 Header-only C host for the WASI Component Model, for core modules fused from components (wasm2c and other C hosts), with a Python twin.
 
+[![license]][MIT]
+[![pypi]][PyPiUrl]
+[![py-versions]][sources]
+[![Made in Ukraine]][SWUBadge]
+
+[![powered by webassembly]][WebAssembly]
+
 **Alpha.** The first release is a pre-release: `pip install --pre fusedwasi`. **Unstable in the alpha: `wasi:sockets` (58 imports, IPv6 included) and `wasi:http` (63 imports, `https` in C): no promise on their behaviour or their names until a real program uses them** (`docs/host_scope.md`, "Known limits"). Two hosts, each as C headers (and the one of 0.2 with a Python twin):
 
-* **WASI 0.2** (`fusedwasi/p2/`, `fusedwasi.p2`): all 200 imports of the command world and of `wasi:http`, in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
+* **WASI 0.2** (`fusedwasi/p2/`, `fusedwasi.p2`): all 200 stable imports of the command world and of `wasi:http` (the tables have 4 unstable ones more: `clocks/timezone` ×2 and `send-informational` have no function, and `network-error-code` has), in C and in Python, with the tests that run the same scenario in both and compare the outputs (POSIX and Windows).
 * **WASI 0.1** (`fusedwasi/p1/`, `fusedwasi.p1`): `wasi_snapshot_preview1` and `wasi_unstable`, in C and in Python (`fusedwasi.p1.wasi_p1`, `wasi_p1_unstable`; the sockets are the four calls that answer NOTSOCK, since a program of 0.1 cannot make one). **WASI 0.1 is implemented over WASI 0.2, as Wasmtime does it: there is one state and one guest for both families.** The arguments, the environment, the standard streams, the preopens, the clocks, the random bytes and the sleep are the fields of the one `fusedwasi_p2_state`; the memory of an instance of 0.1 is memory 0 of its `fusedwasi_p2_guest`; a file or a directory opened by a module of 0.1 is a `descriptor` in the table of that state, the same resource a module of 0.2 sees in it, and the functions of 0.1 work through the operations of 0.2 (`fusedwasi_p2__fs_*`; in Python the methods of `State.filesystem`). What 0.1 keeps for itself: the rights of each descriptor, its position, the name of a preopen, and the errno table. A function of 0.1 traps like one of 0.2 (`g->trap`); the end of a call is the guest's (`proc_exit` is `wasi:cli/exit`: it leaves `exited` and `exit_code` there); `proc_raise` asks the hook `signal` of the guest and answers NOTSUP without one. The Python twin is checked against the C: the same script of calls (`tests/data/p1/*.txt`) is run by a C driver and by Python, and the lines they print are compared; the official wasi-testsuite of 0.1 runs through `tests/neutral`.
 
+**The top level of the Python package** (`import fusedwasi`): `State`, `Guest` and `Exit` are **one class each for both families**, re-exported here (`fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State`, and the same for `Guest` and `Exit`), so a program that serves WASI 0.1 and 0.2 imports them once; with them `get_include()` (the directory of the C headers, `python -m fusedwasi` prints it), `get_signatures_path()` and `__version__`. What belongs to one family stays in its package: the functions of 0.2 and `Trap` in `fusedwasi.p2` (`wasi_p2_cli`, `wasi_p2_clocks`, `wasi_p2_filesystem`, `wasi_p2_http`, `wasi_p2_io`, `wasi_p2_random`, `wasi_p2_sockets`), the functions of 0.1, `WasiError` and `PreopenError` in `fusedwasi.p1`.
+
 **Public and private.** The public names, in C and in Python, are listed with a line of purpose each in [`docs/public_api.md`](docs/public_api.md) (the data is `src/fusedwasi/public_api.json`, which the package carries). Every other name is private and carries a mark that cannot be missed: in C a double underscore after the prefix (`fusedwasi_p2__table_get`, `FUSEDWASI_P2__INDEX_BITS`; a private field of a public struct ends with two underscores, `state.slots__`), in Python a leading underscore (`State._slots`). A private name may change in any release and breaks nobody who stayed with the list; `tests/test_public_api.py` fails when a name of the headers is neither listed nor marked, and when a neutral user calls a private one. The top of each header has a "Host API" block with the public names defined there. What was private before is in [`docs/private_names.md`](docs/private_names.md).
+
+**Features.** What each twin has, interface by interface, with the limits, is in [`docs/features.json`](docs/features.json) (explained in [`docs/features.md`](docs/features.md)); `python tools/check_features.py` checks it against the C headers and the Python modules.
 
 ## The idea
 
@@ -86,7 +97,7 @@ Pick by what you have:
 | a component of WASI 0.2 | `meld fuse` it (or `unbundle` it), then as above |
 | a C program that is compiled ahead of time with `wasm2c` | `#include <fusedwasi/p2/wasi_p2_cli.h>` (and the others) in the glue; `python -m fusedwasi` prints the include path |
 | an embedder in C (wasm3, ...) | the same headers; the example is `tests/neutral/c_wasm3/` |
-| an engine for Python | `fusedwasi.p2.State` and `Guest`; one `Instance` class per engine, `tests/neutral/neutral_wasmtime.py` is about 130 lines |
+| an engine for Python | `fusedwasi.State` and `fusedwasi.Guest` (one class each for both families); one `Instance` class per engine, `tests/neutral/neutral_wasmtime.py` is about 130 lines |
 | an engine that keeps its memory out of the process | give `Guest` an object with `read(offset, length)`, `write(offset, data)` and `len()`: a call copies only the bytes it touches |
 
 **AOT and runtime.** The library asks the engine for two things only: the memory of each component (a base and a size) and a way to call a function for each import. So it does not matter how the module runs: compiled ahead of time to C with `wasm2c` (the C headers are included into the generated glue, nothing is needed at run time), or in an interpreter or a JIT that calls the same functions through its import table (the C headers from an embedder, the Python twin from a Python host). The AOT route (`wasm2c`) is run by users outside this repository; the runtime route is run here by the neutral users in `tests/neutral/` (C over wasm3, Python over wasmtime-py and over pywasm3).
@@ -116,8 +127,11 @@ fusedwasi_p2_free(&state);           /* after the guests are done with it; the s
 ```
 
 ```python
-from fusedwasi.p2 import Guest, State  # the same State and Guest serve WASI 0.1 (fusedwasi.p1.State is this class)
-from fusedwasi.p2 import wasi_p2_cli as cli  # the module names follow the C headers
+# one class each for WASI 0.1 and 0.2: fusedwasi.State is fusedwasi.p1.State is fusedwasi.p2.State
+from fusedwasi import Guest, State
+
+# the module names follow the C headers; what belongs to one family (Trap, the functions) stays in its package
+from fusedwasi.p2 import wasi_p2_cli as cli
 
 state = State(args=["prog"])  # the world: files, sockets, the clocks
 guest = Guest(
@@ -142,7 +156,7 @@ For 0.1 the same two parts, the same types: a function is `fusedwasi_p1_<name>(&
 | lists and strings it returns | `realloc` of the guest (the `cabi_realloc` of the component) | placing them in the guest's memory |
 | files | the preopened directories (`path`, `name`, `writable`); Python: optionally `filesystem=` | paths confined below the preopen (POSIX and Windows) |
 | sockets | `socket_addr_check`, `allow_ip_name_lookup`; refused by default | TCP, UDP, name lookup (POSIX and Winsock) |
-| http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only), the types of `wasi:http` |
+| http | `http_check`, `http_send`; refused by default | an HTTP/1.1 client of its own (TLS in Python only, with the system trust store and no setting; in C `https` needs the embedder's TLS hook (`state->tls`, four functions over the TLS library it has; `docs/specs/S0001.md`) or `http_send`; the library has no TLS code; see `docs/tls_hook.md`), the types of `wasi:http` |
 | time, random (state); trap, exit, wait, signal (guest) | a hook, or the system's own | the rest |
 
 **Integers are unsigned**, parameters and results, in C (`uint32_t`, `uint64_t`) and in Python: an offset, a length or a handle is 0 to 2**32 - 1, an `i64` 0 to 2**64 - 1. An engine that hands its values over as signed (the Python bindings of wasmtime and wasm3 do) masks every argument by its width (`x & 0xFFFFFFFF`, `x & 0xFFFFFFFFFFFFFFFF`) and re-signs a result if it wants the range of its own type (`x - 2**32 if x >= 2**31`); the functions do not do it, and a negative offset is outside the memory.
@@ -162,3 +176,15 @@ Any host that can give a memory and call a function for each import. In C: the g
 Components made of components (the fuse does that), WASI 0.3 and async, an engine, a parser of WIT.
 
 WASI 0.3 is not supported. If it is ever added through `meld fuse`, the support will be **partial**: meld 0.65 does not keep the async part of the canonical ABI (the `[async-lower]` imports are renamed or replaced by meld-private ones, two fused async components leave a dangling import, `--component` refuses async). Full p3 waits until meld keeps the standard async ABI.
+
+
+[sources]: https://github.com/natify-sh/fusedwasi
+[license]: https://img.shields.io/github/license/natify-sh/fusedwasi?style=flat-square
+[MIT]: https://opensource.org/licenses/MIT
+[pypi]: https://img.shields.io/pypi/v/fusedwasi?style=flat-square&logo=pypi
+[PyPiUrl]: https://pypi.org/project/fusedwasi/
+[py-versions]: https://img.shields.io/pypi/pyversions/fusedwasi?style=flat-square
+[Made in Ukraine]: https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7&style=flat-square
+[SWUBadge]: https://stand-with-ukraine.pp.ua
+[WebAssembly]: https://webassembly.org
+[powered by webassembly]: https://img.shields.io/badge/webassembly-%23654FF0?style=flat-square&logo=webassembly&logoColor=white&label=powered%20by

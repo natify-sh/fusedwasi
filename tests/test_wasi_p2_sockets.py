@@ -31,7 +31,7 @@ from fusedwasi.p2.wasi_p2_core import (
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_sockets_driver.c"
 
-SCENARIOS = ["main", "reset", "denied", "udp_trap", "bad_handle"]
+SCENARIOS = ["main", "reset", "denied", "udp_trap", "bad_handle", "ipv6"]
 R = 100
 
 
@@ -284,6 +284,28 @@ def python_output(scenario: str) -> str:
             settle("accept", srv)
             show("accept", R, 16)
             conn, sin, sout = u32(R + 4), u32(R + 8), u32(R + 12)
+            # what was set on the listener is on the socket it accepted
+            clear()
+            tcp("keep_alive_enabled", conn, R)
+            show("accepted keep-alive?", R, 2)
+            clear()
+            tcp("keep_alive_idle_time", conn, R)
+            show("accepted idle?", R, 16)
+            clear()
+            tcp("keep_alive_interval", conn, R)
+            show("accepted interval?", R, 16)
+            clear()
+            tcp("keep_alive_count", conn, R)
+            show("accepted count?", R, 8)
+            clear()
+            tcp("hop_limit", conn, R)
+            show("accepted hop-limit?", R, 2)
+            clear()
+            tcp("receive_buffer_size", conn, R)
+            pr(f"accepted receive buffer > 0: {int(u32(R + 8) > 0)}\n")
+            clear()
+            tcp("send_buffer_size", conn, R)
+            pr(f"accepted send buffer > 0: {int(u32(R + 8) > 0)}\n")
             pr(f"listener pollable ready {io.wasi_io_poll_pollable_ready(host, listener_poll)}\n")
             # data both ways
             memory[2000:2004] = b"ping"
@@ -523,6 +545,107 @@ def python_output(scenario: str) -> str:
             sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, u32(R + 8), 2200, 1, R)
         elif scenario == "bad_handle":
             sk.wasi_sockets_tcp_tcp_socket_is_listening(host, 4242)
+        elif scenario == "ipv6":
+            # a whole session over ::1: TCP (bind, listen, connect, accept, data both ways) and two UDP sockets (a datagram each way). Run only where the machine has IPv6.
+            def a6(port: int) -> tuple[int, ...]:
+                return a6loop(port)
+
+            def put_dgram6(idx: int, data: bytes, port: int) -> None:
+                base, dptr = 2200 + 44 * idx, 2000 + 16 * idx
+                memory[dptr : dptr + len(data)] = data
+                memory[base : base + 44] = bytes(44)
+                _store_u32(host, 0, base, dptr)
+                _store_u32(host, 0, base + 4, len(data))
+                _store_u8(host, 0, base + 8, 1)
+                _store_u8(host, 0, base + 12, 1)  # the variant: IPv6
+                _store_u16(host, 0, base + 16, port)
+                _store_u16(host, 0, base + 24 + 14, 1)  # ::1
+
+            clear()
+            sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, R)
+            show("create tcp6", R, 2)
+            srv = u32(R + 4)
+            pr(f"family {sk.wasi_sockets_tcp_tcp_socket_address_family(host, srv)}\n")
+            clear()
+            tcp("start_bind", srv, net, *a6(0), R)
+            show("start-bind", R, 2)
+            clear()
+            tcp("finish_bind", srv, R)
+            show("finish-bind", R, 2)
+            clear()
+            tcp("start_listen", srv, R)
+            clear()
+            tcp("finish_listen", srv, R)
+            show("finish-listen", R, 2)
+            clear()
+            tcp("local_address", srv, R)
+            show("listener", R, 1)
+            show("  tag", R + 4, 1)
+            show("  ip", R + 16, 16)
+            port = u16(R + 8)
+            clear()
+            sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, R)
+            cli = u32(R + 4)
+            clear()
+            tcp("start_connect", cli, net, *a6(port), R)
+            show("start-connect", R, 2)
+            settle("finish_connect", cli)
+            show("finish-connect", R, 12)
+            cin, cout = u32(R + 4), u32(R + 8)
+            clear()
+            tcp("remote_address", cli, R)
+            show("client remote", R, 1)
+            pr(f"  remote port is the listener's: {int(u16(R + 8) == port)}\n")
+            settle("accept", srv)
+            show("accept", R, 16)
+            conn, sin, sout = u32(R + 4), u32(R + 8), u32(R + 12)
+            pr(f"accepted family {sk.wasi_sockets_tcp_tcp_socket_address_family(host, conn)}\n")
+            memory[2000:2005] = b"ping6"
+            clear()
+            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, cout, 2000, 5, R)
+            show("client writes", R, 8)
+            read_some("server reads", sin)
+            memory[2000:2005] = b"pong6"
+            clear()
+            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, sout, 2000, 5, R)
+            show("server writes", R, 8)
+            read_some("client reads", cin)
+            ids6: list[int] = []
+            for _ in range(2):
+                clear()
+                sk.wasi_sockets_udp_create_socket_create_udp_socket(host, 0, 1, R)
+                ids6.append(u32(R + 4))
+            ports6: list[int] = []
+            for h in ids6:
+                clear()
+                udp("start_bind", h, net, *a6(0), R)
+                clear()
+                udp("finish_bind", h, R)
+                show("udp finish-bind", R, 2)
+                clear()
+                udp("local_address", h, R)
+                show("udp local tag", R + 4, 1)
+                ports6.append(u16(R + 8))
+            streams6: list[tuple[int, int]] = []
+            for h in ids6:
+                clear()
+                udp("stream", h, 0, *a4(0, 0, 0, 0, 0), R)
+                show("udp stream", R, 12)
+                streams6.append((u32(R + 4), u32(R + 8)))
+            clear()
+            sk.wasi_sockets_udp_outgoing_datagram_stream_check_send(host, 0, streams6[0][1], R)
+            put_dgram6(0, b"v6 hello", ports6[1])
+            clear()
+            sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, streams6[0][1], 2200, 1, R)
+            show("a sends to b", R, 16)
+            receive_some("b receives", streams6[1][0], ports6[0])
+            clear()
+            sk.wasi_sockets_udp_outgoing_datagram_stream_check_send(host, 0, streams6[1][1], R)
+            put_dgram6(0, b"v6 back", ports6[0])
+            clear()
+            sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, streams6[1][1], 2200, 1, R)
+            show("b sends to a", R, 16)
+            receive_some("a receives", streams6[0][0], ports6[1])
     except Trap:
         out.append("TRAP\n")
     return "".join(out)
@@ -542,8 +665,19 @@ def driver(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
+def _has_ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_c_and_python_agree(driver: Path, scenario: str) -> None:
+    if scenario == "ipv6" and not _has_ipv6_loopback():
+        pytest.skip("no IPv6 loopback on this machine")
     assert python_output(scenario) == c_output(scenario, driver)
 
 
@@ -576,6 +710,24 @@ def test_values() -> None:
     assert "b names its peer:00000000000000000100000000000000" in lines  # the same peer is allowed
     assert err("a names no peer", 8) == code("invalid-argument")
     assert "listening 1" in lines and "listener:00" in lines and "  ip:7f000001" in lines
+
+    # what was set on the listener is on the socket it accepted (the WIT says so; some systems do not copy it, and the host does)
+    def accepted(label: str) -> bytes:
+        return bytes.fromhex(next(x for x in lines if x.startswith(f"{label}:")).split(":", 1)[1])
+
+    assert accepted("accepted keep-alive?")[:2] == b"\x00\x01"
+    for label, size, wanted in (
+        ("accepted idle?", 8, 30_000_000_000),
+        ("accepted interval?", 8, 5_000_000_000),
+        ("accepted count?", 4, 3),
+    ):
+        data = accepted(label)
+        if data[0] == 0:
+            assert int.from_bytes(data[size : size + size] if size == 8 else data[4:8], "little") == wanted, label
+        else:
+            assert data[size if size == 8 else 4] == code("not-supported"), label  # a system without the option
+    assert accepted("accepted hop-limit?")[:2] == b"\x00\x40"  # 64
+    assert "accepted receive buffer > 0: 1" in lines and "accepted send buffer > 0: 1" in lines
     assert "  remote port is the listener's: 1" in lines
     assert "listener pollable ready with a connection waiting 1" in lines
     assert "server reads data 70696e67" in lines and "client reads data 706f6e6721" in lines  # "ping", "pong!"

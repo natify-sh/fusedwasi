@@ -91,6 +91,17 @@ static void put_dgram(uint32_t idx, const char *data, int has_remote, uint32_t p
         memory[base + 18] = 127, memory[base + 21] = 1;
     }
 }
+static void put_dgram6(uint32_t idx, const char *data, uint32_t port) { /* ::1:port as the variant at +12 */
+    uint32_t base = 2200 + 44 * idx, dptr = 2000 + 16 * idx, n = (uint32_t)strlen(data);
+    memcpy(memory + dptr, data, n);
+    memset(memory + base, 0, 44);
+    fusedwasi_p2__store_u32(&s, 0, base, dptr);
+    fusedwasi_p2__store_u32(&s, 0, base + 4, n);
+    fusedwasi_p2__store_u8(&s, 0, base + 8, 1);
+    fusedwasi_p2__store_u8(&s, 0, base + 12, 1);
+    fusedwasi_p2__store_u16(&s, 0, base + 16, (uint16_t)port);
+    fusedwasi_p2__store_u16(&s, 0, base + 24 + 14, 1);
+}
 static void receive_some(const char *label, uint32_t h, uint32_t expect_port, int tries) {
     for (int i = 0; i < tries; i++) {
         clear();
@@ -187,6 +198,14 @@ int main(int argc, char **argv) {
         settle_accept(srv);
         show("accept", R, 16);
         uint32_t conn = u32(R + 4), sin = u32(R + 8), sout = u32(R + 12);
+        /* what was set on the listener is on the socket it accepted */
+        clear(), T(keep_alive_enabled, conn, R), show("accepted keep-alive?", R, 2);
+        clear(), T(keep_alive_idle_time, conn, R), show("accepted idle?", R, 16);
+        clear(), T(keep_alive_interval, conn, R), show("accepted interval?", R, 16);
+        clear(), T(keep_alive_count, conn, R), show("accepted count?", R, 8);
+        clear(), T(hop_limit, conn, R), show("accepted hop-limit?", R, 2);
+        clear(), T(receive_buffer_size, conn, R), printf("accepted receive buffer > 0: %d\n", u32(R + 8) > 0);
+        clear(), T(send_buffer_size, conn, R), printf("accepted send buffer > 0: %d\n", u32(R + 8) > 0);
         printf("listener pollable ready %u\n", fusedwasi_wasi_io_poll_pollable_ready(&s, listener_poll));
         /* data both ways */
         memcpy(memory + 2000, "ping", 4);
@@ -337,6 +356,57 @@ int main(int argc, char **argv) {
         fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(&s, 0, out, 2200, 1, R);
     } else if (!strcmp(scenario, "bad_handle")) {
         fusedwasi_wasi_sockets_tcp_tcp_socket_is_listening(&s, 4242);
+    } else if (!strcmp(scenario, "ipv6")) {
+        /* a whole session over ::1: TCP (bind, listen, connect, accept, data both ways) and two UDP sockets (a datagram each way). Run only where the machine has IPv6. */
+        clear(), fusedwasi_wasi_sockets_tcp_create_socket_create_tcp_socket(&s, 0, 1, R), show("create tcp6", R, 2);
+        uint32_t srv = u32(R + 4);
+        printf("family %u\n", fusedwasi_wasi_sockets_tcp_tcp_socket_address_family(&s, srv));
+        clear(), T(start_bind, srv, net, A6LOOP(0), R), show("start-bind", R, 2);
+        clear(), T(finish_bind, srv, R), show("finish-bind", R, 2);
+        clear(), T(start_listen, srv, R);
+        clear(), T(finish_listen, srv, R), show("finish-listen", R, 2);
+        clear(), T(local_address, srv, R), show("listener", R, 1), show("  tag", R + 4, 1), show("  ip", R + 16, 16);
+        uint32_t port = u16(R + 8);
+        clear(), fusedwasi_wasi_sockets_tcp_create_socket_create_tcp_socket(&s, 0, 1, R);
+        uint32_t cli = u32(R + 4);
+        clear(), T(start_connect, cli, net, A6LOOP(port), R), show("start-connect", R, 2);
+        settle_connect(cli);
+        show("finish-connect", R, 12);
+        uint32_t cin = u32(R + 4), cout = u32(R + 8);
+        clear(), T(remote_address, cli, R), show("client remote", R, 1), printf("  remote port is the listener's: %d\n", u16(R + 8) == port);
+        settle_accept(srv);
+        show("accept", R, 16);
+        uint32_t conn = u32(R + 4), sin = u32(R + 8), sout = u32(R + 12);
+        printf("accepted family %u\n", fusedwasi_wasi_sockets_tcp_tcp_socket_address_family(&s, conn));
+        memcpy(memory + 2000, "ping6", 5);
+        clear(), fusedwasi_wasi_io_streams_output_stream_blocking_write_and_flush(&s, 0, cout, 2000, 5, R), show("client writes", R, 8);
+        read_some("server reads", sin);
+        memcpy(memory + 2000, "pong6", 5);
+        clear(), fusedwasi_wasi_io_streams_output_stream_blocking_write_and_flush(&s, 0, sout, 2000, 5, R), show("server writes", R, 8);
+        read_some("client reads", cin);
+        uint32_t ids6[2], ports6[2], in6[2], out6[2];
+        for (int i = 0; i < 2; i++) {
+            clear(), fusedwasi_wasi_sockets_udp_create_socket_create_udp_socket(&s, 0, 1, R);
+            ids6[i] = u32(R + 4);
+        }
+        for (int i = 0; i < 2; i++) {
+            clear(), U(start_bind, ids6[i], net, A6LOOP(0), R);
+            clear(), U(finish_bind, ids6[i], R), show("udp finish-bind", R, 2);
+            clear(), U(local_address, ids6[i], R), show("udp local tag", R + 4, 1);
+            ports6[i] = u16(R + 8);
+        }
+        for (int i = 0; i < 2; i++) {
+            clear(), U(stream, ids6[i], 0, A4(0, 0, 0, 0, 0), R), show("udp stream", R, 12);
+            in6[i] = u32(R + 4), out6[i] = u32(R + 8);
+        }
+        clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(&s, 0, out6[0], R);
+        put_dgram6(0, "v6 hello", ports6[1]);
+        clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(&s, 0, out6[0], 2200, 1, R), show("a sends to b", R, 16);
+        receive_some("b receives", in6[1], ports6[0], 3000);
+        clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_check_send(&s, 0, out6[1], R);
+        put_dgram6(0, "v6 back", ports6[0]);
+        clear(), fusedwasi_wasi_sockets_udp_outgoing_datagram_stream_send(&s, 0, out6[1], 2200, 1, R), show("b sends to a", R, 16);
+        receive_some("a receives", in6[0], ports6[1], 3000);
     }
     fusedwasi_p2_free(&world);
     return 0;

@@ -3,22 +3,29 @@
 Nothing here is a feature; each test says what the host does where it does not do more.
 """
 
+import errno
 import importlib
 import inspect
+import os
 import re
 import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from cbuild import CC, compile_c
 from guests import guest_of
 
 from fusedwasi.p2 import wasi_p2_http as H
+from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2 import wasi_p2_sockets as sk
+from fusedwasi.p2.wasi_p2_core import State
+from fusedwasi.p2.wasi_p2_core import _store_u32 as store_u32  # pyright: ignore[reportPrivateUsage]
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 PACKAGES = ("cli", "clocks", "filesystem", "http", "io", "random", "sockets")
@@ -83,6 +90,178 @@ def test_ipv6_sockets_follow_the_system() -> None:
         assert sk.wasi_sockets_tcp_tcp_socket_address_family(host, int.from_bytes(memory[104:108], "little")) == 1
     else:
         assert memory[100] == 1 and sk._NETWORK_ERRORS[memory[104]] == "not-supported"
+
+
+def _has_ipv6_loopback() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+def test_ipv6_loopback_session() -> None:
+    """A whole session over `::1`, in Python: bind, listen, connect, accept, data both ways, and a datagram each way between two UDP sockets. It is skipped where the machine
+    has no IPv6 loopback (the checks of addresses and the family of a new socket are tested above on every machine). The C twin has no such test: it is not run over IPv6."""
+    if not _has_ipv6_loopback():
+        pytest.skip("no IPv6 loopback on this machine")
+
+    memory = bytearray(4096)
+    next_free = [3000]
+
+    def bump(comp: int, old_ptr: int, old_size: int, align: int, new_size: int) -> int:
+        ptr = (next_free[0] + align - 1) // align * align
+        next_free[0] = ptr + new_size
+        return ptr
+
+    host = guest_of([memory], realloc=bump, socket_addr_check=lambda ip, port, use: True)
+    r = 100
+
+    def loop(port: int) -> tuple[int, ...]:  # the flat form: tag, port, flow, the eight 16-bit numbers of ::1, scope
+        return (1, port, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
+
+    def u16(off: int) -> int:
+        return int.from_bytes(memory[off : off + 2], "little")
+
+    def u32(off: int) -> int:
+        return int.from_bytes(memory[off : off + 4], "little")
+
+    def clear() -> None:
+        memory[r : r + 64] = bytes(64)
+
+    def ok() -> None:
+        assert memory[r] == 0, f"result is an error: {bytes(memory[r : r + 8]).hex()}"
+
+    def tcp(name: str, *args: int) -> None:
+        clear()
+        getattr(sk, "wasi_sockets_tcp_tcp_socket_" + name)(host, 0, *args, r)
+
+    def udp(name: str, *args: int) -> None:
+        clear()
+        getattr(sk, "wasi_sockets_udp_udp_socket_" + name)(host, 0, *args, r)
+
+    def settle(call: str, h: int) -> None:
+        for _ in range(3000):
+            tcp(call, h)
+            if not (memory[r] == 1 and memory[r + 4] == sk._CODE["would-block"]):  # pyright: ignore[reportPrivateUsage]
+                return
+            time.sleep(0.001)
+
+    def local_port(call: str, h: int) -> int:
+        (tcp if call == "tcp" else udp)("local_address", h)
+        ok()
+        assert memory[r + 4] == 1  # an IPv6 address
+        assert [u16(r + 16 + 2 * i) for i in range(8)] == [0, 0, 0, 0, 0, 0, 0, 1]  # ::1
+        return u16(r + 8)
+
+    def read_some(h: int) -> bytes:
+        for _ in range(3000):
+            clear()
+            io.wasi_io_streams_input_stream_read(host, 0, h, 100, r)
+            if memory[r] == 1 or u32(r + 8) > 0:
+                break
+            time.sleep(0.001)
+        ok()
+        return bytes(memory[u32(r + 4) : u32(r + 4) + u32(r + 8)])
+
+    def write_all(h: int, data: bytes) -> None:
+        memory[2000 : 2000 + len(data)] = data
+        clear()
+        io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, h, 2000, len(data), r)
+        ok()
+
+    net = sk.wasi_sockets_instance_network_instance_network(host)
+
+    # TCP
+    clear()
+    sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, r)
+    ok()
+    srv = u32(r + 4)
+    tcp("start_bind", srv, net, *loop(0))
+    ok()
+    tcp("finish_bind", srv)
+    ok()
+    tcp("start_listen", srv)
+    ok()
+    tcp("finish_listen", srv)
+    ok()
+    port = local_port("tcp", srv)
+    assert port != 0
+
+    clear()
+    sk.wasi_sockets_tcp_create_socket_create_tcp_socket(host, 0, 1, r)
+    ok()
+    cli = u32(r + 4)
+    tcp("start_connect", cli, net, *loop(port))
+    ok()
+    settle("finish_connect", cli)
+    ok()
+    cin, cout = u32(r + 4), u32(r + 8)
+    settle("accept", srv)
+    ok()
+    conn, sin, sout = u32(r + 4), u32(r + 8), u32(r + 12)
+    assert sk.wasi_sockets_tcp_tcp_socket_address_family(host, conn) == 1
+    write_all(cout, b"ping6")
+    assert read_some(sin) == b"ping6"
+    write_all(sout, b"pong6")
+    assert read_some(cin) == b"pong6"
+    tcp("remote_address", cli)
+    ok()
+    assert memory[r + 4] == 1 and u16(r + 8) == port
+
+    # UDP
+    ids: list[int] = []
+    for _ in range(2):
+        clear()
+        sk.wasi_sockets_udp_create_socket_create_udp_socket(host, 0, 1, r)
+        ok()
+        ids.append(u32(r + 4))
+    ports: list[int] = []
+    for h in ids:
+        udp("start_bind", h, net, *loop(0))
+        ok()
+        udp("finish_bind", h)
+        ok()
+        ports.append(local_port("udp", h))
+    streams: list[tuple[int, int]] = []
+    for h in ids:
+        udp("stream", h, 0, *([0] * 12))  # no remote address: the tag and eleven numbers are ignored
+        ok()
+        streams.append((u32(r + 4), u32(r + 8)))
+
+    def send(out: int, data: bytes, port_to: int) -> None:
+        base = 2200
+        memory[2000 : 2000 + len(data)] = data
+        memory[base : base + 44] = bytes(44)
+        store_u32(host, 0, base, 2000)
+        store_u32(host, 0, base + 4, len(data))
+        memory[base + 8] = 1  # has a remote address
+        sk._write_addr(host, 0, base + 12, (1, port_to, (0, 0, 0, 0, 0, 0, 0, 1), 0, 0))  # pyright: ignore[reportPrivateUsage]
+        clear()
+        sk.wasi_sockets_udp_outgoing_datagram_stream_check_send(host, 0, out, r)
+        ok()
+        clear()
+        sk.wasi_sockets_udp_outgoing_datagram_stream_send(host, 0, out, base, 1, r)
+        ok()
+        assert u32(r + 8) == 1  # one datagram sent
+
+    def receive(inp: int) -> tuple[bytes, int, int]:
+        for _ in range(3000):
+            clear()
+            sk.wasi_sockets_udp_incoming_datagram_stream_receive(host, 0, inp, 10, r)
+            if memory[r] == 1 or u32(r + 8) > 0:
+                break
+            time.sleep(0.001)
+        ok()
+        assert u32(r + 8) == 1
+        d = u32(r + 4)
+        return bytes(memory[u32(d) : u32(d) + u32(d + 4)]), memory[d + 8], u16(d + 12)
+
+    send(streams[0][1], b"v6 hello", ports[1])
+    assert receive(streams[1][0]) == (b"v6 hello", 1, ports[0])
+    send(streams[1][1], b"v6 back", ports[0])
+    assert receive(streams[0][0]) == (b"v6 back", 1, ports[1])
 
 
 # ---- http ----------------------------------------------------------------------------------------------------------------------
@@ -193,3 +372,185 @@ int main(void) {
     rc, tag, message = out.split(" ", 2)
     assert rc != "0" and int(tag) == H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))
     assert "http_send" in message
+
+
+# ---- the same three limits of http, in C ---------------------------------------------------------------------------------------------------
+
+C_FETCH = """#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "wasi_p2_http.h"
+/* usage: fetch <port> <path>...: one request for each path, in this order, through the default transport; prints "<status> <location or -> <body>" for each */
+int main(int argc, char **argv) {
+    char authority[64];
+    snprintf(authority, sizeof authority, "127.0.0.1:%s", argv[1]);
+    fusedwasi_p2_state s;
+    fusedwasi_p2_init(&s);
+    for (int i = 2; i < argc; i++) {
+        fusedwasi_p2_http_request req;
+        fusedwasi_p2_http_response out;
+        fusedwasi_p2_http_error err;
+        memset(&req, 0, sizeof req), memset(&out, 0, sizeof out), memset(&err, 0, sizeof err);
+        req.method = "GET", req.scheme = "http", req.authority = authority, req.path = argv[i]; /* req.headers is NULL: no headers */
+        /* a path "!name" leaves that field NULL: the transport answers an error instead of crashing */
+        if (strcmp(argv[i], "!method") == 0) req.method = NULL;
+        if (strcmp(argv[i], "!scheme") == 0) req.scheme = NULL;
+        if (strcmp(argv[i], "!authority") == 0) req.authority = NULL;
+        if (strcmp(argv[i], "!path") == 0) req.path = NULL;
+        int rc = fusedwasi_p2_http_default_send(&s, &req, &out, &err);
+        if (rc != 0) {
+            printf("error %u %s\\n", (unsigned)err.tag, err.str[0] ? err.str[0] : "-");
+            fusedwasi_p2_http_error_free(&err);
+            continue;
+        }
+        const char *location = "-";
+        for (uint32_t k = 0; out.headers && k < out.headers->count; k++)
+            if (strcmp(out.headers->e[k].name, "location") == 0) location = (const char *)out.headers->e[k].value;
+        printf("%u %.*s %.*s\\n", (unsigned)out.status, location[0] == '-' ? 1 : 7, location, (int)(out.body ? out.body->len : 0), out.body ? (const char *)out.body->data : "");
+        fusedwasi_p2_http_fields_unref(out.headers);
+        if (out.body) fusedwasi_p2_http_blob_unref(out.body);
+    }
+    return 0;
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def c_fetch(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    if CC is None:
+        pytest.skip("no C compiler")
+    where = tmp_path_factory.mktemp("c_fetch")
+    source = where / "fetch.c"
+    source.write_text(C_FETCH)
+    binary = where / ("fetch.exe" if sys.platform == "win32" else "fetch")
+    compile_c(source, binary, [C_P2])
+    return binary
+
+
+def c_get(binary: Path, port: int, *paths: str, env: dict[str, str] | None = None) -> list[str]:
+    run = subprocess.run([str(binary), str(port), *paths], capture_output=True, text=True, check=True, env=env)
+    return run.stdout.splitlines()
+
+
+def test_http_a_redirect_is_not_followed_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    port, lines = server
+    assert c_get(c_fetch, port, "/redirect") == ["302 /target "]
+    assert lines == ["GET /redirect HTTP/1.1"]  # one request: the guest sees the 302 and decides
+
+
+def test_http_is_http_1_1_with_one_connection_for_each_request_in_c(
+    c_fetch: Path, server: tuple[int, list[str]]
+) -> None:
+    port, lines = server
+    assert c_get(c_fetch, port, "/a", "/b") == ["200 - ok", "200 - ok"]
+    assert lines == ["GET /a HTTP/1.1", "GET /b HTTP/1.1"]  # no HTTP/2, no reuse (`Connection: close`)
+
+
+def test_http_proxy_variables_are_not_read_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    port, lines = server
+    env = {k: v for k, v in os.environ.items() if k.lower() not in ("no_proxy", "http_proxy", "all_proxy")}
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        env[name] = "http://127.0.0.1:9"
+    assert c_get(c_fetch, port, "/p", env=env) == ["200 - ok"] and lines == [
+        "GET /p HTTP/1.1"
+    ]  # straight to the server
+
+
+def test_http_a_request_with_a_missing_field_is_an_error_in_c(c_fetch: Path, server: tuple[int, list[str]]) -> None:
+    """The method, the scheme, the authority and the path of a request must be there; a NULL is answered with an error, and nothing is sent. (`headers` NULL is no headers.)"""
+    port, lines = server
+    uri_invalid = H._CASES.index(next(c for c in H._CASES if c[0] == "HTTP-request-URI-invalid"))
+    internal = H._CASES.index(next(c for c in H._CASES if c[0] == "internal-error"))
+    assert c_get(c_fetch, port, "!method", "!scheme", "!authority", "!path") == [
+        f"error {internal} the request has no method",
+        f"error {internal} the request has no scheme",
+        f"error {uri_invalid} -",
+        f"error {uri_invalid} -",
+    ]
+    assert lines == []  # no connection was made
+
+
+def test_http_a_request_with_no_headers_or_a_missing_field_in_python(server: tuple[int, list[str]]) -> None:
+    """The twin of the C tests above: `headers` None is no headers, and a missing method, scheme, authority or path is an error and nothing is sent."""
+    port, lines = server
+    none: Any = None
+    ok = H.default_send(H.HttpRequest("GET", "http", f"127.0.0.1:{port}", "/p", none))
+    assert ok.body == b"ok" and lines == ["GET /p HTTP/1.1"]
+    lines.clear()
+    for missing, expected in (
+        ("method", ("internal-error", "the request has no method")),
+        ("scheme", ("internal-error", "the request has no scheme")),
+        ("authority", ("HTTP-request-URI-invalid",)),
+        ("path", ("HTTP-request-URI-invalid",)),
+    ):
+        fields: dict[str, Any] = {"method": "GET", "scheme": "http", "authority": f"127.0.0.1:{port}", "path": "/p"}
+        fields[missing] = None
+        with pytest.raises(H.ErrorCode) as caught:
+            H.default_send(H.HttpRequest(headers=[], **fields))
+        assert (caught.value.name, *caught.value.values) == expected
+    assert lines == []  # no connection was made
+
+
+# ---- the properties of a listener, on the sockets it accepts --------------------------------------------------------------------
+
+
+def test_an_accepted_socket_is_given_what_the_listener_was_given() -> None:
+    """The WIT says an accepted socket inherits keep-alive, hop limit and buffer sizes from its listener. Linux copies them in `accept()`; some systems do not, so the host sets them
+    on the new socket itself (`_inherit` here, `fusedwasi_p2__inherit` in the C). The sockets here record the calls, so that the test does not depend on the system."""
+
+    class Recorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, int, int]] = []
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            self.calls.append((level, option, value))
+
+    listener = sk._TcpSock(0)
+    listener.inherit.update(ka=1, hop=64, rcv=65536, snd=32768)
+    recorder = Recorder()
+    sk._inherit(listener, cast(Any, recorder))
+    assert (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1) in recorder.calls
+    assert (socket.IPPROTO_IP, socket.IP_TTL, 64) in recorder.calls  # a family 0 (IPv4) listener
+    assert (socket.SOL_SOCKET, socket.SO_RCVBUF, 65536) in recorder.calls
+    assert (socket.SOL_SOCKET, socket.SO_SNDBUF, 32768) in recorder.calls
+    listener.sock.close()
+
+    # what the guest did not set is not touched, and an option that the system refuses leaves the default
+    nothing = Recorder()
+    bare = sk._TcpSock(0)
+    sk._inherit(bare, cast(Any, nothing))
+    assert nothing.calls == []
+    bare.sock.close()
+
+    class Refuses:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            raise OSError(errno.ENOPROTOOPT, "no such option")
+
+    odd = sk._TcpSock(0)
+    odd.inherit.update(ka=1, hop=64)
+    sk._inherit(odd, cast(Any, Refuses()))  # no exception
+    odd.sock.close()
+
+
+def test_python_tls_is_ssl_with_the_system_store_and_has_no_setting(
+    server: tuple[int, list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELIBERATE (S0001, 3.3): the Python twin has TLS and no way to set it. An `https` request is wrapped with `ssl.create_default_context()` (the system trust store), called with
+    no arguments, and neither the state nor the host has a setting for the trust anchors or for the TLS (a TLS hook is the C twin's: `state->tls`). An embedder that needs another
+    policy replaces the transport with `http_send`. When this test fails, the limit changed: change `host_scope.md` and S0001 with it, on purpose."""
+    import ssl
+
+    port, _ = server
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def create(*args: object, **kwargs: object) -> ssl.SSLContext:
+        calls.append((args, kwargs))
+        raise ssl.SSLError("the test stops here")
+
+    monkeypatch.setattr(ssl, "create_default_context", create)
+    with pytest.raises(H.ErrorCode) as caught:
+        H.default_send(H.HttpRequest("GET", "https", f"127.0.0.1:{port}", "/", []))
+    assert caught.value.name == "TLS-protocol-error"  # an `ssl.SSLError` that is not a failed check of a certificate
+    assert calls == [((), {})]  # the system store, and nothing the embedder chose
+    for name in ("tls", "tls_wrap", "tls_ca_file", "tls_ca_pem", "ssl_context"):
+        assert not hasattr(State(), name), name

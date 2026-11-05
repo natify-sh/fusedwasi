@@ -398,6 +398,17 @@ def test_c_and_python_agree(driver: Path, scenario: str, tmp_path: Path) -> None
 
 
 def test_values(tmp_path: Path) -> None:
+    # The scenario makes a hard link and goes on with the file that it made. A system may refuse a hard link to a program: the SELinux of an Android app does ("avc: denied { link }",
+    # seen in the log of the CI), and the host then answers with the error of the system, which is right, but the rest of the scenario has no file to work on.
+    one, two = tmp_path / "probe_a", tmp_path / "probe_b"
+    one.write_text("")
+    try:
+        os.link(one, two)
+    except OSError as error:
+        pytest.skip(f"this system refuses a hard link to a program ({error.strerror})")
+    finally:
+        one.unlink()
+        two.unlink(missing_ok=True)
     make_tree(tmp_path)
     lines = python_output("main", tmp_path).splitlines()
     got = {line.split("] ")[0] + "]": line.split("] ")[1] for line in lines if line.startswith("[")}
@@ -426,6 +437,9 @@ def test_values(tmp_path: Path) -> None:
         return data[at]
 
     assert result("unlink of a directory", 620) == code("is-directory")
+    # DELIBERATE (docs/wasmtime_compare.md, D5): a descriptor opened for reading only is `bad-descriptor` for `set-size`, as for `write`; Wasmtime says `invalid`.
+    # The scenario is run in C and in Python and the outputs are compared (`test_c_and_python_agree`), so this pins both.
+    assert result("set_size on read-only", 290) == code("bad-descriptor")
     assert result("open lkout/ without follow", 200, 4) == code(
         "not-permitted"
     )  # the slash makes the link followed, and it leads out of the tree: no descriptor

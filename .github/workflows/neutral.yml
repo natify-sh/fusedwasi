@@ -3,11 +3,17 @@ name: Neutral users
 # Programs that use fusedwasi and have nothing to do with wasm2c, wasmext or wasmhost: they include only the public headers and import only the public Python names
 # (docs/design_model.md, section 11). A change of the public interface that breaks one of them is a change that is reviewed, not worked around.
 
+# On push only, of every branch: the results show in the pull request of the branch (it is the same commit). There is no `pull_request` trigger on purpose: its path filter reads
+# the whole diff of the pull request, so it would run on a change of the documents too. A pull request from a fork gets no run from this.
 on:
   push:
     branches: ["**"]
     paths-ignore: ["docs/**", "*.md", "LICENSE"]
-  pull_request:
+
+# a newer push to the same ref cancels the run in progress (as in the other natify-sh repositories)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
