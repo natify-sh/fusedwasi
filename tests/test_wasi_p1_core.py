@@ -158,6 +158,13 @@ def test_dot_as_the_last_name_of_an_unlink_or_a_remove_is_inval(tmp_path: Path) 
         assert lines[3] == "path_unlink_file 63"  # 63 is PERM: macOS says EPERM for the unlink of a directory
 
 
+def test_readdir_of_a_descriptor_that_is_not_a_directory_is_notdir(tmp_path: Path) -> None:
+    """DELIBERATE (docs/wasmtime_compare.md, E7): `fd_readdir` of stdout or stdin is NOTDIR (54) in 0.1, as `read-directory` of a file is `not-directory` in the 0.2 layer under it;
+    Wasmtime says BADF. A descriptor that does not exist is BADF (8). (The C and the Python agree on the script: `test_c_and_python_agree`.)"""
+    make_tree(tmp_path / "py")
+    assert run(DATA / "p1" / "notdir.txt", str(tmp_path / "py")) == ["fd_readdir 54", "fd_readdir 54", "fd_readdir 8"]
+
+
 _NATIVE_POLL = """
 import struct, sys
 from fusedwasi.p1 import wasi_p1

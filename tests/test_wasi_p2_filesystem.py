@@ -426,6 +426,9 @@ def test_values(tmp_path: Path) -> None:
         return data[at]
 
     assert result("unlink of a directory", 620) == code("is-directory")
+    # DELIBERATE (docs/wasmtime_compare.md, D5): a descriptor opened for reading only is `bad-descriptor` for `set-size`, as for `write`; Wasmtime says `invalid`.
+    # The scenario is run in C and in Python and the outputs are compared (`test_c_and_python_agree`), so this pins both.
+    assert result("set_size on read-only", 290) == code("bad-descriptor")
     assert result("open lkout/ without follow", 200, 4) == code(
         "not-permitted"
     )  # the slash makes the link followed, and it leads out of the tree: no descriptor
