@@ -8,6 +8,7 @@ on:
     branches: ["**"]
     paths-ignore: ["docs/**", "*.md", "LICENSE"]
   pull_request:
+    paths-ignore: ["docs/**", "*.md", "LICENSE"]
 
 # a newer push to the same ref cancels the run in progress (as in the other natify-sh repositories)
 concurrency:
