@@ -6,6 +6,7 @@ the bytes of every `error-code` that the guest receives (layout and strings), so
 """
 
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -21,12 +22,20 @@ from guests import guest_of
 from fusedwasi.p2 import wasi_p2_http as H
 from fusedwasi.p2 import wasi_p2_io as io
 from fusedwasi.p2.wasi_p2_core import Trap, _load_u32, _store_u32
+from fusedwasi.p2.wasi_p2_io import StreamClosed, StreamFailed
 
 C_P2 = Path(__file__).parent.parent / "src" / "fusedwasi" / "include" / "fusedwasi" / "p2"
 DRIVER = Path(__file__).parent / "data" / "wasi_p2_http_driver.c"
 
 SCENARIOS = [
     "main",
+    pytest.param(
+        "late_errors",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason="S0013: the C twin reads the answer whole, so a broken body fails at `get`; the Python twin streams it",
+        ),
+    ),
     "denied",
     "check",
     "hook",
@@ -214,6 +223,11 @@ def python_output(scenario: str, port: int, dead: int) -> str:
             if memory[R] == 1:
                 if memory[R + 4] == 0:
                     pr("  body stream failed\n")
+                    failure = u32(R + 8)
+                    clear()
+                    H.wasi_http_types_http_error_code(host, 0, failure, R)
+                    if memory[R] == 1:
+                        error_at("  body", R + 8)
                 return data
             data += bytes(memory[u32(R + 4) : u32(R + 4) + u32(R + 8)])
 
@@ -309,14 +323,52 @@ def python_output(scenario: str, port: int, dead: int) -> str:
             fetch("status 404", me, "/status/404")
             fetch("informational first", me, "/info")
             fetch("until close", me, "/closeend")
-            fetch("truncated", me, "/truncated")
             fetch("silent server", me, "/slow", first_ns=100_000_000)
             fetch("bad status", me, "/badstatus")
             fetch("transfer coding", me, "/te")
-            fetch("bad chunk", me, "/badchunk")
             fetch("long head", me, "/bighead")
             fetch("nothing listens", f"127.0.0.1:{dead}", "/")
             fetch("other method", me, "/echo", "PROPFIND", body=b"x")
+        elif scenario == "late_errors":
+            # an answer that breaks after its head: the C twin reads the answer whole, so it fails at `get`; the Python twin gives the head and fails in the body (S0013)
+            fetch("truncated", me, "/truncated")
+            fetch("bad chunk", me, "/badchunk")
+        elif scenario in ("early_answer", "early_answer_declared"):
+            # the answer is asked for while the body is still being written, and the server answers at once; then the guest finishes its body (the Python twin only: S0013)
+            pr(f"== {scenario}\n")
+            declared = scenario.endswith("declared")
+            req = make_request("POST", "http", me, "/early", [("content-length", "4")] if declared else [])
+            clear()
+            H.wasi_http_types_outgoing_request_body(host, 0, req, R)
+            body_h = u32(R + 4)
+            clear()
+            H.wasi_http_types_outgoing_body_write(host, 0, body_h, R)
+            stream = u32(R + 4)
+            clear()
+            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, stream, put(b"ab"), 2, R)
+            clear()
+            H.wasi_http_outgoing_handler_handle(host, 0, req, 0, 0, R)
+            future = u32(R + 8)
+            pol = H.wasi_http_types_future_incoming_response_subscribe(host, future)
+            io.wasi_io_poll_pollable_block(host, pol)  # the body is not finished: this waited for ever before
+            clear()
+            H.wasi_http_types_future_incoming_response_get(host, 0, future, R)
+            pr(f"  get tags {memory[R]} {memory[R + 8]} {memory[R + 16]}\n")
+            resp = u32(R + 24)
+            pr(f"  status {H.wasi_http_types_incoming_response_status(host, resp)}\n")
+            clear()
+            io.wasi_io_streams_output_stream_blocking_write_and_flush(host, 0, stream, put(b"cd"), 2, R)
+            pr(f"  wrote the rest {memory[R]}\n")
+            io.wasi_io_streams_output_stream_drop(host, stream)
+            clear()
+            H.wasi_http_types_outgoing_body_finish(host, 0, body_h, 0, 0, R)
+            pr(f"  finish {memory[R]}\n")
+            clear()
+            H.wasi_http_types_incoming_response_consume(host, 0, resp, R)
+            in_body = u32(R + 4)
+            clear()
+            H.wasi_http_types_incoming_body_stream(host, 0, in_body, R)
+            pr(f"  body {read_all(u32(R + 4)).hex()}\n")
         elif scenario in ("denied", "check"):
             fetch("denied", me, "/hello")
             fetch("allowed", "allowed.test:80", "/a")
@@ -671,6 +723,22 @@ def respond(conn: socket.socket, port: int, framing: bool = True) -> None:
             conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nxx")
         elif path == "/badchunk":
             conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n")
+        elif path == "/drip":  # the head and two pieces at once, a pause, two more and a trailer
+            conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTrailer: x-t\r\n\r\n2\r\nab\r\n")
+            time.sleep(1.5)
+            conn.sendall(b"2\r\ncd\r\n0\r\nx-t: 1\r\n\r\n")
+        elif path == "/stall":  # a piece, and then nothing for longer than the test waits
+            conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n")
+            time.sleep(3)
+        elif path == "/reset":  # ten bytes of a hundred, and then the connection is reset
+            conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n0123456789")
+            time.sleep(0.2)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        elif path == "/endless":  # never ends: a piece every 20 ms until the client goes
+            conn.sendall(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+            while True:
+                conn.sendall(b"2\r\nxx\r\n")
+                time.sleep(0.02)
         elif path == "/bighead":
             conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"X-Pad: " + b"a" * 70000 + b"\r\n\r\n")
         else:
@@ -761,11 +829,9 @@ def tag_of(output: str, label: str) -> int:
 def test_error_codes(server: int, dead_port: int) -> None:
     out = python_output("main", server, dead_port)
     names = [c[0] for c in H._CASES]
-    assert names[tag_of(out, "truncated")] == "HTTP-response-incomplete"
     assert names[tag_of(out, "silent server")] == "connection-read-timeout"
     assert names[tag_of(out, "bad status")] == "HTTP-protocol-error"
     assert names[tag_of(out, "transfer coding")] == "HTTP-response-transfer-coding"
-    assert names[tag_of(out, "bad chunk")] == "HTTP-protocol-error"
     assert names[tag_of(out, "long head")] == "HTTP-response-header-section-size"
     assert names[tag_of(out, "nothing listens")] == "connection-refused"
     assert "x-seen: PROPFIND /echo" in out  # any token is a method
@@ -859,3 +925,159 @@ def test_the_table_of_error_codes_is_the_wit() -> None:
     assert [c[0] for c in H._CASES][:3] == ["DNS-timeout", "DNS-error", "destination-not-found"]
     assert H._CASES[22] == ("HTTP-request-header-size", True, ("str", "n32"))
     assert H._CASES[-1] == ("internal-error", False, ("str",))
+
+
+# the answer is read as it comes (S0013): the head before the body, the body in pieces, the failures after the bytes that came before them
+
+
+def open_answer(
+    port: int, path: str, between_bytes_ns: int | None = None
+) -> tuple[int, list[tuple[str, bytes]], H._BodySource]:  # pyright: ignore[reportPrivateUsage]
+    request = H.HttpRequest("GET", "http", f"127.0.0.1:{port}", path, [], between_bytes_ns=between_bytes_ns)
+    return H._default_open(request)  # pyright: ignore[reportPrivateUsage]
+
+
+def wait_ready(source: H._BodySource, seconds: float = 3.0) -> None:  # pyright: ignore[reportPrivateUsage]
+    deadline = time.monotonic() + seconds
+    while not source.ready():
+        assert time.monotonic() < deadline, "the body did not come"
+        time.sleep(0.005)
+
+
+def test_the_head_comes_before_the_body_and_a_read_never_waits(server: int) -> None:
+    started = time.monotonic()
+    status, headers, source = open_answer(server, "/drip")
+    assert status == 200 and ("trailer", b"x-t") in headers
+    assert time.monotonic() - started < 1.0  # the rest of the body is a pause of 1.5 s away
+    wait_ready(source)
+    assert source.read(100) == b"ab"
+    assert source.read(100) == b""  # nothing now: not closed, and no wait
+    assert not source.ready()
+    wait_ready(source)
+    assert source.read(100) == b"cd"
+    with pytest.raises(StreamClosed):
+        source.read(100)
+    assert source.settled() and source.error is None
+    trailers = source.trailers()
+    assert trailers is not None and [(n, v) for n, v in trailers.entries] == [("x-t", b"1")]
+    assert source.answer.sock.fileno() == -1  # the socket is closed when the body ended
+
+
+def test_a_stall_between_bytes_fails_after_the_bytes_that_came(server: int) -> None:
+    _, _, source = open_answer(server, "/stall", between_bytes_ns=300_000_000)
+    wait_ready(source)
+    assert source.read(100) == b"ab"
+    wait_ready(source)  # the failure is a thing to be read, too
+    with pytest.raises(StreamFailed) as failure:
+        source.read(100)
+    assert (
+        isinstance(failure.value.http_code, H.ErrorCode) and failure.value.http_code.name == "connection-read-timeout"
+    )
+    assert source.answer.sock.fileno() == -1
+
+
+def test_a_reset_in_the_middle_gives_the_bytes_and_then_the_error(server: int) -> None:
+    _, _, source = open_answer(server, "/reset")
+    got = b""
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            got += source.read(100)
+        except StreamFailed as failure:
+            assert got == b"0123456789"
+            assert isinstance(failure.http_code, H.ErrorCode) and failure.http_code.name in (
+                "connection-terminated",
+                "HTTP-response-incomplete",
+            )
+            return
+        time.sleep(0.005)
+    raise AssertionError("no failure")
+
+
+def test_the_total_is_a_limit_of_the_body_not_of_the_head(server: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(H, "MAX_BODY", 4)  # /chunked is "ab" and "cde": 5 bytes
+    status, _, source = open_answer(server, "/chunked")
+    assert status == 200
+    got = b""
+    with pytest.raises(StreamFailed) as failure:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            got += source.read(100)
+            time.sleep(0.005)
+    code = failure.value.http_code
+    assert got == b"ab" and isinstance(code, H.ErrorCode) and code.name == "HTTP-response-body-size"
+
+
+def test_a_body_that_never_ends_is_let_go(server: int) -> None:
+    _, _, source = open_answer(server, "/endless")
+    for _ in range(3):
+        wait_ready(source)
+        assert source.read(100).startswith(b"xx")
+    source.release()
+    assert source.answer.sock.fileno() == -1  # the socket is closed, and the server stops sending when it finds out
+
+
+def test_the_whole_body_of_default_send_is_the_same_as_before(server: int) -> None:
+    response = H.default_send(H.HttpRequest("GET", "http", f"127.0.0.1:{server}", "/chunked", []))
+    assert response.status == 200 and response.body == b"abcde"
+    assert response.trailers == [("x-trailer", b"t1"), ("x-two", b"2")]
+    assert all(name != "transfer-encoding" for name, _ in response.headers)
+
+
+# the request goes out while the body is written (S0013, section 8, item 1): the answer may come first
+
+
+def serve_early(declared: bool) -> tuple[int, dict[str, bytes], threading.Thread]:
+    """One connection: reads the head and the first bytes of the body, answers at once, then reads what is left of the request."""
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    seen: dict[str, bytes] = {}
+
+    def run() -> None:
+        conn, _ = listener.accept()
+        conn.settimeout(10)
+        buf = b""
+        while b"\r\n\r\n" not in buf or b"ab" not in buf.split(b"\r\n\r\n", 1)[1]:
+            buf += conn.recv(65536)
+        conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+        end = b"abcd" if declared else b"0\r\n\r\n"
+        try:
+            while not buf.endswith(end):
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        except OSError:
+            pass
+        seen["raw"] = buf
+        conn.close()
+        listener.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return listener.getsockname()[1], seen, thread
+
+
+@pytest.mark.parametrize("scenario", ["early_answer", "early_answer_declared"])
+def test_the_answer_may_come_before_the_body_is_finished(scenario: str) -> None:
+    port, seen, server_thread = serve_early(scenario.endswith("declared"))
+    result: list[str] = []
+    guest = threading.Thread(target=lambda: result.append(python_output(scenario, port, 1)), daemon=True)
+    guest.start()
+    guest.join(20)
+    assert not guest.is_alive(), (
+        "the guest waited for ever for the answer: the request did not go out before its body ended"
+    )
+    server_thread.join(10)
+    out = result[0]
+    assert "  status 200" in out and "  wrote the rest 0" in out and "  finish 0" in out
+    assert f"  body {b'ok'.hex()}" in out
+    head, _, body = seen["raw"].partition(b"\r\n\r\n")
+    lowered = head.lower()
+    if scenario.endswith("declared"):
+        assert b"content-length: 4" in lowered and b"transfer-encoding" not in lowered
+        assert body == b"abcd"  # the length the guest declared, and the bytes as they are
+    else:
+        assert b"transfer-encoding: chunked" in lowered and b"content-length" not in lowered
+        assert body == b"2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n"  # a chunk for each write, then the end

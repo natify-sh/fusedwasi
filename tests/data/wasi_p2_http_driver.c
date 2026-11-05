@@ -412,14 +412,15 @@ int main(int argc, char **argv) {
         fetch((struct fetch){"status 404", me, "/status/404", "GET", "http"});
         fetch((struct fetch){"informational first", me, "/info", "GET", "http"});
         fetch((struct fetch){"until close", me, "/closeend", "GET", "http"});
-        fetch((struct fetch){"truncated", me, "/truncated", "GET", "http"});
         fetch((struct fetch){"silent server", me, "/slow", "GET", "http", .has_first = 1, .first_ns = 100000000});
         fetch((struct fetch){"bad status", me, "/badstatus", "GET", "http"});
         fetch((struct fetch){"transfer coding", me, "/te", "GET", "http"});
-        fetch((struct fetch){"bad chunk", me, "/badchunk", "GET", "http"});
         fetch((struct fetch){"long head", me, "/bighead", "GET", "http"});
         fetch((struct fetch){"nothing listens", nobody, "/", "GET", "http"});
         fetch((struct fetch){"other method", me, "/echo", "PROPFIND", "http", NULL, "x"});
+    } else if (!strcmp(scenario, "late_errors")) {
+        fetch((struct fetch){"truncated", me, "/truncated", "GET", "http"});
+        fetch((struct fetch){"bad chunk", me, "/badchunk", "GET", "http"});
     } else if (denied) {
         fetch((struct fetch){"denied", me, "/hello", "GET", "http"});
         fetch((struct fetch){"allowed", "allowed.test:80", "/a", "GET", "http"});

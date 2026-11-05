@@ -3,6 +3,7 @@
 The tree is made by the test (two identical ones, one for each host). What is compared is the memory the calls write, decoded where it holds inodes or times of the system.
 """
 
+import errno
 import os
 import subprocess
 import sys
@@ -395,6 +396,67 @@ def test_c_and_python_agree(driver: Path, scenario: str, tmp_path: Path) -> None
     make_tree(py_root)
     make_tree(c_root)
     assert python_output(scenario, py_root) == c_output(scenario, driver, c_root)
+
+
+@pytest.mark.parametrize(
+    ("refusal", "code"),
+    [
+        (errno.EACCES, "access"),  # the SELinux of an Android app: `avc: denied { link }`
+        (errno.EPERM, "not-permitted"),  # a file system with no hard links, or `protected_hardlinks`
+        (errno.EINVAL, "invalid"),  # PyPy refuses `follow_symlinks=False` on `os.link`
+        (errno.ENOTSUP, "unsupported"),
+        (errno.EXDEV, "cross-device"),
+        (AttributeError("link"), "unsupported"),  # no `os.link` at all (Emscripten)
+        (NotImplementedError(), "unsupported"),
+    ],
+)
+def test_a_refused_hard_link_gives_the_error_of_the_system(
+    refusal: int | BaseException, code: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Whatever the system says to a hard link, the host answers with the error code that stands for it, in the call itself and not later (the scenario `main` skips
+    # where a link is refused, so it never makes this call there). The refusal is simulated, so this runs on every system.
+    def refuse(*args: object) -> None:
+        raise refusal if isinstance(refusal, BaseException) else OSError(refusal, os.strerror(refusal))
+
+    make_tree(tmp_path)
+    r = Run(tmp_path)
+    fs.wasi_filesystem_preopens_get_directories(r.host, 0, 0)
+    handle = r.u32(r.u32(0))
+    r.path(b"sub/f")
+    r.path(b"sub/f2", 1200)
+    monkeypatch.setattr(fs, "_link", refuse)
+    fs.wasi_filesystem_types_descriptor_link_at(r.host, 0, handle, 0, 1000, 5, handle, 1200, 6, 312)
+    assert (r.memory[312], r.memory[313]) == (1, fs._ERROR_CODES.index(code))  # (an error, and which)
+    assert not (tmp_path / "sub" / "f2").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows maps its own error numbers (GetLastError, WSA), not the C library's errno"
+)
+def test_a_refused_hard_link_gives_the_same_code_in_c(tmp_path: Path) -> None:
+    # The C host calls `linkat` and maps `errno` with `fusedwasi_p2__errno_code`; the Python twin maps the `errno` of the `OSError`. The refusals of the test above, through the
+    # C table (the driver of the table of errno), must be the codes that the Python gives. (A Python with no `os.link` has no C counterpart: the C has `linkat`, and a kernel
+    # without it answers ENOSYS, which is `unsupported` in both.)
+    if CC is None:
+        pytest.skip("no C compiler")
+    binary = tmp_path / "errno_driver"
+    compile_c(Path(__file__).parent / "data" / "wasi_p2_errno_driver.c", binary, [C_P2])
+    c_code = {
+        int(a): fs._ERROR_CODES[int(b)]  # pyright: ignore[reportPrivateUsage]
+        for a, b, _ in (
+            line.split()
+            for line in subprocess.run([str(binary)], capture_output=True, text=True, check=True).stdout.splitlines()
+        )
+    }
+    for number, code in (
+        (errno.EACCES, "access"),
+        (errno.EPERM, "not-permitted"),
+        (errno.EINVAL, "invalid"),
+        (errno.ENOTSUP, "unsupported"),
+        (errno.ENOSYS, "unsupported"),
+        (errno.EXDEV, "cross-device"),
+    ):
+        assert c_code[number] == code, errno.errorcode[number]
 
 
 def test_values(tmp_path: Path) -> None:

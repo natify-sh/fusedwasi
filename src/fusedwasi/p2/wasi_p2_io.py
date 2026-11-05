@@ -49,7 +49,12 @@ class StreamFailed(Exception):
     """The operation failed: the case `last-operation-failed`, with an `error` resource that carries the message (and, from a file, the `error-code` of wasi:filesystem)."""
 
     def __init__(
-        self, message: str = "", code: int | None = None, network_code: int | None = None, errno: int | None = None
+        self,
+        message: str = "",
+        code: int | None = None,
+        network_code: int | None = None,
+        errno: int | None = None,
+        http_code: object | None = None,
     ) -> None:
         super().__init__(message)
         self.errno = (
@@ -57,6 +62,9 @@ class StreamFailed(Exception):
         )
         self.code = code
         self.network_code = network_code  # the `error-code` of wasi:sockets, for a socket stream
+        self.http_code = (
+            http_code  # the `ErrorCode` of wasi:http, for the stream of a body (`http-error-code` reads it)
+        )
 
 
 def _call(stream: object, fn: Callable[..., Any], *args: Any) -> Any:
@@ -140,19 +148,28 @@ class StreamPollable(Pollable):
 class _Error:
     """The `error` resource: a message, and the `error-code` of wasi:filesystem if the error came from a file (`filesystem-error-code` reads it)."""
 
-    __slots__ = ("code", "message", "network_code")
+    __slots__ = ("code", "http_code", "message", "network_code")
 
-    def __init__(self, message: str, code: int | None = None, network_code: int | None = None) -> None:
+    def __init__(
+        self, message: str, code: int | None = None, network_code: int | None = None, http_code: object | None = None
+    ) -> None:
         self.message = message
         self.code = code
         self.network_code = network_code
+        self.http_code = http_code  # the `ErrorCode` of wasi:http that `http-error-code` gives back
 
 
 # making resources for the guest
 
 
-def _error_new(guest: Guest, message: str, code: int | None = None, network_code: int | None = None) -> int:
-    return _table_new(guest, KIND_ERROR, _Error(message, code, network_code))
+def _error_new(
+    guest: Guest,
+    message: str,
+    code: int | None = None,
+    network_code: int | None = None,
+    http_code: object | None = None,
+) -> int:
+    return _table_new(guest, KIND_ERROR, _Error(message, code, network_code, http_code))
 
 
 def error_add(state: State, message: str, code: int | None = None, network_code: int | None = None) -> int:
@@ -248,7 +265,7 @@ def _err(guest: Guest, comp: int, retptr: int, error_at: int, exc: Exception) ->
     _store_u8(guest, comp, retptr, 1)
     if isinstance(exc, StreamFailed):
         _store_u8(guest, comp, error_at, 0)
-        _store_u32(guest, comp, error_at + 4, _error_new(guest, str(exc), exc.code, exc.network_code))
+        _store_u32(guest, comp, error_at + 4, _error_new(guest, str(exc), exc.code, exc.network_code, exc.http_code))
     else:
         _store_u8(guest, comp, error_at, 1)
 

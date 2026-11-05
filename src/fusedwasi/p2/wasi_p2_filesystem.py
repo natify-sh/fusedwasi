@@ -936,6 +936,11 @@ class SystemFilesystem(Filesystem):
                 _link(parent1, leaf1, parent2, leaf2)  # (the walk expanded a link at the end if it was to be followed)
             except OSError as exc:
                 raise _oserror(exc) from exc
+            except (
+                AttributeError,
+                NotImplementedError,
+            ):  # a Python with no `os.link` (Emscripten): the same answer as a file system that cannot
+                raise FsError("unsupported") from None
 
     def rename_at(self, d: Descriptor, old_path: bytes, new_d: Descriptor, new_path: bytes, p1: bool = False) -> None:
         first, second = self._pair(d, old_path, False, new_d, new_path, p1)

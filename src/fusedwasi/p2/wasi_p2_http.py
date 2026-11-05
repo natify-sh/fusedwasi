@@ -2,7 +2,8 @@
 
 **An outgoing request is refused (`HTTP-request-denied`) unless the caller says so**: `Host(http=True)` allows all, `Host(http_check=f)` decides for each one (`f("https", "example.com:443")`),
 `Host(http_send=g)` replaces the transport (`g(HttpRequest) -> HttpResponse`, a failure is a raised `ErrorCode`). The transport of the host is a small HTTP/1.1 client over a socket
-(`Connection: close`), the same in the C twin, except that only Python has TLS (`ssl`); in C `https` is `internal-error` unless `http_send` is set. What a guest sees is shaped by these choices:
+(`Connection: close`): the protocol is done by `h11` (a dependency of the Python twin, pure Python), the socket, `ssl`, the timeouts, the limits and the `ErrorCode` are ours. The C twin has the same
+shape written by hand; only Python has TLS built in (`ssl`); in C `https` is `internal-error` unless `http_send` is set. What a guest sees is shaped by these choices:
 
 * the answer is read whole before the guest sees it (a body is a stream over bytes in memory, at most `MAX_BODY`; the end is `closed`, and `http-error-code` is `none`: a stream of a body never fails);
 * a request is sent when the guest first asks for the answer (`get`, `ready` or `block` of the future), after the body is finished; a future dropped before that sends nothing;
@@ -22,12 +23,16 @@ is 56 bytes: option tag 0, tag of the outer result 8, tag of the inner 16, handl
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import re
 import socket
 import ssl
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+
+import h11
 
 from .wasi_p2_core import (
     KIND_ERROR,
@@ -60,7 +65,15 @@ from .wasi_p2_core import (
     _table_new,
     _trap,
 )
-from .wasi_p2_io import BufferOutput, MemoryInput, _input_stream_new, _output_stream_new
+from .wasi_p2_io import (
+    BufferOutput,
+    InputStream,
+    MemoryInput,
+    StreamClosed,
+    StreamFailed,
+    _input_stream_new,
+    _output_stream_new,
+)
 
 MAX_BODY = 1 << 28  # the most a body of a request or of an answer can have
 MAX_HEAD = 65536  # the most the head of an answer can have
@@ -459,7 +472,7 @@ def _split_authority(authority: str, default_port: int) -> tuple[str, int] | Non
 
 class _OutgoingBody:
     def __init__(self, expected: int | None, kind: str) -> None:
-        self.stream = BufferOutput(limit=MAX_BODY)
+        self.stream: BufferOutput = _RequestBodyOutput() if kind == "request" else BufferOutput(limit=MAX_BODY)
         self.stream_handle: int | None = None
         self.expected = expected  # the content-length the guest declared
         self.kind = kind  # "request" or "response"
@@ -469,6 +482,10 @@ class _OutgoingBody:
 
     def data(self) -> bytes:
         return bytes(self.stream.data)
+
+    def size(self) -> int:
+        """All that the guest wrote (a request that went out while it was written no longer keeps it)."""
+        return self.stream.written if isinstance(self.stream, _RequestBodyOutput) else len(self.stream.data)
 
 
 def _declared_length(headers: Fields) -> int | None:
@@ -650,9 +667,8 @@ def wasi_http_types_request_options_drop(guest: Guest, handle: int) -> None:
 
 
 class _IncomingBody:
-    def __init__(self, data: bytes, trailers: Fields | None) -> None:
-        self.data = data
-        self.trailers = trailers
+    def __init__(self, source: _BodySource | _WholeBody) -> None:
+        self.source = source
         self.stream_handle: int | None = None
         self.stream_taken = False
 
@@ -671,14 +687,15 @@ def _outgoing_body(guest: Guest, handle: int) -> _OutgoingBody:
 
 
 def _consume(
-    guest: Guest, comp: int, data: tuple[bytes, Fields | None] | None, retptr: int
-) -> tuple[bytes, Fields | None] | None:
+    guest: Guest, comp: int, data: tuple[bytes, Fields | None] | _BodySource | _WholeBody | None, retptr: int
+) -> tuple[bytes, Fields | None] | _BodySource | _WholeBody | None:
     """`result<incoming-body>`: the body once, then err."""
     if data is None:
         _store_u8(guest, comp, retptr, 1)
         return None
     _store_u8(guest, comp, retptr, 0)
-    _store_u32(guest, comp, retptr + 4, _table_new(guest, KIND_INCOMING_BODY, _IncomingBody(*data)))
+    source = _WholeBody(*data) if isinstance(data, tuple) else data
+    _store_u32(guest, comp, retptr + 4, _table_new(guest, KIND_INCOMING_BODY, _IncomingBody(source)))
     return data
 
 
@@ -688,15 +705,28 @@ def wasi_http_types_incoming_body_stream(guest: Guest, comp: int, self: int, ret
         _store_u8(guest, comp, retptr, 1)
         return
     body.stream_taken = True
-    body.stream_handle = _input_stream_new(guest, MemoryInput(body.data))
+    body.stream_handle = _input_stream_new(guest, body.source)
     _store_u8(guest, comp, retptr, 0)
     _store_u32(guest, comp, retptr + 4, body.stream_handle)
 
 
 class _FutureTrailers:
-    def __init__(self, trailers: Fields | None) -> None:
-        self.trailers = trailers
+    def __init__(self, source: _BodySource | _WholeBody) -> None:
+        self.source = source
         self.taken = False
+
+    def ready(self) -> bool:
+        """The trailers are known when the body has ended (what is not read is read on and dropped: the stream is gone)."""
+        self.source.drain()
+        return self.source.settled()
+
+
+class _TrailersPollable(Pollable):
+    def __init__(self, future: _FutureTrailers) -> None:
+        self.future = future
+
+    def ready(self, state: State) -> bool:
+        return self.future.ready()
 
 
 def wasi_http_types_incoming_body_finish(guest: Guest, this: int) -> int:
@@ -704,12 +734,13 @@ def wasi_http_types_incoming_body_finish(guest: Guest, this: int) -> int:
     if body.stream_handle is not None and _table_alive(guest, body.stream_handle, 3):  # KIND_INPUT_STREAM
         _trap(guest, "incoming-body.finish with its stream alive")
     _table_drop(guest, this, KIND_INCOMING_BODY)
-    return _table_new(guest, KIND_FUTURE_TRAILERS, _FutureTrailers(body.trailers))
+    return _table_new(guest, KIND_FUTURE_TRAILERS, _FutureTrailers(body.source))
 
 
 def wasi_http_types_incoming_body_drop(guest: Guest, handle: int) -> None:
-    _incoming_body(guest, handle)
+    body = _incoming_body(guest, handle)
     _table_drop(guest, handle, KIND_INCOMING_BODY)
+    body.source.release()
 
 
 def _future_trailers(guest: Guest, handle: int) -> _FutureTrailers:
@@ -717,29 +748,38 @@ def _future_trailers(guest: Guest, handle: int) -> _FutureTrailers:
 
 
 def wasi_http_types_future_trailers_subscribe(guest: Guest, self: int) -> int:
-    _future_trailers(guest, self)
-    return _table_new(guest, KIND_POLLABLE, _ReadyPollable())
+    return _table_new(guest, KIND_POLLABLE, _TrailersPollable(_future_trailers(guest, self)))
 
 
 def wasi_http_types_future_trailers_get(guest: Guest, comp: int, self: int, retptr: int) -> None:
     future = _future_trailers(guest, self)
+    if not future.ready():
+        _store_u8(guest, comp, retptr, 0)  # none: not yet
+        return
     _store_u8(guest, comp, retptr, 1)
     if future.taken:
         _store_u8(guest, comp, retptr + 8, 1)  # err: it was already taken
         return
     future.taken = True
     _store_u8(guest, comp, retptr + 8, 0)
+    failure = future.source.error
+    if failure is not None:
+        _store_u8(guest, comp, retptr + 16, 1)  # err: the body broke
+        _store_error_code(guest, comp, retptr + 24, failure)
+        return
     _store_u8(guest, comp, retptr + 16, 0)  # ok: no error-code
-    if future.trailers is None:
+    trailers = future.source.trailers()
+    if trailers is None:
         _store_u8(guest, comp, retptr + 24, 0)
     else:
         _store_u8(guest, comp, retptr + 24, 1)
-        _store_u32(guest, comp, retptr + 28, _table_new(guest, KIND_FIELDS, future.trailers))
+        _store_u32(guest, comp, retptr + 28, _table_new(guest, KIND_FIELDS, trailers))
 
 
 def wasi_http_types_future_trailers_drop(guest: Guest, handle: int) -> None:
-    _future_trailers(guest, handle)
+    future = _future_trailers(guest, handle)
     _table_drop(guest, handle, KIND_FUTURE_TRAILERS)
+    future.source.release()
 
 
 def wasi_http_types_outgoing_body_write(guest: Guest, comp: int, self: int, retptr: int) -> None:
@@ -761,13 +801,19 @@ def wasi_http_types_outgoing_body_finish(
     if tag:
         body.trailers = _take_fields(guest, trailers)
     _table_drop(guest, this, KIND_OUTGOING_BODY)
-    size = len(body.stream.data)
+    size = body.size()
     if body.expected is not None and body.expected != size:
         _store_u8(guest, comp, retptr, 1)
         _store_error_code(guest, comp, retptr + 8, ErrorCode(f"HTTP-{body.kind}-body-size", size))
         body.abandoned = True
         return
     body.finished = True
+    if isinstance(body.stream, _RequestBodyOutput) and body.stream.sender is not None:
+        try:  # the request is on its way: its end goes out now, and not only when the answer is asked for again
+            body.stream.sender.end(list(body.trailers.entries) if body.trailers is not None else None)
+            body.stream.sender.pump()
+        except ErrorCode as e:
+            body.stream.sender.dead = e
     _store_u8(guest, comp, retptr, 0)
 
 
@@ -848,16 +894,45 @@ def _connect(host: str, port: int, timeout: float) -> socket.socket:
     raise last or ErrorCode("destination-not-found")
 
 
-class _Reader:
-    """Reads an answer: the head, a body by its length, in chunks or to the end of the stream."""
+_WOULD_BLOCK = object()
 
-    def __init__(self, sock: socket.socket, first_s: float, between_s: float) -> None:
-        self.sock = sock
-        self.buf = b""
-        self.first = True
+
+class _Answer:
+    """The answer to one request, read as the events of `h11`: the head first, then the body in pieces, then the end and the trailers.
+
+    `h11` does the protocol (the head, Content-Length, chunked with its extensions and trailers, the end by close, HEAD and the statuses without a body); this class does what it does
+    not: the socket and its timeouts, the limits, and the `ErrorCode` for a failure. A failure is told by **where it happened** (the head, the body, the end of the stream), and not by the
+    text of the error of `h11`."""
+
+    def __init__(
+        self, sock: socket.socket, conn: h11.Connection, method: str, first_s: float, between_s: float
+    ) -> None:
+        self.sock, self.conn, self.method = sock, conn, method
         self.first_s, self.between_s = first_s, between_s
+        self.first = True  # the next read is the first byte of the answer
+        self.eof = False
+        self.in_head = True
+        self.raw = (
+            bytearray()
+        )  # the bytes of the head that is being read: to tell a 101 or a coding from another protocol error
+        self.total = 0
+        self.trailers: list[tuple[str, bytes]] | None = None
+        self.status = 0
+        self.headers: list[tuple[str, bytes]] = []
+        self.done = False  # the end of the body was read
+        self.deadline = 0.0  # the body, when it is read without waiting: the time by which the next byte is due
 
-    def more(self) -> bool:
+    def _got(self, data: bytes) -> None:
+        self.first = False
+        if self.in_head:
+            self.raw += data
+        if not data:
+            self.eof = True
+        else:
+            self.deadline = time.monotonic() + self.between_s
+        self.conn.receive_data(data)  # b"" tells `h11` that the peer closed
+
+    def _more(self) -> None:
         self.sock.settimeout(self.first_s if self.first else self.between_s)
         try:
             data = self.sock.recv(65536)
@@ -865,146 +940,251 @@ class _Reader:
             raise ErrorCode("connection-read-timeout") from None
         except OSError:
             raise ErrorCode("connection-terminated") from None
-        self.first = False
-        self.buf += data
-        return bool(data)
+        self._got(data)
 
-    def line(self) -> bytes:
+    def _try_more(self) -> bool:
+        """Reads what is there without waiting: False if there is nothing now."""
+        self.sock.setblocking(False)
+        try:
+            data = self.sock.recv(65536)
+        except (BlockingIOError, ssl.SSLWantReadError):
+            return False
+        except OSError:
+            raise ErrorCode("connection-terminated") from None
+        self._got(data)
+        return True
+
+    def _head_error(self) -> ErrorCode:
+        raw = bytes(self.raw)
+        if re.match(rb"HTTP/1\.[01] 101[ \r]", raw):
+            return ErrorCode("HTTP-upgrade-failed")
+        end = raw.find(b"\r\n\r\n")
+        if end < 0:
+            if self.eof:
+                return ErrorCode("HTTP-response-incomplete")
+            if len(raw) > MAX_HEAD:
+                return ErrorCode("HTTP-response-header-section-size", MAX_HEAD)
+            return ErrorCode("HTTP-protocol-error")
+        coding = [
+            v.decode("latin-1").strip().lower()
+            for line in raw[:end].split(b"\r\n")[1:]
+            for name, _, value in [line.partition(b":")]
+            if name.strip().lower() == b"transfer-encoding"
+            for v in value.split(b",")
+        ]
+        if coding and coding != ["chunked"]:
+            return ErrorCode("HTTP-response-transfer-coding", ", ".join(coding))
+        return ErrorCode("HTTP-protocol-error")
+
+    def _event(self, block: bool = True) -> object:
+        """The next event of `h11`; without `block`, `_WOULD_BLOCK` when the bytes of it are not here yet."""
         while True:
-            i = self.buf.find(b"\r\n")
-            if i >= 0:
-                line, self.buf = self.buf[:i], self.buf[i + 2 :]
-                return line
-            if len(self.buf) > MAX_HEAD:
+            try:
+                ev = self.conn.next_event()
+            except h11.RemoteProtocolError:
+                if self.in_head:
+                    raise self._head_error() from None
+                raise ErrorCode("HTTP-response-incomplete" if self.eof else "HTTP-protocol-error") from None
+            if ev is h11.NEED_DATA:
+                if self.eof:
+                    raise ErrorCode("HTTP-response-incomplete")
+                if block:
+                    self._more()
+                elif not self._try_more():
+                    return _WOULD_BLOCK
+                continue
+            return ev
+
+    def head(self, block: bool = True) -> tuple[int, list[tuple[str, bytes]]] | None:
+        """The status and the fields of the answer (the informational ones, 1xx, are passed over); without `block`, None while the head is not all here."""
+        while True:
+            ev = self._event(block)
+            if ev is _WOULD_BLOCK:
+                return None
+            if isinstance(ev, h11.InformationalResponse):
+                if ev.status_code == 101:
+                    raise ErrorCode("HTTP-upgrade-failed")
+                del self.raw[: self.raw.find(b"\r\n\r\n") + 4]
+                continue
+            if not isinstance(ev, h11.Response):
                 raise ErrorCode("HTTP-protocol-error")
-            if not self.more():
-                raise ErrorCode("HTTP-response-incomplete")
-
-    def exact(self, n: int) -> bytes:
-        while len(self.buf) < n:
-            if not self.more():
-                raise ErrorCode("HTTP-response-incomplete")
-        data, self.buf = self.buf[:n], self.buf[n:]
-        return data
-
-    def rest(self) -> bytes:
-        while self.more():
-            if len(self.buf) > MAX_BODY:
-                raise ErrorCode("HTTP-response-body-size", MAX_BODY)
-        data, self.buf = self.buf, b""
-        return data
-
-
-def _parse_fields(lines: list[bytes], trailer: bool) -> list[tuple[str, bytes]]:
-    out: list[tuple[str, bytes]] = []
-    for line in lines:
-        name, colon, value = line.partition(b":")
-        if not colon or not _TOKEN.fullmatch(name) or line[:1] in (b" ", b"\t"):
-            raise ErrorCode("HTTP-protocol-error")
-        out.append((name.decode().lower(), value.strip(b" \t")))
-    return out
-
-
-def _read_head(r: _Reader, method: str) -> tuple[int, list[tuple[str, bytes]]]:
-    while True:
-        head = b""
-        while True:
-            line = r.line()
-            if not line and not head:
-                continue  # a blank line before the status line
-            if not line:
-                break
-            head += line + b"\n"
-            if len(head) > MAX_HEAD:
+            end = self.raw.find(b"\r\n\r\n")
+            if end + 4 > MAX_HEAD:
                 raise ErrorCode("HTTP-response-header-section-size", MAX_HEAD)
-        lines = head.split(b"\n")[:-1]
-        m = re.fullmatch(rb"HTTP/1\.[01] ([0-9]{3})(?: .*)?", lines[0])
-        if not m:
-            raise ErrorCode("HTTP-protocol-error")
-        status = int(m.group(1))
-        if status == 101:
-            raise ErrorCode("HTTP-upgrade-failed")
-        if status < 200:
-            continue  # informational
-        return status, _parse_fields(lines[1:], False)
+            self.in_head = False
+            self.raw = bytearray()
+            fields = [(name.decode("latin-1").lower(), value) for name, value in ev.headers]
+            if self.method != "HEAD" and ev.status_code not in (204, 304):
+                lengths = [value for name, value in fields if name == "content-length"]
+                if lengths and not any(n == "transfer-encoding" for n, _ in fields):
+                    declared = min(int(lengths[0]), (1 << 64) - 1)
+                    if declared > MAX_BODY:
+                        raise ErrorCode("HTTP-response-body-size", declared)
+            return ev.status_code, fields
+
+    def begin_body(self) -> None:
+        """The head is read: from now on the body can be read without waiting, and each byte is due `between_s` after the one before."""
+        self.deadline = time.monotonic() + self.between_s
+        self.sock.setblocking(False)
+
+    def poll(self) -> bytes | None:
+        """A piece of the body if there is one now; None if there is none now, or if the body ended (`self.done`, and the trailers). A failure is the `ErrorCode`."""
+        if self.done:
+            return None
+        ev = self._event(block=False)
+        if ev is _WOULD_BLOCK:
+            if time.monotonic() > self.deadline:
+                raise ErrorCode("connection-read-timeout")
+            return None
+        if isinstance(ev, h11.Data):
+            self.total += len(ev.data)
+            if self.total > MAX_BODY:
+                raise ErrorCode("HTTP-response-body-size", self.total)
+            return bytes(ev.data)
+        if isinstance(ev, h11.EndOfMessage):
+            trailers = [(name.decode("latin-1").lower(), value) for name, value in ev.headers]
+            self.trailers = trailers or None
+        self.done = True  # the end, or the connection closed after it
+        return None
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def pieces(self) -> Iterator[bytes]:
+        """The body, piece by piece; the trailers are in `self.trailers` when it ends."""
+        while True:
+            ev = self._event()
+            if isinstance(ev, h11.Data):
+                self.total += len(ev.data)
+                if self.total > MAX_BODY:
+                    raise ErrorCode("HTTP-response-body-size", self.total)
+                yield bytes(ev.data)
+            elif isinstance(ev, h11.EndOfMessage):
+                trailers = [(name.decode("latin-1").lower(), value) for name, value in ev.headers]
+                self.trailers = trailers or None
+                return
+            else:  # the connection closed after the end, or the connection is paused: nothing more of this answer
+                return
 
 
-def _read_body(
-    r: _Reader, method: str, status: int, headers: list[tuple[str, bytes]]
-) -> tuple[bytes, list[tuple[str, bytes]] | None]:
-    if method == "HEAD" or status in (204, 304):
-        return b"", None
-    coding = [
-        v.decode("latin-1").strip().lower() for n, v in headers if n == "transfer-encoding" for v in v.split(b",")
-    ]
-    if coding:
-        if coding != ["chunked"]:
-            raise ErrorCode("HTTP-response-transfer-coding", ", ".join(coding))
-        return _read_chunked(r)
-    lengths = {v for n, v in headers if n == "content-length"}
-    if lengths:
-        if len(lengths) != 1:
-            raise ErrorCode("HTTP-protocol-error")
-        (value,) = lengths
-        if not value.isdigit():
-            raise ErrorCode("HTTP-protocol-error")
-        n = min(int(value), (1 << 64) - 1)
-        if n > MAX_BODY:
-            raise ErrorCode("HTTP-response-body-size", n)
-        return r.exact(n), None
-    return r.rest(), None
+class _RequestSender:
+    """A request that goes out while the guest still writes its body (the answer may come first: a refusal, a redirect, an early reply).
+
+    The bytes are made by `h11` (the head, and the chunks if the length was not declared), kept in `out`, and given to the socket as it takes them (`pump`); nothing here waits."""
+
+    def __init__(self, sock: socket.socket, conn: h11.Connection) -> None:
+        self.sock, self.conn = sock, conn
+        self.out = bytearray()
+        self.ended = False
+        self.dead: ErrorCode | None = None  # the connection broke while the request went out
+
+    def head(self, req: HttpRequest, declared: bool) -> None:
+        headers: list[tuple[bytes, bytes]] = [(b"host", req.authority.encode("latin-1"))]
+        headers += [(n.encode("latin-1"), v) for n, v in req.headers or []]
+        if not declared:
+            headers.append((b"transfer-encoding", b"chunked"))
+        headers.append((b"connection", b"close"))
+        self._make(h11.Request(method=req.method, target=req.path, headers=headers))
+
+    def data(self, piece: bytes) -> None:
+        if piece:
+            self._make(h11.Data(data=piece))
+
+    def end(self, trailers: list[tuple[str, bytes]] | None) -> None:
+        end_headers = None if not trailers else [(n.encode("latin-1"), v) for n, v in trailers]
+        self._make(h11.EndOfMessage(headers=end_headers))
+        self.ended = True
+
+    def _make(self, event: h11.Event) -> None:
+        try:
+            self.out += self.conn.send(event) or b""
+        except h11.LocalProtocolError:
+            raise ErrorCode("HTTP-protocol-error") from None
+
+    def pump(self) -> None:
+        """Gives the socket what it takes now; the rest stays in `out`."""
+        while self.out and self.dead is None:
+            try:
+                n = self.sock.send(self.out)
+            except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                return
+            except OSError:
+                self.dead = ErrorCode("connection-terminated")
+                self.out.clear()
+                return
+            del self.out[:n]
+
+    def sent(self) -> bool:
+        return self.ended and not self.out
 
 
-def _read_chunked(r: _Reader) -> tuple[bytes, list[tuple[str, bytes]] | None]:
-    body = bytearray()
-    while True:
-        size_text = r.line().split(b";")[0].strip()
-        if not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", size_text):
-            raise ErrorCode("HTTP-protocol-error")
-        size = int(size_text, 16)
-        if size == 0:
-            break
-        if len(body) + size > MAX_BODY:
-            raise ErrorCode("HTTP-response-body-size", len(body) + size)
-        body += r.exact(size)
-        if r.exact(2) != b"\r\n":
-            raise ErrorCode("HTTP-protocol-error")
-    lines: list[bytes] = []
-    while True:
-        line = r.line()
-        if not line:
-            break
-        lines.append(line)
-    trailers = _parse_fields(lines, True)
-    return bytes(body), trailers or None
+class _RequestBodyOutput(BufferOutput):
+    """The stream of the body of a request. Until the answer is asked for the bytes are kept, and the request is sent whole, with its length. If the answer is asked for while the body is
+    still being written, the request starts (`sender`) and the bytes go to the connection as they come."""
+
+    _AHEAD = 1 << 16  # the most that waits for the socket
+
+    def __init__(self) -> None:
+        super().__init__(limit=MAX_BODY)
+        self.sender: _RequestSender | None = None
+        self.written = 0  # all that the guest wrote, sent or not
+
+    def check_write(self) -> int:
+        if self.sender is None:
+            return super().check_write()
+        self.sender.pump()
+        if self.sender.dead is not None:
+            raise StreamFailed(str(self.sender.dead), http_code=self.sender.dead)
+        return max(0, min(MAX_BODY - self.written, self._AHEAD - len(self.sender.out)))
+
+    def write(self, data: bytes) -> None:
+        self.written += len(data)
+        if self.sender is None:
+            super().write(data)
+            return
+        try:
+            self.sender.data(bytes(data))
+        except ErrorCode as e:
+            raise StreamFailed(str(e), http_code=e) from None
+        self.sender.pump()
+
+    def flush(self) -> None:
+        if self.sender is not None:
+            self.sender.pump()
+
+    def start(self, sender: _RequestSender) -> None:
+        """The request goes out now: what was written is the first of it."""
+        pending = bytes(self.data)
+        self.data.clear()
+        sender.data(pending)
+        self.sender = sender
 
 
-def _build_request(req: HttpRequest) -> bytes:
-    """The bytes of a request: head, then the body (in chunks, with the trailers, if trailers are given)."""
-    out = [
-        f"{req.method} {req.path} HTTP/1.1\r\n".encode("latin-1"),
-        b"Host: " + req.authority.encode("latin-1") + b"\r\n",
-    ]
-    headers = req.headers or []  # None: no headers (as NULL is in the C twin)
-    names = {n for n, _ in headers}
-    for n, v in headers:
-        out.append(n.encode("latin-1") + b": " + v + b"\r\n")
+def _send_request(sock: socket.socket, conn: h11.Connection, req: HttpRequest) -> None:
+    """The request: head, then the body (in chunks, with the trailers, if trailers are given). The fields are the guest's, in its order, after `Host`."""
+    headers: list[tuple[bytes, bytes]] = [(b"host", req.authority.encode("latin-1"))]
+    names: set[str] = set()
+    for n, v in req.headers or []:  # None: no headers (as NULL is in the C twin)
+        headers.append((n.encode("latin-1"), v))
+        names.add(n)
     if req.trailers is not None:
-        out.append(b"transfer-encoding: chunked\r\n")
+        headers.append((b"transfer-encoding", b"chunked"))
     elif "content-length" not in names and (req.body or req.method in ("POST", "PUT", "PATCH")):
-        out.append(b"content-length: " + str(len(req.body)).encode() + b"\r\n")
-    out.append(b"connection: close\r\n\r\n")
-    if req.trailers is None:
-        out.append(req.body)
-    else:
+        headers.append((b"content-length", str(len(req.body)).encode()))
+    headers.append((b"connection", b"close"))
+    try:
+        out = [conn.send(h11.Request(method=req.method, target=req.path, headers=headers))]
         if req.body:
-            out.append(b"%x\r\n" % len(req.body) + req.body + b"\r\n")
-        out.append(b"0\r\n" + b"".join(n.encode("latin-1") + b": " + v + b"\r\n" for n, v in req.trailers) + b"\r\n")
-    return b"".join(out)
+            out.append(conn.send(h11.Data(data=req.body)))
+        end_headers = None if req.trailers is None else [(n.encode("latin-1"), v) for n, v in req.trailers]
+        out.append(conn.send(h11.EndOfMessage(headers=end_headers)))
+    except h11.LocalProtocolError:
+        raise ErrorCode("HTTP-protocol-error") from None
+    sock.sendall(b"".join(out))
 
 
-def default_send(req: HttpRequest) -> HttpResponse:
-    """The transport of the host: a connection for each request, `Connection: close`."""
+def _dial(req: HttpRequest) -> socket.socket:
+    """The connection for a request: the socket is connected and, for `https`, wrapped in TLS. A failure is the `ErrorCode`."""
     # what a request must have, as in the C twin: a missing field is an error that is answered, not a crash (`headers` None is no headers)
     if getattr(req, "method", None) is None:
         raise ErrorCode("internal-error", "the request has no method")
@@ -1018,41 +1198,172 @@ def default_send(req: HttpRequest) -> HttpResponse:
         raise ErrorCode("HTTP-request-URI-invalid")
     name, port = parsed
     sock = _connect(name, port, _seconds(req.connect_ns))
+    if https:
+        try:
+            sock.settimeout(_seconds(req.connect_ns))
+            return ssl.create_default_context().wrap_socket(sock, server_hostname=name)
+        except ssl.SSLCertVerificationError:
+            sock.close()
+            raise ErrorCode("TLS-certificate-error") from None
+        except TimeoutError:
+            sock.close()
+            raise ErrorCode("connection-timeout") from None
+        except ssl.SSLError:
+            sock.close()
+            raise ErrorCode("TLS-protocol-error") from None
+        except OSError:
+            sock.close()
+            raise ErrorCode("connection-terminated") from None
+    return sock
+
+
+def _open(req: HttpRequest) -> _Answer:
+    """Connects, sends the request and reads the head of the answer; the body is left in the socket. The answer owns the socket (`close`)."""
+    sock = _dial(req)
     try:
-        if https:
-            try:
-                sock.settimeout(_seconds(req.connect_ns))
-                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=name)
-            except ssl.SSLCertVerificationError:
-                raise ErrorCode("TLS-certificate-error") from None
-            except TimeoutError:
-                raise ErrorCode("connection-timeout") from None
-            except ssl.SSLError:
-                raise ErrorCode("TLS-protocol-error") from None
-            except OSError:
-                raise ErrorCode("connection-terminated") from None
         between = _seconds(req.between_bytes_ns)
         sock.settimeout(between)
+        conn = h11.Connection(h11.CLIENT, max_incomplete_event_size=MAX_HEAD)
         try:
-            sock.sendall(_build_request(req))
+            _send_request(sock, conn, req)
         except TimeoutError:
             raise ErrorCode("connection-write-timeout") from None
         except OSError:
             raise ErrorCode("connection-terminated") from None
-        r = _Reader(sock, _seconds(req.first_byte_ns), between)
-        status, headers = _read_head(r, req.method)
-        body, trailers = _read_body(r, req.method, status, headers)
-        # the framing was undone here, so the guest is not shown it (as in Wasmtime)
-        return HttpResponse(status, [h for h in headers if h[0] != "transfer-encoding"], body, trailers)
-    finally:
+        answer = _Answer(sock, conn, req.method, _seconds(req.first_byte_ns), between)
+        head = answer.head()
+        assert head is not None  # (it waited)
+        answer.status, answer.headers = head
+        return answer
+    except BaseException:
         sock.close()
+        raise
+
+
+def default_send(req: HttpRequest) -> HttpResponse:
+    """The transport of the host: a connection for each request, `Connection: close`; the answer is read whole."""
+    answer = _open(req)
+    try:
+        body = b"".join(answer.pieces())
+        # the framing was undone by `h11`, so the guest is not shown it (as in Wasmtime)
+        return HttpResponse(
+            answer.status, [h for h in answer.headers if h[0] != "transfer-encoding"], body, answer.trailers
+        )
+    finally:
+        answer.close()
+
+
+def _default_open(req: HttpRequest) -> tuple[int, list[tuple[str, bytes]], _BodySource]:
+    """The same transport, with the body left to be read as it comes: the status, the fields and the source of the body."""
+    answer = _open(req)
+    answer.begin_body()
+    return answer.status, [h for h in answer.headers if h[0] != "transfer-encoding"], _BodySource(answer)
+
+
+class _BodySource(InputStream):
+    """The body of an answer, read from the socket as it comes (the stream of an `incoming-body`), and then its trailers.
+
+    `read` gives what is here and never waits (`b""` if nothing is); a failure (the connection, a timeout between bytes, the limit of the total) comes after the bytes that were read before
+    it, as `StreamFailed` that carries the `ErrorCode` for `http-error-code`. Dropping the stream does not close the socket: the trailers are asked for after it. The socket is closed when the body
+    ends or fails, and when the body or its trailers are dropped."""
+
+    _AHEAD = 1 << 16  # the most that is read in advance
+
+    def __init__(self, answer: _Answer, sender: _RequestSender | None = None) -> None:
+        self.answer = answer
+        self.sender = sender  # the request, if the answer came while the guest still wrote its body
+        self.buf = bytearray()
+        self.error: ErrorCode | None = None
+
+    def _fill(self) -> None:
+        if self.sender is not None and not self.sender.sent():
+            self.sender.pump()  # (a request that broke after the answer came is not the answer's failure)
+        while len(self.buf) < self._AHEAD and not self.answer.done and self.error is None:
+            try:
+                piece = self.answer.poll()
+            except ErrorCode as e:
+                self.error = e
+                break
+            if piece is None:
+                break
+            self.buf += piece
+        if self.answer.done or self.error is not None:
+            self.release()
+
+    def read(self, n: int) -> bytes:
+        self._fill()
+        if self.buf:
+            out = bytes(self.buf[:n])
+            del self.buf[:n]
+            return out
+        if self.error is not None:
+            raise StreamFailed(str(self.error), http_code=self.error)
+        if self.answer.done and n:
+            raise StreamClosed
+        return b""
+
+    def ready(self) -> bool:
+        self._fill()
+        return bool(self.buf) or self.answer.done or self.error is not None
+
+    def close(self) -> None:
+        pass  # see the class
+
+    def drain(self) -> None:
+        """What is not read is not wanted (the stream is dropped and the trailers are asked for): reads on to the end."""
+        self.buf.clear()
+        while not self.answer.done and self.error is None:
+            try:
+                if self.answer.poll() is None:
+                    break
+            except ErrorCode as e:
+                self.error = e
+        if self.answer.done or self.error is not None:
+            self.release()
+
+    def settled(self) -> bool:
+        return self.answer.done or self.error is not None
+
+    def trailers(self) -> Fields | None:
+        t = self.answer.trailers
+        return None if t is None else Fields([(n.lower(), v) for n, v in t], True)
+
+    def release(self) -> None:
+        self.answer.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(OSError, AttributeError):  # a socket that is gone, or an object that was not finished
+            self.answer.close()
+
+
+class _WholeBody(MemoryInput):
+    """A body that is all here (an answer of `http_send`, a request that the embedder gave): the same methods as `_BodySource`."""
+
+    def __init__(self, data: bytes, trailers: Fields | None) -> None:
+        super().__init__(data)
+        self._trailers = trailers
+        self.error = None
+
+    def drain(self) -> None:
+        pass
+
+    def settled(self) -> bool:
+        return True
+
+    def trailers(self) -> Fields | None:
+        return self._trailers
+
+    def release(self) -> None:
+        pass
 
 
 # the answer
 
 
 class _IncomingResponse:
-    def __init__(self, status: int, headers: Fields, body: tuple[bytes, Fields | None] | None) -> None:
+    def __init__(
+        self, status: int, headers: Fields, body: tuple[bytes, Fields | None] | _BodySource | _WholeBody | None
+    ) -> None:
         self.status = status
         self.headers = headers
         self.body = body  # None once consumed
@@ -1063,13 +1374,26 @@ class _FutureIncomingResponse:
         self.request, self.options, self.prepared = request, options, prepared
         self.result: _IncomingResponse | ErrorCode | None = None
         self.taken = False
+        self.sender: _RequestSender | None = None  # the request is going out while the guest writes its body
+        self.answer: _Answer | None = None
+        self.head_due: float | None = None  # when the head of the answer is due, once the request is all out
 
     def advance(self, state: State) -> bool:
         if self.result is not None:
             return True
         body = self.request.body
-        if body is not None and not (body.finished or body.abandoned):
-            return False
+        if self.sender is None:
+            if body is not None and not (body.finished or body.abandoned):
+                if state.http_send is not None:
+                    return False  # a transport of the embedder takes the request whole
+                self._start(body)  # our own: the request goes out now, and the body as the guest writes it
+                if self.result is not None:
+                    return True
+            else:
+                return self._send_whole(state, body)
+        return self._go_on(body)
+
+    def _send_whole(self, state: State, body: _OutgoingBody | None) -> bool:
         if body is not None and body.abandoned:
             self.result = ErrorCode("HTTP-protocol-error")
             return True
@@ -1077,9 +1401,16 @@ class _FutureIncomingResponse:
             self.prepared.body = body.data()
             if body.trailers is not None:
                 self.prepared.trailers = list(body.trailers.entries)
-        send = state.http_send or default_send
+        if state.http_send is None:  # our own transport: the body is read as it comes
+            try:
+                status, fields, source = _default_open(self.prepared)
+            except ErrorCode as e:
+                self.result = e
+            else:
+                self.result = _IncomingResponse(status, Fields([(n.lower(), v) for n, v in fields], True), source)
+            return True
         try:
-            response = send(self.prepared)
+            response = state.http_send(self.prepared)
         except ErrorCode as e:
             self.result = e
         else:
@@ -1091,6 +1422,63 @@ class _FutureIncomingResponse:
                 Fields([(n.lower(), v) for n, v in response.headers], True),
                 (bytes(response.body), trailers),
             )
+        return True
+
+    def _start(self, body: _OutgoingBody) -> None:
+        """The answer is asked for before the body is finished: connect, send the head, and from now on the body goes out as it is written."""
+        req = self.prepared
+        try:
+            sock = _dial(req)
+        except ErrorCode as e:
+            self.result = e
+            return
+        try:
+            sock.setblocking(False)
+            conn = h11.Connection(h11.CLIENT, max_incomplete_event_size=MAX_HEAD)
+            sender = _RequestSender(sock, conn)
+            sender.head(req, declared=body.expected is not None)
+            assert isinstance(body.stream, _RequestBodyOutput)
+            body.stream.start(sender)
+            sender.pump()
+        except BaseException as e:
+            sock.close()
+            if isinstance(e, ErrorCode):
+                self.result = e
+                return
+            raise
+        self.sender = sender
+        self.answer = _Answer(sock, conn, req.method, _seconds(req.first_byte_ns), _seconds(req.between_bytes_ns))
+
+    def _go_on(self, body: _OutgoingBody | None) -> bool:
+        sender, answer = self.sender, self.answer
+        assert sender is not None and answer is not None and body is not None
+        try:
+            if body.abandoned:
+                raise ErrorCode("HTTP-protocol-error")
+            if body.finished and not sender.ended:
+                sender.end(list(body.trailers.entries) if body.trailers is not None else None)
+            sender.pump()
+            if sender.dead is not None and answer.in_head:
+                raise sender.dead
+            if sender.sent() and self.head_due is None:
+                self.head_due = (
+                    time.monotonic() + answer.first_s
+                )  # the first byte is due after the whole request is out
+            head = answer.head(block=False)
+            if head is None and self.head_due is not None and time.monotonic() > self.head_due:
+                raise ErrorCode("connection-read-timeout")
+        except ErrorCode as e:
+            answer.close()
+            self.result = e
+            return True
+        if head is None:
+            return False
+        answer.status, answer.headers = head
+        answer.begin_body()
+        fields = [h for h in answer.headers if h[0] != "transfer-encoding"]
+        self.result = _IncomingResponse(
+            answer.status, Fields([(n.lower(), v) for n, v in fields], True), _BodySource(answer, sender)
+        )
         return True
 
 
@@ -1177,8 +1565,10 @@ def wasi_http_types_future_incoming_response_get(guest: Guest, comp: int, self: 
 
 
 def wasi_http_types_future_incoming_response_drop(guest: Guest, handle: int) -> None:
-    _future(guest, handle)
+    future = _future(guest, handle)
     _table_drop(guest, handle, KIND_FUTURE_INCOMING_RESPONSE)
+    if isinstance(future.result, _IncomingResponse) and not future.taken and future.result.body is not None:
+        _release(future.result.body)  # an answer that the guest never asked for
 
 
 def _response(guest: Guest, handle: int) -> _IncomingResponse:
@@ -1199,9 +1589,16 @@ def wasi_http_types_incoming_response_consume(guest: Guest, comp: int, self: int
         resp.body = None
 
 
+def _release(body: tuple[bytes, Fields | None] | _BodySource | _WholeBody) -> None:
+    if not isinstance(body, tuple):
+        body.release()
+
+
 def wasi_http_types_incoming_response_drop(guest: Guest, handle: int) -> None:
-    _response(guest, handle)
+    resp = _response(guest, handle)
     _table_drop(guest, handle, KIND_INCOMING_RESPONSE)
+    if resp.body is not None:
+        _release(resp.body)  # the body was not consumed
 
 
 # the server side: what an embedder gives a component that exports incoming-handler, and what it gets back
@@ -1377,5 +1774,10 @@ def wasi_http_types_outgoing_response_drop(guest: Guest, handle: int) -> None:
 
 
 def wasi_http_types_http_error_code(guest: Guest, comp: int, err: int, retptr: int) -> None:
-    _table_get(guest, err, KIND_ERROR)
-    _store_u8(guest, comp, retptr, 0)  # a stream of a body never fails here, so no error carries an http error-code
+    error = _table_get(guest, err, KIND_ERROR)
+    code = getattr(error, "http_code", None)
+    if code is None:
+        _store_u8(guest, comp, retptr, 0)  # none: the error did not come from a body of http
+        return
+    _store_u8(guest, comp, retptr, 1)
+    _store_error_code(guest, comp, retptr + 8, code)

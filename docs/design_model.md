@@ -168,7 +168,7 @@ Anything else that shows up while the code is written is added here before it is
 
 ## 6. The Python twin
 
-Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in Python in the same commit, with a test that runs both and compares** (`tests/test_parity_surface.py` already does this for the memory binding).
+Parity is a rule, not a hope: **every change of section 3 to 5 lands in C and in Python in the same commit, with a test that runs both and compares** (`tests/test_parity_surface.py` already does this for the memory binding). *Loosened 2026-11-05 for new behaviours of the transport of `wasi:http` and of the streams of its bodies, which may land in Python first, with the difference written down and an `xfail` for the C twin until it is done: [S0013](specs/S0013.md). The rule above stands for everything else.*
 
 * `State` is the same world in Python (today: `fusedwasi.p1.wasi_p1_core.State`, `fusedwasi.p2.wasi_p2_core.Host`).
 * `Guest` is new in Python: `Guest(state, memory=..., realloc=..., call=...)`, `memory` a buffer or a function that gives it (as now). Python functions take the guest first, as the C functions do.

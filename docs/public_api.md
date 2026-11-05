@@ -366,7 +366,7 @@ wasi:io: the streams of the host and their constructors.  Its functions are the 
 | `MemoryInput` | an input stream over bytes |
 | `BufferOutput` | an output stream that collects what is written |
 | `StreamClosed` | raised by a stream: the end |
-| `StreamFailed` | raised by a stream: failure |
+| `StreamFailed` | raised by a stream: failure (`http_code=` is the `ErrorCode` of a body of wasi:http, for `http-error-code`) |
 | `StreamPollable` | a pollable that is ready when a stream is (`table_add(state, KIND_POLLABLE, StreamPollable(stream))`) |
 | `input_stream_add` | puts an input stream of the host in the table; the handle, or 0 |
 | `output_stream_add` | puts an output stream of the host in the table; the handle, or 0 |
