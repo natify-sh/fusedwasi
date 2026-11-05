@@ -306,6 +306,19 @@ def check_tests(label: str, feature: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"{label}: no test for the {twin} twin (list it under {twin!r}, or the test that runs both under 'both')")
 
 
+def check_difference(label: str, feature: dict[str, Any], errors: list[str]) -> None:
+    """The twins are held at parity: a feature on which the two statuses differ is a difference of the twins, and it must be explained on **both** sides: each twin has a text (the note of
+    its status if it is a partial, or the note of the feature for it) that names a file of the repository where the difference is written down."""
+    kinds = {twin: status_of(feature.get(twin))[0] for twin in TWINS}
+    if "bad" in kinds.values() or kinds["c"] == kinds["python"]:
+        return
+    for twin in TWINS:
+        value = status_of(feature.get(twin))
+        text = value[1] if value[0] == "partial" else note_of(feature, twin)
+        if not SOURCE.search(text):
+            errors.append(f"{label}: the twins differ (c {kinds['c']}, python {kinds['python']}), and the {twin} side names no file that says why")
+
+
 def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
     """Run the checks of the structure and the functions; return the computed matrix (module -> feature -> twin -> counts)."""
     p2, p1 = load_signatures()
@@ -399,6 +412,7 @@ def compute(doc: dict[str, Any], errors: list[str]) -> dict[str, Any]:
                         if not (ROOT / path).exists():
                             errors.append(f"{where}: the note names {path}, which is not in the repository")
             check_tests(label, feature, errors)
+            check_difference(label, feature, errors)
             computed[mname][fname] = row
     if total_p2 != len(p2):
         errors.append(f"the modules of 0.2 have {total_p2} imports, the tables have {len(p2)}")

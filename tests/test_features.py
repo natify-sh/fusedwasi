@@ -222,3 +222,24 @@ def test_ipv6_is_true_for_both_twins_and_stands_on_the_checks_of_addresses() -> 
     )
     for name in ("tcpCreateSocket", "udpCreateSocket"):
         assert feature(doc, "wasi:sockets", name)["c"] is True and feature(doc, "wasi:sockets", name)["python"] is True
+
+
+def test_a_difference_of_the_twins_is_explained_on_both_sides(tmp_path: Path) -> None:
+    """The twins are held at parity: where the two statuses differ (today `https` and `tlsHook`, both deliberate), each side names the file that says why."""
+    doc = load()
+    differing = [
+        (module, name)
+        for module, body in doc["modules"].items()
+        for name, f in body["features"].items()
+        if (f["c"] is True, f["c"] is False) != (f["python"] is True, f["python"] is False)
+    ]
+    assert differing == [("wasi:http", "https"), ("wasi:http", "tlsHook")]
+    broken = copy.deepcopy(doc)
+    broken["modules"]["wasi:http"]["features"]["tlsHook"]["note"] = {
+        "c": "four functions over any TLS library",
+        "python": "no hook",
+    }
+    assert (
+        "wasi:http/tlsHook: the twins differ (c true, python false), and the c side names no file that says why"
+        in rejected(tmp_path, broken)
+    )
