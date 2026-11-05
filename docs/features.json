@@ -788,6 +788,15 @@
       "wasi:http/redirects",
       "wasi:http/proxies"
     ],
+    "The reference TLS hook is not checked against a server of TLS 1.1 on Windows": [
+      "wasi:http/tlsHook"
+    ],
+    "The Python twin is run on CPython; PyPy and Pyodide are not supported": {
+      "not a feature": "which interpreters the CI runs is a property of the CI and of the Python twin as a whole, not of one import (docs/specs/S0009.md, S0010.md)"
+    },
+    "A hard link is what the system lets it be": {
+      "not a feature": "a difference of the systems under the filesystem (Android SELinux, PyPy, Pyodide) that the host answers with the error of the system; the feature `wasi:filesystem/types` is the one that has link-at (docs/specs/S0009.md)"
+    },
     "BCryptGenRandom on Windows": [
       "wasi:random/random"
     ],
